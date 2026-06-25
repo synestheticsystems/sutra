@@ -4,7 +4,7 @@
 
 # sutra
 
-[![CI](https://github.com/dnorman/sutra/actions/workflows/ci.yml/badge.svg)](https://github.com/dnorman/sutra/actions/workflows/ci.yml)
+[![CI](https://github.com/synestheticsystems/sutra/actions/workflows/ci.yml/badge.svg)](https://github.com/synestheticsystems/sutra/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/sutra.svg)](https://crates.io/crates/sutra)
 
 A dev environment status dashboard. Monitors a well-known state folder for environment meta and per-unit status files, rendering everything in a native GUI (iced) or TUI (ratatui). On macOS, state transitions trigger system sounds, speech, and native notifications.
@@ -35,7 +35,7 @@ Both interfaces support per-unit and global toggles for sound and notification m
 | Speech (TTS) | yes | -- |
 | Native notifications | yes | -- |
 
-Linux/Windows audio and notification support is tracked in [#1](https://github.com/dnorman/sutra/issues/1).
+Linux/Windows audio and notification support is tracked in [#1](https://github.com/synestheticsystems/sutra/issues/1).
 
 ## Features
 

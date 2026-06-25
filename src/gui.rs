@@ -53,7 +53,8 @@ const ICON_CHECK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24"
 
 /// Human-readable GitHub URL for the integration guide. Shown as a
 /// clickable link below the agent prompt.
-const HELP_DOC_BLOB_URL: &str = "https://github.com/dnorman/sutra/blob/main/docs/INTEGRATION.md";
+const HELP_DOC_BLOB_URL: &str =
+    "https://github.com/synestheticsystems/sutra/blob/main/docs/INTEGRATION.md";
 
 /// Drop-into-an-agent prompt. Available via the help panel's "Copy" button
 /// — the user pastes it into Claude Code / Cursor / etc. and the agent
@@ -66,7 +67,7 @@ const HELP_DOC_BLOB_URL: &str = "https://github.com/dnorman/sutra/blob/main/docs
 /// and changes are additive in practice — if that ever stops being true,
 /// switch to a `vX.Y` tag and bump it on release.
 const HELP_AGENT_PROMPT: &str = "Make my project's dev script sutra-compatible by following:
-https://raw.githubusercontent.com/dnorman/sutra/main/docs/INTEGRATION.md
+https://raw.githubusercontent.com/synestheticsystems/sutra/main/docs/INTEGRATION.md
 
 If a dev script already exists, update it. Otherwise create one.
 ";

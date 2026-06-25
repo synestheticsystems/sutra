@@ -4,7 +4,7 @@
 
 Sutra is a macOS status dashboard that monitors the well-known state folder `~/.dev-runner/`. It displays each environment's units in a GUI (iced) or TUI (ratatui), with system sounds, speech, and macOS notifications on state transitions.
 
-The repo directory is `/Users/daniel/code/sutra`, remote is `git@github.com:dnorman/sutra.git`.
+The repo directory is `/Users/daniel/code/sutra`, remote is `git@github.com:synestheticsystems/sutra.git`.
 
 ## Current state (2026-02-15)
 
@@ -106,7 +106,7 @@ objc2-app-kit = "0.2"                 # NSApplication, NSImage
 - `.github/workflows/release.yml` — workflow_call only (no push:tags), builds stripped binaries with distinct asset names, softprops/action-gh-release@v2
 - `LICENSE-MIT` + `LICENSE-APACHE` — dual licensed
 - `resume.md` and `create-test-envs.sh` excluded from crate tarball
-- Remote: `git@github.com:dnorman/sutra.git` (branch `main`)
+- Remote: `git@github.com:synestheticsystems/sutra.git` (branch `main`)
 
 ### Test data
 
