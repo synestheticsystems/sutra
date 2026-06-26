@@ -65,6 +65,11 @@ Output lands in `dist/`:
 - Version is read from `Cargo.toml` and injected into `Info.plist`.
 - Bundle identifier: `systems.synesthetic.sutra` (also the notification app id
   in `src/notifications.rs`).
+- `sutra.entitlements` is intentionally an empty dict: the app is unsandboxed
+  and needs no Hardened-Runtime-gated capabilities. (Note: codesign's
+  entitlements parser rejects XML comments, so keep the file comment-free.) If
+  notarization or launch ever fails with a library-validation error, add
+  `com.apple.security.cs.disable-library-validation` and re-sign.
 - The icon is generated from `assets/icon.png`. That master is currently
   **256×256**, so large Retina icon sizes are upscaled and look soft — drop in a
   **1024×1024** `assets/icon.png` for crisp icons.
