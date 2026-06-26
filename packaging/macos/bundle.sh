@@ -91,13 +91,18 @@ if [[ -n "$SIGN_IDENTITY" && "$SKIP_NOTARIZE" != "1" ]]; then
     else
         echo "==> Submitting to notary service (profile: $NOTARY_PROFILE)"
         xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
-        echo "==> Stapling app and rebuilding stapled DMG"
-        xcrun stapler staple "$APP_DIR"
-        build_dmg
-        codesign --force --sign "$SIGN_IDENTITY" "$DMG_PATH"
+        # Staple the ticket to the DMG we just submitted. Do NOT rebuild the DMG
+        # afterwards: rebuilding changes its hash, and the notarization ticket is
+        # keyed to the submitted hash, so stapling a rebuilt DMG fails with
+        # "Could not find base64 encoded ticket".
+        echo "==> Stapling notarization ticket"
         xcrun stapler staple "$DMG_PATH"
+        # The app is notarized as nested code in that submission, so its ticket is
+        # on Apple's CDN and can also be stapled to the standalone .app.
+        xcrun stapler staple "$APP_DIR"
         echo "==> Gatekeeper check"
         spctl -a -t exec -vv "$APP_DIR" || true
+        xcrun stapler validate "$DMG_PATH" || true
     fi
 fi
 
