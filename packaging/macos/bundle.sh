@@ -13,8 +13,17 @@
 #
 # Env vars:
 #   SIGN_IDENTITY   Developer ID Application identity. If empty, ad-hoc signs.
-#   NOTARY_PROFILE  notarytool keychain profile (see packaging/macos/README.md).
+#   NOTARY_PROFILE  notarytool keychain profile (local flow; see README.md).
 #   SKIP_NOTARIZE   Set to 1 to sign with Developer ID but skip notarization.
+#
+# Notarization credentials — choose ONE of:
+#   (a) Keychain profile (local dev):
+#         NOTARY_PROFILE="sutra-notary"
+#   (b) App Store Connect API key (CI):
+#         NOTARY_KEY_PATH   path to the .p8 private key file
+#         NOTARY_KEY_ID     the key ID (e.g. ABCDE12345)
+#         NOTARY_ISSUER     the issuer UUID
+#   If the API-key trio is set it takes precedence over NOTARY_PROFILE.
 #
 # Output: dist/Sutra-<version>.dmg and dist/Sutra.app
 set -euo pipefail
@@ -31,6 +40,9 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
+NOTARY_KEY_PATH="${NOTARY_KEY_PATH:-}"
+NOTARY_KEY_ID="${NOTARY_KEY_ID:-}"
+NOTARY_ISSUER="${NOTARY_ISSUER:-}"
 
 VERSION="$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')"
 DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
@@ -84,13 +96,30 @@ build_dmg
 [[ -n "$SIGN_IDENTITY" ]] && codesign --force --sign "$SIGN_IDENTITY" "$DMG_PATH"
 
 # 5. Notarize + staple (requires Developer ID signing).
+# Two credential sources are supported. The App Store Connect API key trio
+# (NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER) is used by CI and takes
+# precedence; a notarytool keychain profile (NOTARY_PROFILE) is used locally.
 if [[ -n "$SIGN_IDENTITY" && "$SKIP_NOTARIZE" != "1" ]]; then
-    if [[ -z "$NOTARY_PROFILE" ]]; then
-        echo "!! NOTARY_PROFILE empty — skipping notarization."
-        echo "   Set it up with: xcrun notarytool store-credentials (see README)."
-    else
+    NOTARIZED=0
+    if [[ -n "$NOTARY_KEY_PATH" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]]; then
+        echo "==> Submitting to notary service (App Store Connect API key: $NOTARY_KEY_ID)"
+        xcrun notarytool submit "$DMG_PATH" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER" \
+            --wait
+        NOTARIZED=1
+    elif [[ -n "$NOTARY_PROFILE" ]]; then
         echo "==> Submitting to notary service (profile: $NOTARY_PROFILE)"
         xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+        NOTARIZED=1
+    else
+        echo "!! No notarization credentials — skipping notarization."
+        echo "   Local:  xcrun notarytool store-credentials (see README), then NOTARY_PROFILE=..."
+        echo "   CI:     set NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER."
+    fi
+
+    if [[ "$NOTARIZED" == "1" ]]; then
         # Staple the ticket to the DMG we just submitted. Do NOT rebuild the DMG
         # afterwards: rebuilding changes its hash, and the notarization ticket is
         # keyed to the submitted hash, so stapling a rebuilt DMG fails with
