@@ -43,7 +43,7 @@ impl Notifier {
         });
 
         #[cfg(target_os = "macos")]
-        let _ = mac_notification_sys::set_application("io.github.dnorman.sutra");
+        let _ = mac_notification_sys::set_application("systems.synesthetic.sutra");
 
         Notifier {
             tx,

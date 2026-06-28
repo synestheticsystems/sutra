@@ -39,8 +39,12 @@ fn main() {
                     std::process::exit(1);
                 }
             } else {
-                // GUI mode: background by default so the shell is freed
-                if !foreground {
+                // GUI mode: background by default so the shell is freed.
+                // When launched from a macOS .app bundle there is no terminal
+                // to free, and forking would orphan the GUI from the bundle
+                // (Launch Services would see the main process exit), so run in
+                // the foreground in that case.
+                if !foreground && !running_in_app_bundle() {
                     daemonize();
                 }
 
@@ -58,6 +62,17 @@ fn main() {
             }
         }
     }
+}
+
+/// Returns true when this executable is running from inside a macOS `.app`
+/// bundle (its path contains `.app/Contents/MacOS/`). In that case there is no
+/// controlling terminal to free and forking would orphan the GUI process from
+/// the bundle, so the caller should run in the foreground instead.
+fn running_in_app_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .is_some_and(|p| p.contains(".app/Contents/MacOS/"))
 }
 
 /// Fork the process and exit the parent so the GUI runs detached from the terminal.

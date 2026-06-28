@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template Info.plist for the Sutra .app bundle.
+  bundle.sh substitutes __VERSION__ with the version from Cargo.toml.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Sutra</string>
+    <key>CFBundleDisplayName</key>
+    <string>Sutra</string>
+    <key>CFBundleIdentifier</key>
+    <string>systems.synesthetic.sutra</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleExecutable</key>
+    <string>sutra</string>
+    <key>CFBundleIconFile</key>
+    <string>sutra</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Synesthetic Systems — MIT OR Apache-2.0</string>
+</dict>
+</plist>

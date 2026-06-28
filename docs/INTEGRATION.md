@@ -756,4 +756,4 @@ doesn't require it to exist before the dev script runs.
 ## See also
 
 - [STATE_SPEC.md](../STATE_SPEC.md) — exact file format and edge cases.
-- Source repo: <https://github.com/dnorman/sutra>
+- Source repo: <https://github.com/synestheticsystems/sutra>
