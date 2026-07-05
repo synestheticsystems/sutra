@@ -96,7 +96,7 @@ One-time secrets on `synestheticsystems/sutra` (`gh secret set <NAME> -R synesth
 | `NOTARY_KEY_P8` | base64 of the App Store Connect API key `.p8` |
 | `NOTARY_KEY_ID` | the API key ID |
 | `NOTARY_ISSUER` | the API issuer UUID |
-| `HOMEBREW_TAP_TOKEN` | fine-grained PAT with Contents:write on `homebrew-tap` |
+| `HOMEBREW_TAP_DEPLOY_KEY` | SSH private key of a write-enabled deploy key on `homebrew-tap` (never expires; more scoped than a PAT) |
 
 CI notarizes with an **App Store Connect API key** (`notarytool --key/--key-id/--issuer`),
 not an app-specific password. The workflow file header lists exact creation

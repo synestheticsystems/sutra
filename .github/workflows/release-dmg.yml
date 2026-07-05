@@ -25,7 +25,7 @@ name: Release DMG
 #   NOTARY_KEY_P8           base64 of the App Store Connect API key .p8
 #   NOTARY_KEY_ID           the App Store Connect API key ID
 #   NOTARY_ISSUER           the App Store Connect issuer UUID
-#   HOMEBREW_TAP_TOKEN      PAT with contents:write on synestheticsystems/homebrew-tap
+#   HOMEBREW_TAP_DEPLOY_KEY SSH private key of a deploy key with write access on synestheticsystems/homebrew-tap
 
 on:
   workflow_run:
@@ -62,10 +62,10 @@ jobs:
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${MACOS_CERT_P12:-}" ] || [ -z "${NOTARY_KEY_P8:-}" ] || [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+          if [ -z "${MACOS_CERT_P12:-}" ] || [ -z "${NOTARY_KEY_P8:-}" ] || [ -z "${HOMEBREW_TAP_DEPLOY_KEY:-}" ]; then
             echo "::warning::macOS signing/tap secrets are not configured; skipping DMG build and cask bump."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -257,7 +257,7 @@ jobs:
       - name: Bump Homebrew cask
         if: steps.guard.outputs.skip != 'true'
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
@@ -268,12 +268,17 @@ jobs:
           SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
           echo "DMG sha256: $SHA256"
 
+          # GITHUB_TOKEN cannot push cross-repo, so we authenticate with a
+          # per-repo SSH deploy key (write access on homebrew-tap only; never
+          # expires). Write the private key to a 0600 file (umask keeps it
+          # unreadable to other users) and use it ONLY for the tap's git ops.
+          KEY_FILE="$RUNNER_TEMP/tap_deploy_key"
+          ( umask 077; printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$KEY_FILE" )
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+
           TAP_DIR="$RUNNER_TEMP/homebrew-tap"
           rm -rf "$TAP_DIR"
-          # Use http.extraheader so the PAT never lands in $TAP_DIR/.git/config.
-          # GITHUB_TOKEN cannot push to the tap repo, hence the dedicated PAT.
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64)" \
-            clone --depth 1 https://github.com/synestheticsystems/homebrew-tap.git "$TAP_DIR"
+          git clone --depth 1 git@github.com:synestheticsystems/homebrew-tap.git "$TAP_DIR"
 
           CASK="$TAP_DIR/Casks/sutra.rb"
           test -f "$CASK" || { echo "::error::$CASK not found in tap"; exit 1; }
@@ -301,14 +306,12 @@ jobs:
           git -C "$TAP_DIR" config user.name "github-actions[bot]"
           git -C "$TAP_DIR" config user.email "github-actions[bot]@users.noreply.github.com"
           git -C "$TAP_DIR" commit -am "sutra $VERSION"
-          git -C "$TAP_DIR" \
-            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64)" \
-            push origin "HEAD:$DEFAULT_BRANCH"
+          git -C "$TAP_DIR" push origin "HEAD:$DEFAULT_BRANCH"
 
       - name: Clean up signing material
         if: always()
         run: |
           set -euo pipefail
-          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary_key.p8" || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary_key.p8" "$RUNNER_TEMP/tap_deploy_key" || true
           rm -rf "$RUNNER_TEMP/homebrew-tap" || true
           security delete-keychain "$RUNNER_TEMP/sutra-signing.keychain-db" 2>/dev/null || true
