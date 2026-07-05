@@ -74,3 +74,30 @@ Output lands in `dist/`:
   **256×256**, so large Retina icon sizes are upscaled and look soft — drop in a
   **1024×1024** `assets/icon.png` for crisp icons.
 - `dist/` is gitignored.
+
+## Automated releases (CI)
+
+`.github/workflows/release-dmg.yml` runs `bundle.sh` in CI to build, sign,
+notarize, staple, and attach the DMG to the release, then bumps the Homebrew
+cask in `synestheticsystems/homebrew-tap`. It triggers via `workflow_run` after
+the **Publish** workflow succeeds — *not* `release: published`, because releases
+created by `GITHUB_TOKEN` don't fire downstream events. Because it runs in its
+own workflow run after `cargo publish` + the tag push, a signing/notarization
+failure can never break the crates.io publish. Until the secrets below are
+configured, the job no-ops with a `::warning` (no red X).
+
+One-time secrets on `synestheticsystems/sutra` (`gh secret set <NAME> -R synestheticsystems/sutra`):
+
+| Secret | What |
+|---|---|
+| `MACOS_CERT_P12` | base64 of the Developer ID Application cert+key `.p12` |
+| `MACOS_CERT_PASSWORD` | the `.p12` export password |
+| `MACOS_KEYCHAIN_PASSWORD` | any throwaway string (for the temp CI keychain) |
+| `NOTARY_KEY_P8` | base64 of the App Store Connect API key `.p8` |
+| `NOTARY_KEY_ID` | the API key ID |
+| `NOTARY_ISSUER` | the API issuer UUID |
+| `HOMEBREW_TAP_DEPLOY_KEY` | SSH private key of a write-enabled deploy key on `homebrew-tap` (never expires; more scoped than a PAT) |
+
+CI notarizes with an **App Store Connect API key** (`notarytool --key/--key-id/--issuer`),
+not an app-specific password. The workflow file header lists exact creation
+commands. Manual re-run: **Actions → Release DMG → Run workflow → enter the tag**.
