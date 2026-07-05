@@ -96,11 +96,23 @@ build_dmg
 [[ -n "$SIGN_IDENTITY" ]] && codesign --force --sign "$SIGN_IDENTITY" "$DMG_PATH"
 
 # 5. Notarize + staple (requires Developer ID signing).
+#
 # Two credential sources are supported. The App Store Connect API key trio
 # (NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER) is used by CI and takes
 # precedence; a notarytool keychain profile (NOTARY_PROFILE) is used locally.
-if [[ -n "$SIGN_IDENTITY" && "$SKIP_NOTARIZE" != "1" ]]; then
-    NOTARIZED=0
+#
+# We notarize TWICE so the app *inside* the shipped DMG carries its own stapled
+# ticket (offline-proof), which a single pass cannot achieve: stapling the app
+# needs its ticket (only available after a notarization), and inserting the
+# stapled app into the DMG changes the DMG's hash — so that final DMG must be
+# notarized again. Round 1 notarizes the DMG (and its nested app); we staple the
+# app, rebuild the DMG around the stapled app, then round 2 notarizes + staples
+# that final DMG.
+have_notary_creds() {
+    [[ ( -n "$NOTARY_KEY_PATH" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ) || -n "$NOTARY_PROFILE" ]]
+}
+# Submit $DMG_PATH and wait; exits (set -e) if notarization is not Accepted.
+notarize_dmg() {
     if [[ -n "$NOTARY_KEY_PATH" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]]; then
         echo "==> Submitting to notary service (App Store Connect API key: $NOTARY_KEY_ID)"
         xcrun notarytool submit "$DMG_PATH" \
@@ -108,30 +120,38 @@ if [[ -n "$SIGN_IDENTITY" && "$SKIP_NOTARIZE" != "1" ]]; then
             --key-id "$NOTARY_KEY_ID" \
             --issuer "$NOTARY_ISSUER" \
             --wait
-        NOTARIZED=1
-    elif [[ -n "$NOTARY_PROFILE" ]]; then
+    else
         echo "==> Submitting to notary service (profile: $NOTARY_PROFILE)"
         xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
-        NOTARIZED=1
+    fi
+}
+
+if [[ -n "$SIGN_IDENTITY" && "$SKIP_NOTARIZE" != "1" ]]; then
+    if have_notary_creds; then
+        # Round 1: notarize the DMG (Apple notarizes the nested .app too).
+        echo "==> Notarizing (round 1 of 2)"
+        notarize_dmg
+
+        # Staple the app (its ticket now exists on Apple's CDN), then rebuild the
+        # DMG so the SHIPPED DMG contains the stapled app.
+        echo "==> Stapling app and rebuilding the DMG around it"
+        xcrun stapler staple "$APP_DIR"
+        build_dmg
+        codesign --force --sign "$SIGN_IDENTITY" "$DMG_PATH"
+
+        # Round 2: the rebuilt DMG has a new hash, so notarize + staple it.
+        echo "==> Notarizing the final DMG (round 2 of 2)"
+        notarize_dmg
+        xcrun stapler staple "$DMG_PATH"
+
+        echo "==> Verifying (both the app and the DMG must be stapled)"
+        spctl -a -t exec -vv "$APP_DIR" || true
+        xcrun stapler validate "$APP_DIR"
+        xcrun stapler validate "$DMG_PATH"
     else
         echo "!! No notarization credentials — skipping notarization."
         echo "   Local:  xcrun notarytool store-credentials (see README), then NOTARY_PROFILE=..."
         echo "   CI:     set NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER."
-    fi
-
-    if [[ "$NOTARIZED" == "1" ]]; then
-        # Staple the ticket to the DMG we just submitted. Do NOT rebuild the DMG
-        # afterwards: rebuilding changes its hash, and the notarization ticket is
-        # keyed to the submitted hash, so stapling a rebuilt DMG fails with
-        # "Could not find base64 encoded ticket".
-        echo "==> Stapling notarization ticket"
-        xcrun stapler staple "$DMG_PATH"
-        # The app is notarized as nested code in that submission, so its ticket is
-        # on Apple's CDN and can also be stapled to the standalone .app.
-        xcrun stapler staple "$APP_DIR"
-        echo "==> Gatekeeper check"
-        spctl -a -t exec -vv "$APP_DIR" || true
-        xcrun stapler validate "$DMG_PATH" || true
     fi
 fi
 
