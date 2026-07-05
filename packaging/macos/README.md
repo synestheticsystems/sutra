@@ -73,6 +73,10 @@ Output lands in `dist/`:
 - The icon is generated from `assets/icon.png`. That master is currently
   **256×256**, so large Retina icon sizes are upscaled and look soft — drop in a
   **1024×1024** `assets/icon.png` for crisp icons.
+- Notarization runs **twice**: once on the DMG, then — after stapling the app
+  and rebuilding the DMG around it — once more on the final DMG. This embeds a
+  stapled ticket in the app *inside* the DMG (offline-proof), which a single
+  pass can't do (rebuilding to include the stapled app changes the DMG's hash).
 - `dist/` is gitignored.
 
 ## Automated releases (CI)
