@@ -63,7 +63,7 @@ pub struct SortChoice {
 /// The orders the project list can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
 pub enum SortOrder {
-    /// Newest activity first, the order the engine delivers.
+    /// Newest activity first, in five-minute slices of the clock, each slice in name order.
     #[default]
     Activity,
     /// By folder name, ignoring case.

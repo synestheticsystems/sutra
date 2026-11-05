@@ -203,7 +203,7 @@ mod tests {
         let mut arrangement = Arrangement::default();
         arrangement.toggle_quiet(Some(&map), now());
         let listing = Listing::new(&map, &arrangement, now());
-        assert_eq!(shown(&listing), ["recent", "quiet:2", "b", "a"]);
+        assert_eq!(shown(&listing), ["recent", "quiet:2", "a", "b"]);
     }
 
     #[test]

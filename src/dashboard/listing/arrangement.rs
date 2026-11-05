@@ -157,10 +157,10 @@ mod tests {
 
     #[test]
     fn while_the_pointer_is_over_the_list_new_activity_moves_no_card() {
-        let before = snapshot(vec![project("a", 1), project("b", 2)], vec![]);
+        let before = snapshot(vec![project("a", 10), project("b", 20)], vec![]);
         let mut arrangement = pointed_at(&before);
 
-        let b_active = snapshot(vec![project("b", 0), project("a", 1)], vec![]);
+        let b_active = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
         arrangement.observe(&b_active, now());
         assert_eq!(listed(&b_active, &arrangement), ["a", "b"]);
 
@@ -183,18 +183,18 @@ mod tests {
 
     #[test]
     fn a_newcomer_arrives_at_once_in_its_sorted_place_and_then_holds_it() {
-        let before = snapshot(vec![project("a", 2), project("b", 3)], vec![]);
+        let before = snapshot(vec![project("a", 20), project("b", 30)], vec![]);
         let mut arrangement = pointed_at(&before);
 
         let arrived = snapshot(
-            vec![project("new", 1), project("b", 1), project("a", 2)],
+            vec![project("new", 10), project("b", 15), project("a", 20)],
             vec![],
         );
         arrangement.observe(&arrived, now());
         assert_eq!(listed(&arrived, &arrangement), ["new", "a", "b"]);
 
         let later = snapshot(
-            vec![project("b", 0), project("a", 0), project("new", 5)],
+            vec![project("b", 0), project("a", 0), project("new", 25)],
             vec![],
         );
         arrangement.observe(&later, now());
