@@ -1,0 +1,49 @@
+name: Tag version
+
+# The root of the release chain. When a push to main changes the version in Cargo.toml, this tags
+# the pushed commit v<version>; Release DMG (release-dmg.yml) follows this workflow and releases
+# that version. A push that changes Cargo.toml but not its version tags nothing, so Release DMG
+# finds nothing to release.
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-version
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if already tagged
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
