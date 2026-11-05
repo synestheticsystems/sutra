@@ -1,0 +1,309 @@
+//! How the user has arranged the list (its sort, the filter field, the quiet projects shown or
+//! not) and what holds its order still. Every rule for when cards change places lives here and in
+//! `hold`.
+
+use std::time::SystemTime;
+
+use super::Listing;
+use super::filter::Query;
+use super::hold::Hold;
+use crate::dashboard::SortOrder;
+use crate::map::Snapshot;
+
+/// Kept for the session only: every launch opens newest activity first, unfiltered, with the
+/// quiet projects behind their row.
+#[derive(Debug, Default)]
+pub(in crate::dashboard) struct Arrangement {
+    sort: SortOrder,
+    /// The filter field's text; `None` while the field is hidden.
+    filter: Option<String>,
+    quiet_shown: bool,
+    hold: Hold,
+    /// The first sizing of the map's folders has finished. Only the first holds the Disk sort,
+    /// because only then do sizes land by the hundred.
+    sized_once: bool,
+}
+
+impl Arrangement {
+    pub(in crate::dashboard) fn sort(&self) -> SortOrder {
+        self.sort
+    }
+
+    /// The filter field's text, `None` while the field is hidden.
+    pub(in crate::dashboard) fn filter(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+
+    pub(super) fn query(&self) -> Option<Query> {
+        self.filter.as_deref().and_then(Query::new)
+    }
+
+    pub(super) fn quiet_shown(&self) -> bool {
+        self.quiet_shown
+    }
+
+    pub(super) fn hold(&self) -> &Hold {
+        &self.hold
+    }
+
+    /// A new map arrived. Cards keep their places where the list is held, and the first sizing
+    /// to finish lets go of the Disk sort.
+    pub(in crate::dashboard) fn observe(&mut self, snapshot: &Snapshot, now: SystemTime) {
+        if !self.sized_once && snapshot.sizing().is_finished() {
+            self.sized_once = true;
+            self.hold.stop_waiting_for_sizes();
+        }
+        self.keep_on_screen(Some(snapshot), now);
+    }
+
+    /// The user chose `sort`, which orders the list now. Chosen before the first sizing finished,
+    /// the Disk sort keeps this order until it does.
+    pub(in crate::dashboard) fn set_sort(
+        &mut self,
+        sort: SortOrder,
+        snapshot: &Snapshot,
+        now: SystemTime,
+    ) {
+        self.sort = sort;
+        let sorted = Listing::sorted(snapshot, self, now).order();
+        if sort == SortOrder::Disk && !self.sized_once {
+            self.hold.hold_until_sized(sorted);
+        } else {
+            self.hold.stop_waiting_for_sizes();
+            self.hold.keep(sorted);
+        }
+    }
+
+    pub(in crate::dashboard) fn show_filter(&mut self) {
+        self.filter.get_or_insert_with(String::new);
+    }
+
+    pub(in crate::dashboard) fn set_filter_text(
+        &mut self,
+        text: String,
+        snapshot: Option<&Snapshot>,
+        now: SystemTime,
+    ) {
+        self.filter = Some(text);
+        self.keep_on_screen(snapshot, now);
+    }
+
+    /// Clear the filter and hide its field.
+    pub(in crate::dashboard) fn hide_filter(
+        &mut self,
+        snapshot: Option<&Snapshot>,
+        now: SystemTime,
+    ) {
+        self.filter = None;
+        self.keep_on_screen(snapshot, now);
+    }
+
+    /// Open or close the quiet projects' row.
+    pub(in crate::dashboard) fn toggle_quiet(
+        &mut self,
+        snapshot: Option<&Snapshot>,
+        now: SystemTime,
+    ) {
+        self.quiet_shown = !self.quiet_shown;
+        self.keep_on_screen(snapshot, now);
+    }
+
+    pub(in crate::dashboard) fn pointer_entered(&mut self, snapshot: &Snapshot, now: SystemTime) {
+        let on_screen = Listing::new(snapshot, self, now).order();
+        self.hold.pointer_entered(on_screen);
+    }
+
+    /// The pointer left the list, or the window no longer shows it.
+    pub(in crate::dashboard) fn pointer_left(&mut self) {
+        self.hold.pointer_left();
+    }
+
+    /// A new engine started: its map is sorted from scratch and sized from the start.
+    pub(in crate::dashboard) fn forget_map(&mut self) {
+        self.hold = Hold::default();
+        self.sized_once = false;
+    }
+
+    /// While the list is held, take what it shows now as the order to hold, so a card that just
+    /// appeared keeps its place too.
+    fn keep_on_screen(&mut self, snapshot: Option<&Snapshot>, now: SystemTime) {
+        if let Some(snapshot) = snapshot.filter(|_| self.hold.is_held()) {
+            let on_screen = Listing::new(snapshot, self, now).order();
+            self.hold.keep(on_screen);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::super::fixtures::{agent, now, project, quiet, shown, snapshot};
+    use super::*;
+    use crate::map::test_support::{cargo_target, measured, node_modules};
+    use crate::map::{AgentStatus, Measurement, Project};
+
+    fn listed(map: &Snapshot, arrangement: &Arrangement) -> Vec<String> {
+        shown(&Listing::new(map, arrangement, now()))
+    }
+
+    /// An arrangement with the pointer over the list `map` shows.
+    fn pointed_at(map: &Snapshot) -> Arrangement {
+        let mut arrangement = Arrangement::default();
+        arrangement.observe(map, now());
+        arrangement.pointer_entered(map, now());
+        arrangement
+    }
+
+    #[test]
+    fn while_the_pointer_is_over_the_list_new_activity_moves_no_card() {
+        let before = snapshot(vec![project("a", 1), project("b", 2)], vec![]);
+        let mut arrangement = pointed_at(&before);
+
+        let b_active = snapshot(vec![project("b", 0), project("a", 1)], vec![]);
+        arrangement.observe(&b_active, now());
+        assert_eq!(listed(&b_active, &arrangement), ["a", "b"]);
+
+        arrangement.pointer_left();
+        assert_eq!(listed(&b_active, &arrangement), ["b", "a"], "re-sorted");
+    }
+
+    #[test]
+    fn a_card_that_stops_qualifying_leaves_at_once_while_the_pointer_is_over_the_list() {
+        let mut working = project("b", 2);
+        working.agents.push(agent("/code/b", AgentStatus::Busy));
+        let before = snapshot(vec![project("a", 1), working, project("c", 3)], vec![]);
+        let mut arrangement = pointed_at(&before);
+
+        // b's agent ended, and its last activity is long past: it leaves the focus.
+        let after = snapshot(vec![project("a", 1), project("c", 3), quiet("b")], vec![]);
+        arrangement.observe(&after, now());
+        assert_eq!(listed(&after, &arrangement), ["a", "c", "quiet:1"]);
+    }
+
+    #[test]
+    fn a_newcomer_arrives_at_once_in_its_sorted_place_and_then_holds_it() {
+        let before = snapshot(vec![project("a", 2), project("b", 3)], vec![]);
+        let mut arrangement = pointed_at(&before);
+
+        let arrived = snapshot(
+            vec![project("new", 1), project("b", 1), project("a", 2)],
+            vec![],
+        );
+        arrangement.observe(&arrived, now());
+        assert_eq!(listed(&arrived, &arrangement), ["new", "a", "b"]);
+
+        let later = snapshot(
+            vec![project("b", 0), project("a", 0), project("new", 5)],
+            vec![],
+        );
+        arrangement.observe(&later, now());
+        assert_eq!(listed(&later, &arrangement), ["new", "a", "b"]);
+    }
+
+    #[test]
+    fn opening_the_quiet_row_under_the_pointer_moves_no_card_above_it() {
+        let before = snapshot(vec![project("a", 1), project("b", 2), quiet("q")], vec![]);
+        let mut arrangement = pointed_at(&before);
+        let b_active = snapshot(vec![project("b", 0), project("a", 1), quiet("q")], vec![]);
+        arrangement.observe(&b_active, now());
+
+        arrangement.toggle_quiet(Some(&b_active), now());
+        assert_eq!(listed(&b_active, &arrangement), ["a", "b", "quiet:1", "q"]);
+    }
+
+    /// A project in focus whose only build folder is measured as `target`, and whose own files
+    /// are `own_files`.
+    fn sized(name: &str, target: Measurement, own_files: Measurement) -> Project {
+        Project {
+            artifacts: vec![cargo_target(
+                PathBuf::from("/code").join(name).join("target"),
+                target,
+            )],
+            own_files,
+            ..project(name, 1)
+        }
+    }
+
+    #[test]
+    fn the_disk_sort_holds_its_order_until_the_first_sizing_finishes() {
+        let pending = Measurement::Measuring;
+        let early = snapshot(
+            vec![
+                sized("small", measured(10), pending),
+                sized("large", pending, pending),
+            ],
+            vec![],
+        );
+        let mut arrangement = Arrangement::default();
+        arrangement.observe(&early, now());
+        arrangement.set_sort(SortOrder::Disk, &early, now());
+        assert_eq!(listed(&early, &arrangement), ["small", "large"]);
+
+        let landing = snapshot(
+            vec![
+                sized("small", measured(10), pending),
+                sized("large", measured(500), pending),
+            ],
+            vec![],
+        );
+        arrangement.observe(&landing, now());
+        assert_eq!(listed(&landing, &arrangement), ["small", "large"], "held");
+
+        let done = snapshot(
+            vec![
+                sized("small", measured(10), measured(5)),
+                sized("large", measured(500), measured(5)),
+            ],
+            vec![],
+        );
+        arrangement.observe(&done, now());
+        assert_eq!(listed(&done, &arrangement), ["large", "small"]);
+    }
+
+    #[test]
+    fn after_the_first_sizing_the_disk_sort_follows_every_size_at_once() {
+        let done = |large: u64| {
+            snapshot(
+                vec![
+                    sized("small", measured(10), measured(5)),
+                    sized("large", measured(large), measured(5)),
+                ],
+                vec![],
+            )
+        };
+        let mut arrangement = Arrangement::default();
+        arrangement.observe(&done(500), now());
+        arrangement.set_sort(SortOrder::Disk, &done(500), now());
+        assert_eq!(listed(&done(500), &arrangement), ["large", "small"]);
+
+        // A build folder found later waits for its first size, as a new `target/` does, and the
+        // list follows the sizes that change meanwhile at once.
+        let mut later = done(1);
+        later.projects[0].artifacts.push(node_modules(
+            "/code/small/web/node_modules",
+            Measurement::Measuring,
+        ));
+        assert!(!later.sizing().is_finished());
+        arrangement.observe(&later, now());
+        assert_eq!(listed(&later, &arrangement), ["small", "large"]);
+    }
+
+    #[test]
+    fn choosing_another_sort_lets_go_of_the_disk_sorts_hold() {
+        let pending = Measurement::Measuring;
+        let early = snapshot(
+            vec![
+                sized("b", measured(10), pending),
+                sized("a", measured(500), pending),
+            ],
+            vec![],
+        );
+        let mut arrangement = Arrangement::default();
+        arrangement.observe(&early, now());
+        arrangement.set_sort(SortOrder::Disk, &early, now());
+        arrangement.set_sort(SortOrder::Name, &early, now());
+        assert!(!arrangement.hold.is_held());
+        assert_eq!(listed(&early, &arrangement), ["a", "b"]);
+    }
+}

@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "SutraCore"
+ffi_module_name = "SutraCoreFFI"
+ffi_module_filename = "SutraCoreFFI"

@@ -1,0 +1,13 @@
+[package]
+name = "sutra-ffi"
+version = "0.1.6"
+edition = "2024"
+publish = false
+
+[lib]
+name = "sutra_ffi"
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+sutra = { path = ".." }
+uniffi = "0.32.2"

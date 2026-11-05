@@ -1,14 +1,48 @@
-use std::collections::{HashMap, HashSet};
+//! Sounds, speech and banners for the transitions the user wants to hear about: a dev-runner unit
+//! changing state, and a coding agent that has been waiting on the user for a while.
+
+mod transitions;
+
+use std::collections::HashSet;
 use std::mem;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
+use std::time::SystemTime;
 
-use crate::model::{Environment, State};
+use crate::map::Snapshot;
+use transitions::{Announcement, Transitions};
 
 /// Action sent to the background audio/speech thread.
 enum Action {
-    SoundAndSpeak { sound: &'static str, text: String },
+    SoundAndSpeak { sound: Sound, text: String },
     Shutdown,
+}
+
+/// The macOS system sounds Sutra plays, in rising priority, because a batch of transitions plays
+/// only its highest: bad news first, then a request for the user, then good news, then progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Sound {
+    /// A unit is starting or building.
+    Submarine,
+    /// A unit is ready or running.
+    Ping,
+    /// An agent is waiting on the user.
+    Glass,
+    /// A unit failed.
+    Basso,
+}
+
+impl Sound {
+    /// The file stem in `/System/Library/Sounds/`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn system_name(self) -> &'static str {
+        match self {
+            Sound::Submarine => "Submarine",
+            Sound::Ping => "Ping",
+            Sound::Glass => "Glass",
+            Sound::Basso => "Basso",
+        }
+    }
 }
 
 /// Build a combined key for unit lookups (avoids allocating a tuple of two Strings).
@@ -16,44 +50,41 @@ fn unit_key(env_id: &str, unit_name: &str) -> String {
     format!("{}\x00{}", env_id, unit_name)
 }
 
+/// Shows a banner, a title and a body, in Notification Center: the app that owns the window does,
+/// as the system lets it.
+type PostBanner = Box<dyn Fn(&str, &str) + Send>;
+
 /// Notifier detects state transitions and plays sounds/speech/notifications.
 pub struct Notifier {
     tx: mpsc::Sender<Action>,
     thread: Option<JoinHandle<()>>,
+    post_banner: PostBanner,
     pub global_mute: bool,
     pub muted_units: HashSet<String>,
     pub global_notifications_off: bool,
     pub notifications_off_units: HashSet<String>,
-    prev_states: HashMap<(String, String), State>,
-    first_load: bool,
-}
-
-impl Default for Notifier {
-    fn default() -> Self {
-        Self::new()
-    }
+    transitions: Transitions,
 }
 
 impl Notifier {
-    pub fn new() -> Self {
+    /// A notifier that sends its banners to `post_banner`, and speaks and plays its sounds on a
+    /// thread of its own.
+    pub fn new(post_banner: impl Fn(&str, &str) + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel();
 
         let thread = thread::spawn(move || {
             Self::audio_thread(rx);
         });
 
-        #[cfg(target_os = "macos")]
-        let _ = mac_notification_sys::set_application("systems.synesthetic.sutra");
-
         Notifier {
             tx,
             thread: Some(thread),
+            post_banner: Box::new(post_banner),
             global_mute: false,
             muted_units: HashSet::new(),
             global_notifications_off: false,
             notifications_off_units: HashSet::new(),
-            prev_states: HashMap::new(),
-            first_load: true,
+            transitions: Transitions::default(),
         }
     }
 
@@ -82,7 +113,8 @@ impl Notifier {
                     // Play system sound
                     #[cfg(target_os = "macos")]
                     if let Some(ref stream) = audio_stream {
-                        let sound_path = format!("/System/Library/Sounds/{}.aiff", sound);
+                        let sound_path =
+                            format!("/System/Library/Sounds/{}.aiff", sound.system_name());
                         if let Ok(file) = std::fs::File::open(&sound_path) {
                             if let Ok(source) = rodio::Decoder::new(std::io::BufReader::new(file)) {
                                 let sink = rodio::Sink::connect_new(stream.mixer());
@@ -107,95 +139,80 @@ impl Notifier {
         }
     }
 
-    /// Detect transitions and fire sounds/notifications.
-    /// Call this after each load_all().
-    pub fn process(&mut self, envs: &[Environment]) {
-        // Build current state map
-        let mut current: HashMap<(String, String), State> = HashMap::new();
-        for env in envs {
-            for unit in &env.units {
-                current.insert((env.id.clone(), unit.name.clone()), unit.state.clone());
+    /// Detect the unit and agent transitions since the previous snapshot and fire
+    /// sounds/notifications: units at once, and an agent's wait once it has lasted (see
+    /// `announce_lasting_waits`). An agent outside every project is named after its working
+    /// folder.
+    pub fn process_snapshot(&mut self, snapshot: &Snapshot) {
+        let envs = snapshot
+            .projects
+            .iter()
+            .filter_map(|project| project.environment.as_ref());
+        let placed = snapshot.projects.iter().flat_map(|project| {
+            project
+                .agents
+                .iter()
+                .map(move |agent| (project.name.as_str(), agent))
+        });
+        let unplaced = snapshot.unplaced_agents.iter().map(|agent| {
+            let folder = agent.cwd.file_name().and_then(|name| name.to_str());
+            // The GUI lists these agents under "Elsewhere"; "/" and non-UTF-8 names have no
+            // better short name.
+            (folder.unwrap_or("Elsewhere"), agent)
+        });
+        let announcements =
+            self.transitions
+                .advance(envs, placed.chain(unplaced), SystemTime::now());
+        self.announce(announcements);
+    }
+
+    /// Announce the agent waits that have lasted long enough by now. A snapshot comes only when
+    /// something changes, so a wait that simply goes on needs this called on a timer while
+    /// `has_pending_waits` holds.
+    pub fn announce_lasting_waits(&mut self) {
+        let announcements = self.transitions.lasting_waits(SystemTime::now());
+        self.announce(announcements);
+    }
+
+    /// Whether an agent's wait is still to be announced, should it last.
+    pub fn has_pending_waits(&self) -> bool {
+        self.transitions.has_pending_waits()
+    }
+
+    /// Forget the previous map, so the first snapshot of an engine started afresh is recorded
+    /// rather than announced as a flood of changes.
+    pub fn forget_map(&mut self) {
+        self.transitions = Transitions::default();
+    }
+
+    /// Send the banners the toggles allow, then play one sound and speak every audible
+    /// transition in one utterance, so a burst of transitions does not queue a string of sounds.
+    fn announce(&self, announcements: Vec<Announcement>) {
+        let mut audible = Vec::new();
+        for announcement in announcements {
+            let unit_key = announcement.unit_key.as_deref();
+            // Banners are independent of the sound mute.
+            let banners_off = self.global_notifications_off
+                || unit_key.is_some_and(|key| self.notifications_off_units.contains(key));
+            if !banners_off {
+                (self.post_banner)(&announcement.banner_title, &announcement.banner_body);
+            }
+            let muted =
+                self.global_mute || unit_key.is_some_and(|key| self.muted_units.contains(key));
+            if !muted {
+                audible.push(announcement);
             }
         }
-
-        if self.first_load {
-            // First load: snapshot states, no sounds
-            self.prev_states = current;
-            self.first_load = false;
-            return;
+        if let Some((sound, text)) = utterance(audible) {
+            let _ = self.tx.send(Action::SoundAndSpeak { sound, text });
         }
+    }
 
-        // Diff against prev_states — collect all transitions, then batch audio.
-        let mut batched_speeches: Vec<String> = Vec::new();
-        let mut best_sound: Option<&'static str> = None;
-
-        for (key, new_state) in &current {
-            let changed = match self.prev_states.get(key) {
-                Some(old_state) => !state_variant_eq(old_state, new_state),
-                None => true, // new unit appeared
-            };
-
-            if !changed {
-                continue;
-            }
-
-            // Determine sound/speech for this transition
-            let (sound, speech) = match new_state {
-                State::None | State::Other(_) | State::Stopped => (None, None),
-                State::Building | State::Starting => {
-                    (Some("Submarine"), Some(format!("{} {}", key.1, new_state)))
-                }
-                State::Ready | State::Running => {
-                    (Some("Ping"), Some(format!("{} {}", key.1, new_state)))
-                }
-                State::Failed => (Some("Basso"), Some(format!("{} {}", key.1, new_state))),
-            };
-
-            let Some(sound) = sound else { continue };
-
-            let uk = unit_key(&key.0, &key.1);
-
-            // Send macOS notification (independent of sound mute)
-            let notifications_off =
-                self.global_notifications_off || self.notifications_off_units.contains(&uk);
-            if !notifications_off {
-                #[cfg(target_os = "macos")]
-                {
-                    let unit_name = &key.1;
-                    let state_str = new_state.to_string();
-                    let _ = mac_notification_sys::send_notification(
-                        &format!("sutra — {}", unit_name),
-                        None,
-                        &state_str,
-                        None,
-                    );
-                }
-            }
-
-            // Check sound mute
-            if self.global_mute || self.muted_units.contains(&uk) {
-                continue;
-            }
-
-            // Batch: collect speech and track highest-priority sound
-            if let Some(text) = speech {
-                batched_speeches.push(text);
-                best_sound = Some(match best_sound {
-                    None => sound,
-                    Some(prev) => higher_priority_sound(prev, sound),
-                });
-            }
+    /// Send a banner no unit is behind, unless banners are off.
+    pub fn banner(&self, title: &str, body: &str) {
+        if !self.global_notifications_off {
+            (self.post_banner)(title, body);
         }
-
-        // Send one batched action: single sound + combined speech utterance
-        if let Some(sound) = best_sound {
-            if !batched_speeches.is_empty() {
-                let text = batched_speeches.join(", ");
-                let _ = self.tx.send(Action::SoundAndSpeak { sound, text });
-            }
-        }
-
-        self.prev_states = current;
     }
 
     pub fn toggle_global_mute(&mut self) {
@@ -239,23 +256,61 @@ impl Drop for Notifier {
     }
 }
 
-/// Compare two State values by variant, also comparing the inner string for Other.
-fn state_variant_eq(a: &State, b: &State) -> bool {
-    match (a, b) {
-        (State::Other(a), State::Other(b)) => a == b,
-        _ => mem::discriminant(a) == mem::discriminant(b),
-    }
+/// One sound and one sentence for a batch: the highest-priority sound, and every transition
+/// spoken in the order it was found. `None` when nothing is audible.
+fn utterance(audible: Vec<Announcement>) -> Option<(Sound, String)> {
+    let sound = audible
+        .iter()
+        .map(|announcement| announcement.sound)
+        .max()?;
+    let speech: Vec<String> = audible
+        .into_iter()
+        .map(|announcement| announcement.speech)
+        .collect();
+    Some((sound, speech.join(", ")))
 }
 
-/// Return the higher-priority sound between two macOS system sounds.
-/// Priority: Basso (failed) > Ping (ready/running) > Submarine (building/starting).
-fn higher_priority_sound(a: &'static str, b: &'static str) -> &'static str {
-    fn priority(s: &str) -> u8 {
-        match s {
-            "Basso" => 2,
-            "Ping" => 1,
-            _ => 0,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn audible(sound: Sound, speech: &str) -> Announcement {
+        Announcement {
+            sound,
+            speech: speech.to_string(),
+            banner_title: String::new(),
+            banner_body: String::new(),
+            unit_key: None,
         }
     }
-    if priority(b) > priority(a) { b } else { a }
+
+    #[test]
+    fn a_batch_plays_its_highest_priority_sound_and_speaks_every_transition_in_order() {
+        let batch = vec![
+            audible(Sound::Submarine, "server building"),
+            audible(Sound::Basso, "web failed"),
+            audible(Sound::Glass, "app Claude waiting"),
+        ];
+        assert_eq!(
+            utterance(batch),
+            Some((
+                Sound::Basso,
+                "server building, web failed, app Claude waiting".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn an_agent_waiting_outranks_a_unit_becoming_ready() {
+        let batch = vec![
+            audible(Sound::Ping, "server ready"),
+            audible(Sound::Glass, "app Claude waiting"),
+        ];
+        assert_eq!(utterance(batch).unwrap().0, Sound::Glass);
+    }
+
+    #[test]
+    fn nothing_audible_makes_no_utterance() {
+        assert_eq!(utterance(Vec::new()), None);
+    }
 }
