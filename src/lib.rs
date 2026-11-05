@@ -1,3 +1,5 @@
+pub mod home;
+pub mod map;
 pub mod model;
 pub mod notifications;
 pub mod watcher;
