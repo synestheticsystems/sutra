@@ -26,10 +26,10 @@ What sutra does:
   vite, wasm, mobile, etc. — and the state of each, *as advertised by
   the dev runner itself*. Sutra doesn't measure or infer state; it
   surfaces what the dev script writes.
-- **Offers limited control** — essentially just a shutdown button per
-  environment. The button sends a single SIGTERM to the supervisor
-  PID the dev runner published; your supervisor's trap is what
-  actually reaps children, runs cleanup, and removes the registry
+- **Offers limited control** — essentially just Terminate Environment,
+  in each environment's card menu. It sends a single SIGTERM to the
+  supervisor PID the dev runner published; your supervisor's trap is
+  what actually reaps children, runs cleanup, and removes the registry
   entry. Anything richer (restart, per-unit stop, port reassignment)
   belongs in the dev script's own CLI, not in sutra.
 
@@ -75,6 +75,35 @@ semantic treatment downstream.
 
 When the environment exits, delete both. That's the whole protocol.
 
+### Per-project form
+
+A project can instead keep its state in its own folder: `meta` and
+`<unit_name>.status` inside `<project>/.dev-runner/`, same formats, no
+hash and no `DIR` (the folder is the directory). Prefer it when each
+worktree runs one environment: the folder already identifies the
+project, so the script needs no hash. Sutra reads both forms.
+Exclude the folder from git locally, through `info/exclude`, which
+every worktree of the repository shares:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+STATE="$PWD/.dev-runner"; mkdir -p "$STATE"
+EXCLUDE=$(git rev-parse --git-path info/exclude); mkdir -p "$(dirname "$EXCLUDE")"
+grep -qxF '.dev-runner/' "$EXCLUDE" 2>/dev/null || echo '.dev-runner/' >> "$EXCLUDE"
+trap 'rm -f "$STATE/meta" "$STATE"/*.status' EXIT INT TERM
+printf 'PID=%s\nSTARTED=%s\nSERVER_PORT=3000\n' "$$" "$(date +%s)" > "$STATE/meta"
+update_status() { printf '%s\n' "$2" > "$STATE/$1.status.tmp" && mv -f "$STATE/$1.status.tmp" "$STATE/$1.status"; }
+update_status server starting
+# ... start your server ...
+update_status server ready
+wait
+```
+
+When both forms describe the same folder, sutra shows one environment;
+see "Per-project state folder" in [STATE_SPEC.md](../STATE_SPEC.md) for
+the merge rule.
+
 ## Minimum recipe
 
 The smallest script that lights up sutra:
@@ -116,8 +145,8 @@ update_status server "ready"
 wait
 ```
 
-Run this and sutra immediately shows a card with a green dot next to
-"server" and a clickable `:3000` open-in-browser link.
+Run this and sutra immediately shows a card with a green `server :3000`
+lozenge, which opens the browser when clicked.
 
 **Why the safety dance** in this "minimum" recipe? Two of the lines
 look paranoid for a 20-line snippet:
@@ -129,7 +158,7 @@ look paranoid for a 20-line snippet:
 - The `write_status` helper does write-then-rename instead of `echo >
   file`. A bare `> file` is *truncate then write* — sutra's watcher
   fires on the truncate and can read the empty file before the write
-  completes, flickering the dot to "no state". Atomic rename avoids
+  completes, flickering the unit to "no status". Atomic rename avoids
   the window entirely.
 
 These are cheap to keep, costly to leave out.
@@ -246,8 +275,8 @@ fi
 ```
 
 For a watcher (cargo-watch, esbuild …) put `update_status` calls in
-the watcher's pre/post-build hooks so the dot flips yellow ↔ green on
-every rebuild.
+the watcher's pre/post-build hooks so the unit's lozenge flips amber ↔
+green on every rebuild.
 
 #### b. Poll readiness from the side (when it isn't)
 
@@ -324,7 +353,7 @@ script_pid=$$
 
 The 2-second window is enough for the user to see the success state
 and for sutra to fire its transition notifications; after that the
-row disappears so it doesn't sit around as a stale `ready`. The
+unit disappears so it doesn't sit around as a stale `ready`. The
 `kill -0` guard short-circuits if the parent has already exited and
 been replaced by a re-run — without it, the orphan would race the
 new run and delete *its* freshly-written status file.
@@ -404,7 +433,7 @@ register_instance "$SUPERVISOR_PID"
 # Verify the supervisor is its own process-group leader. If $set -m
 # didn't take effect (some non-interactive shells), the trap above
 # can't `kill -- -$MY_PGID` cleanly and a SIGTERM (e.g. from sutra's
-# terminate button, or from `./dev.sh --stop`) will leak children.
+# Terminate Environment, or from `./dev.sh --stop`) will leak children.
 sleep 0.05
 actual_pgid=$(ps -o pgid= -p "$SUPERVISOR_PID" 2>/dev/null | tr -d ' ')
 [ "$actual_pgid" = "$SUPERVISOR_PID" ] || \
@@ -522,7 +551,7 @@ change the detail (e.g. `building: cargo` → `building: wasm-pack`)
 don't fire transition notifications, so it's safe to update the
 detail aggressively without spamming the user.
 
-For sutra's rendering of these states (color, glyph, system sound)
+For sutra's rendering of these states (color, system sound)
 see [STATE_SPEC.md](../STATE_SPEC.md). As a writer you don't need to
 care about that — pick the right state string and the rendering
 follows.
@@ -746,8 +775,8 @@ doesn't require it to exist before the dev script runs.
   empty and `kill -- -""` is a no-op. Either `brew install bash` and
   use `/opt/homebrew/bin/bash` in your shebang, or substitute
   `MY_PGID=$(ps -o pgid= -p $$ | tr -d ' ')` for the `$BASHPID` line.
-  This affects any caller that sends SIGTERM — sutra's terminate
-  button, `./dev.sh --stop`, manual `kill <pid>` — they all rely on
+  This affects any caller that sends SIGTERM — sutra's Terminate
+  Environment, `./dev.sh --stop`, manual `kill <pid>` — they all rely on
   your trap to reap the group.
 - **Two checkouts of the same project conflict.** They won't — the id
   hashes the absolute path, so `~/code/myapp` and `~/work/myapp` get
