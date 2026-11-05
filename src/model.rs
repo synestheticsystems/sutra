@@ -33,26 +33,6 @@ impl State {
             _ => State::Other(s.to_string()),
         }
     }
-
-    pub fn display_indicator(&self) -> &str {
-        match self {
-            State::None => "\u{25cb}",     // ○
-            State::Starting => "\u{25cc}", // ◌
-            State::Building => "\u{25d1}", // ◑
-            State::Running => "\u{25cf}",  // ●
-            State::Ready => "\u{25cf}",    // ●
-            State::Failed => "\u{2717}",   // ✗
-            State::Stopped => "\u{25cb}",  // ○
-            State::Other(_) => "\u{25c6}", // ◆
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        matches!(
-            self,
-            State::Starting | State::Building | State::Running | State::Ready
-        )
-    }
 }
 
 impl fmt::Display for State {
