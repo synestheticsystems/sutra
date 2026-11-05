@@ -62,7 +62,10 @@ fi
 xcodebuild -create-xcframework -library "$lib" -headers "$out/headers" \
     -output "$out/SutraCoreFFI.xcframework" >/dev/null
 
-swift_build=(swift build -c release --package-path macos --product Sutra)
+# The native build system, because SwiftPM 6.4's default (Swift Build) stamps the app as built
+# against the macOS 14 SDK, its deployment target, and macOS 26 and later then give the app the
+# look of an older one. The native system stamps the SDK it really used.
+swift_build=(swift build -c release --package-path macos --product Sutra --build-system native)
 if $universal; then
     # SwiftPM before 6.4 (Xcode 26's, which CI builds with) hands a build for two architectures at
     # once (`--arch arm64 --arch x86_64`) to the Xcode build system, whose link of the SutraCore
