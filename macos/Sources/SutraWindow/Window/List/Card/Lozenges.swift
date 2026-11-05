@@ -12,12 +12,10 @@ struct AgentLozengeView: View {
             Lozenge(ink: lozenge.look.ink) {
                 Text(lozenge.harness)
             } fill: {
-                if let rhythm = lozenge.look.rhythm {
-                    Rhythmic(rhythm: rhythm) { level in
-                        Capsule().fill(lozenge.look.fill(at: level))
-                    }
+                if let swell = lozenge.look.swell {
+                    SwellLayer(swell: swell, shape: .capsule)
                 } else {
-                    Capsule().fill(lozenge.look.fill(at: 0))
+                    Capsule().fill(Still.fill)
                 }
             }
             if let beside = lozenge.beside {

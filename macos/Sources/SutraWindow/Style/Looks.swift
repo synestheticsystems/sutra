@@ -37,7 +37,7 @@ struct Hue {
 }
 
 /// Grey and still: what is at rest, or no longer news.
-private enum Still {
+enum Still {
     static let ink = Color(nsColor: .secondaryLabelColor)
     static let fill = Color(nsColor: .quaternaryLabelColor)
 }
@@ -51,21 +51,12 @@ extension AgentLook {
         }
     }
 
-    /// The capsule's fill at `level` of the lozenge's rhythm, from 0 to 1: a waiting agent's
-    /// swells with its card's throb, a working one's with its slow pulse.
-    func fill(at level: Double) -> Color {
+    /// How the capsule's fill swells: a waiting agent's with its card's throb, a working one's
+    /// with its slow pulse. `nil` for an agent at rest, whose fill is `Still.fill`.
+    var swell: Swell? {
         switch self {
-        case .waiting: Hue.amber.fill(0.18 + 0.20 * level)
-        case .working: Hue.green.fill(0.12 + 0.14 * level)
-        case .still: Still.fill
-        }
-    }
-
-    /// What moves the lozenge, if anything does.
-    var rhythm: Rhythm? {
-        switch self {
-        case .waiting: .throb
-        case .working: .pulse
+        case .waiting: Swell(rhythm: .throb, color: Hue.amber.base, rest: 0.18, peak: 0.38)
+        case .working: Swell(rhythm: .pulse, color: Hue.green.base, rest: 0.12, peak: 0.26)
         case .still: nil
         }
     }
@@ -106,11 +97,12 @@ enum Surface {
         return surface
     })
 
-    /// The amber a waiting card's surface takes at `level` of its throb, from 0 to 1: faint, so
-    /// what lies on the card still reads.
-    static func wash(at level: Double) -> Color {
-        Hue.amber.fill(0.08 * level)
-    }
+    /// The amber wash a waiting card's surface takes with its throb: faint, so what lies on the
+    /// card still reads.
+    static let wash = Swell(rhythm: .throb, color: Hue.amber.base, rest: 0, peak: 0.08)
+
+    /// The amber a waiting card's edge turns with its throb.
+    static let waitingEdge = Swell(rhythm: .throb, color: Hue.amber.base, rest: 0, peak: 1)
 
     /// The tray along a card's bottom edge: a shade off the card, so it reads as the card's
     /// footing rather than as more of its body.

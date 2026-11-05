@@ -1,9 +1,9 @@
-import Foundation
+import QuartzCore
 import SwiftUI
 
 /// What moves on the list: a waiting card throbs, and its waiting agents with it; an agent at work
-/// pulses slowly. Every rhythm runs on the wall clock, so whatever throbs throbs in step, however
-/// late it appeared.
+/// pulses slowly. Core Animation runs every rhythm, so the window's views do no work while it
+/// moves, and on the wall clock, so whatever throbs throbs in step, however late it appeared.
 enum Rhythm {
     case throb
     case pulse
@@ -17,29 +17,29 @@ enum Rhythm {
         }
     }
 
-    /// The least time between frames. A throb swells to a strong colour and shows its steps at
-    /// fewer than ten frames a second; a pulse is a faint tint changing slowly, and can run all
-    /// day, so it takes five.
-    fileprivate var frameInterval: TimeInterval {
-        switch self {
-        case .throb: 0.1
-        case .pulse: 0.2
-        }
-    }
-
-    /// The level held while nothing moves: a waiting card stays at its peak, so it still stands
-    /// out; a working agent rests halfway.
-    fileprivate var steadyLevel: Double {
+    /// The level held while nothing moves, from 0 to 1: a waiting card stays at its peak, so it
+    /// still stands out; a working agent rests halfway.
+    var steadyLevel: Double {
         switch self {
         case .throb: 1
         case .pulse: 0.5
         }
     }
 
-    /// How far into its cycle the rhythm is at `date`, from 0 to 1 and back, easing in and out.
-    fileprivate func level(at date: Date) -> Double {
-        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-        return 0.5 - 0.5 * cos(2 * .pi * phase)
+    /// An animation of a layer's opacity from `rest` up to `peak` and back, easing in and out as a
+    /// cosine does, forever, at the point of its cycle the wall clock gives.
+    func animation(from rest: Double, to peak: Double) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = rest
+        animation.toValue = peak
+        animation.duration = period / 2
+        animation.autoreverses = true
+        animation.repeatCount = .infinity
+        // The sine-shaped ease, which makes each half of a cycle half a cosine.
+        animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.37, 0, 0.63, 1)
+        animation.timeOffset = Date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: period)
+        return animation
     }
 }
 
@@ -52,23 +52,4 @@ public enum Motion: Sendable {
 
 extension EnvironmentValues {
     @Entry public var motion: Motion = .live
-}
-
-/// `content` drawn at the level of `rhythm`, from 0 to 1, frame by frame while motion is live.
-struct Rhythmic<Content: View>: View {
-    let rhythm: Rhythm
-    @ViewBuilder let content: (Double) -> Content
-
-    @Environment(\.motion) private var motion
-
-    var body: some View {
-        switch motion {
-        case .steady:
-            content(rhythm.steadyLevel)
-        case .live:
-            TimelineView(.animation(minimumInterval: rhythm.frameInterval)) { timeline in
-                content(rhythm.level(at: timeline.date))
-            }
-        }
-    }
 }

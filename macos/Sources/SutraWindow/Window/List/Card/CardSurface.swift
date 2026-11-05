@@ -11,7 +11,6 @@ struct CardSurface: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Surface.cornerRadius)
         ZStack {
-            // The shadow stays with the still fill, so a throb redraws no shadow.
             shape
                 .fill(Surface.card)
                 .shadow(
@@ -21,12 +20,11 @@ struct CardSurface: View {
                 )
             shape.strokeBorder(Surface.edge)
             if waiting {
-                Rhythmic(rhythm: .throb) { level in
-                    ZStack {
-                        shape.fill(Surface.wash(at: level))
-                        shape.strokeBorder(Hue.amber.fill(level))
-                    }
-                }
+                SwellLayer(swell: Surface.wash, shape: .rectangle(cornerRadius: Surface.cornerRadius))
+                SwellLayer(
+                    swell: Surface.waitingEdge,
+                    shape: .edge(cornerRadius: Surface.cornerRadius, width: 1)
+                )
             }
         }
     }
@@ -41,9 +39,7 @@ struct CardFill: View {
         ZStack {
             Surface.card
             if waiting {
-                Rhythmic(rhythm: .throb) { level in
-                    Surface.wash(at: level)
-                }
+                SwellLayer(swell: Surface.wash, shape: .rectangle(cornerRadius: 0))
             }
         }
     }
