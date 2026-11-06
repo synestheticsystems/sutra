@@ -2,9 +2,12 @@ import SwiftUI
 
 /// A first-launch welcome, also reusable by the standalone artwork preview.
 public struct IntroView: View {
+    /// The dance's seed: `nil` for a new dance each time the screen shows, or a recording's own.
+    private let danceSeed: UInt64?
     private let continueAction: () -> Void
 
-    public init(continueAction: @escaping () -> Void) {
+    public init(danceSeed: UInt64? = nil, continueAction: @escaping () -> Void) {
+        self.danceSeed = danceSeed
         self.continueAction = continueAction
     }
 
@@ -21,7 +24,7 @@ public struct IntroView: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .padding(.top, 3)
-                    PortDance(showsCue: true)
+                    PortDance(seed: danceSeed, showsCue: true)
                         .frame(height: max(280, geometry.size.height - 190))
                         .padding(.top, 8)
                     Text("Your agents, dev servers and worktrees.\nAll in one place.")

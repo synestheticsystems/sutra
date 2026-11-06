@@ -22,7 +22,7 @@ public struct DashboardView: View {
     public var body: some View {
         VStack(spacing: 0) {
             if welcome.shown {
-                IntroView { welcome.continueToDashboard() }
+                IntroView(danceSeed: welcome.danceSeed) { welcome.continueToDashboard() }
                     // The dance tells no news, so only Reduce Motion and a window nobody can see
                     // hold it still.
                     .environment(\.motion, reduceMotion || !seen ? .steady : .live)

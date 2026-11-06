@@ -1,8 +1,8 @@
 # macOS packaging
 
 Builds `Sutra.app` and its `.dmg` for direct distribution (the GitHub release
-and the Homebrew cask), and a sandboxed dev bundle that stands in for the Mac
-App Store edition.
+and the Homebrew cask), a sandboxed dev bundle that stands in for the Mac App
+Store edition, and a recording build for the store's preview video.
 
 ## Two editions
 
@@ -115,6 +115,37 @@ open -n "dist/Sutra Sandbox.app"
   ```sh
   rm ~/Library/Containers/systems.synesthetic.sutra.sandbox/Data/Library/Application\ Support/Sutra/root.bookmark
   ```
+
+## Recording build (the store's preview video)
+
+The Mac App Store's preview shows the app at work, and nobody's real machine
+belongs in it. `recording.sh` builds `Sutra Recording.app`: the app's own
+window and welcome screen over invented work.
+
+```sh
+./packaging/macos/recording.sh
+open -n "dist/Sutra Recording.app"
+```
+
+- It is a build of its own (`macos/Sources/SutraRecording`) with no live core
+  in it, so nothing scans a folder, reads an agent's session or a process, or
+  posts a banner. Its window reads a script (`ScriptedCore.swift`) that plays
+  invented projects in folders under `/Demo`, a home no Mac has
+  (`Script/Scenario.swift`).
+- It opens on the welcome screen at every launch, and the robots dance the same
+  calls each time. The script waits behind the screen and plays from the click
+  on Let's untangle this: 6 seconds in, the `fix/layout` worktree's agent stops
+  to ask permission and its card throbs; at 20 it works on; at 24 the
+  `feature/search` worktree's agent and its two subagents finish.
+- For another take, quit and launch it again, or choose Help > Welcome to Robo
+  Sutra, which brings the screen back and rewinds the script.
+- Folding a repository, the sort and the quiet projects' row change the list as
+  the app would. The rest is left undone, and no button, menu or link reaches
+  the Mac: a stand-in for macOS's services opens, copies and changes nothing.
+- Its bundle identifier, `systems.synesthetic.sutra.recording`, and the App
+  Sandbox (`sutra-recording.entitlements`, the sandbox alone) give it a
+  container and preferences of its own, so it reads and writes none of
+  Sutra's.
 
 ## Releases (CI)
 

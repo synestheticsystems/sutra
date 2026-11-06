@@ -10,10 +10,15 @@ public final class Welcome {
     /// The welcome screen stands in front of everything the window shows.
     public private(set) var shown: Bool
 
+    /// The seed the welcome dance draws its calls from: `nil` for a new dance each time the screen
+    /// shows, or a recording's own, so that every take dances alike.
+    let danceSeed: UInt64?
+
     @ObservationIgnored private let memory: any WelcomeMemory
 
-    public init(memory: any WelcomeMemory) {
+    public init(memory: any WelcomeMemory, danceSeed: UInt64? = nil) {
         self.memory = memory
+        self.danceSeed = danceSeed
         shown = !memory.hasSeenIntroduction
     }
 

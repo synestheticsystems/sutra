@@ -6,6 +6,9 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Sutra", targets: ["Sutra"]),
+        // The app's window over invented work, for recording the Mac App Store's preview
+        // (packaging/macos/recording.sh).
+        .executable(name: "SutraRecording", targets: ["SutraRecording"]),
         // The window's views and model, apart from the app, so a tool can draw them from fixtures.
         .library(name: "SutraWindow", targets: ["SutraWindow"]),
         .library(name: "SutraCore", targets: ["SutraCore"]),
@@ -38,6 +41,16 @@ let package = Package(
             name: "Sutra",
             dependencies: ["SutraCore", "SutraWindow"],
             path: "Sources/Sutra"
+        ),
+        .executableTarget(
+            name: "SutraRecording",
+            dependencies: ["SutraCore", "SutraWindow"],
+            path: "Sources/SutraRecording"
+        ),
+        .testTarget(
+            name: "SutraRecordingTests",
+            dependencies: ["SutraCore", "SutraRecording", "SutraWindow"],
+            path: "Tests/SutraRecordingTests"
         ),
     ]
 )

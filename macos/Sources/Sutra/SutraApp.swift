@@ -9,18 +9,7 @@ struct SutraApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
 
     var body: some Scene {
-        Window("Sutra", id: "dashboard") {
-            DashboardView(dashboard: delegate.dashboard, welcome: delegate.welcome)
-                .onChange(of: delegate.dashboard.dockBadge, initial: true) { _, badge in
-                    NSApp.dockTile.badgeLabel = badge
-                }
-        }
-        .defaultSize(width: 520, height: 640)
-        .commands { DashboardCommands(welcome: delegate.welcome) }
-
-        Settings {
-            SettingsView(dashboard: delegate.dashboard)
-        }
+        SutraScenes(dashboard: delegate.dashboard, welcome: delegate.welcome)
     }
 }
 
