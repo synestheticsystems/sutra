@@ -1,5 +1,5 @@
 //! A card's identity: the name's tooltip (the folder and its last activity), and the branch chip
-//! and its tooltip.
+//! and its tooltip (the branch in full, and which worktree this is).
 
 use std::path::Path;
 
@@ -35,8 +35,14 @@ pub(super) fn branch(repo: &RepoInfo) -> String {
     }
 }
 
-/// The branch chip's tooltip: which worktree of which repository this is.
-pub(super) fn worktree(repo: &RepoInfo, home: &Path) -> String {
+/// The branch chip's tooltip: the branch in full, which the chip cuts short when it is long, then
+/// which worktree of which repository this is.
+pub(super) fn branch_tooltip(repo: &RepoInfo, home: &Path) -> String {
+    format!("{}\n{}", branch(repo), worktree(repo, home))
+}
+
+/// Which worktree of which repository this is.
+fn worktree(repo: &RepoInfo, home: &Path) -> String {
     let Some(name) = &repo.worktree_name else {
         return "Main worktree".to_string();
     };
@@ -93,19 +99,20 @@ mod tests {
     fn branch_of_a_linked_worktree_leaves_its_name_to_the_card_and_the_tooltip() {
         let linked = repo(Some("app-wt"), Some("feature-x"), Some("abc1234"));
         assert_eq!(branch(&linked), "feature-x");
-        assert!(worktree(&linked, Path::new(HOME)).contains("app-wt"));
+        assert!(branch_tooltip(&linked, Path::new(HOME)).contains("app-wt"));
     }
 
     #[test]
-    fn worktree_tooltip_names_the_main_repository_folder() {
+    fn branch_tooltip_gives_the_whole_branch_then_the_worktree_of_the_main_repository_folder() {
         let home = Path::new(HOME);
         assert_eq!(
-            worktree(&repo(None, Some("main"), None), home),
-            "Main worktree"
+            branch_tooltip(&repo(None, Some("main"), None), home),
+            "main\nMain worktree"
         );
+        let long = "claude/worktree-map-subagents-and-the-five-minute-slices";
         assert_eq!(
-            worktree(&repo(Some("feature-x"), Some("feature-x"), None), home),
-            "Linked worktree feature-x of ~/code/app"
+            branch_tooltip(&repo(Some("map-wt"), Some(long), None), home),
+            format!("{long}\nLinked worktree map-wt of ~/code/app")
         );
     }
 

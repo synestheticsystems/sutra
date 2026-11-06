@@ -38,7 +38,7 @@ pub(super) fn card(project: &Project, map: &Snapshot, ctx: &CardContext) -> Card
         name_tooltip: header::name_tooltip(project, ctx.home, last_activity.as_deref()),
         branch: project.repo.as_ref().map(|repo| Chip {
             text: header::branch(repo),
-            tooltip: header::worktree(repo, ctx.home),
+            tooltip: header::branch_tooltip(repo, ctx.home),
         }),
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
