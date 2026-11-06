@@ -8,6 +8,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::clean::CargoEnv;
@@ -135,19 +136,7 @@ impl Drop for TempDir {
 /// Run git in `dir` with no user or system config, so a global hook or signing setting cannot
 /// change what the fixture looks like. Returns trimmed stdout.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args([
-            "-c",
-            "user.name=Sutra Test",
-            "-c",
-            "user.email=test@example.invalid",
-        ])
-        .args(args)
-        .output()
-        .expect("run git");
+    let output = git_command(dir, args).output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -157,6 +146,47 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         .expect("utf-8 git output")
         .trim()
         .to_owned()
+}
+
+/// git in `dir`, acting on the repository around `dir` and no other. A command git itself runs,
+/// such as `git rebase --exec`, inherits `GIT_DIR`, which points git at the repository the tests
+/// run in, whatever folder a fixture's git runs in. Run that way, a fixture's `git init` once marked
+/// Sutra's own repository bare, and its commits landed on the branch being rebased (2026-11-06).
+fn git_command(dir: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(dir);
+    for variable in repository_variables() {
+        command.env_remove(variable);
+    }
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args([
+            "-c",
+            "user.name=Sutra Test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(args);
+    command
+}
+
+/// The environment variables that point git at a repository, as this git lists them, so that a
+/// git that knows more of them than Sutra does has all of them cleared.
+fn repository_variables() -> &'static [String] {
+    static VARIABLES: OnceLock<Vec<String>> = OnceLock::new();
+    VARIABLES.get_or_init(|| {
+        let output = Command::new("git")
+            .args(["rev-parse", "--local-env-vars"])
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git lists its variables");
+        String::from_utf8(output.stdout)
+            .expect("utf-8 git output")
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 /// Add a file named `name` and commit it.
@@ -291,5 +321,28 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
         problems: Vec::new(),
         scan: ScanStats::default(),
         generated_at: UNIX_EPOCH,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fixtures_git_clears_every_variable_that_would_point_it_at_another_repository() {
+        let command = git_command(Path::new("/"), &["status"]);
+        let cleared: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+        ] {
+            assert!(cleared.iter().any(|name| name == variable), "{variable}");
+        }
     }
 }
