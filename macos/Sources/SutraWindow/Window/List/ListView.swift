@@ -75,10 +75,35 @@ private struct Rows: View {
     }
 }
 
-/// One repository's worktrees, in a box of their own: its line along the top, with a disclosure
-/// chevron, the repository's name and the disk its worktrees take, then their cards, set in from
-/// the list's edge, so they read as the repository's at a glance. A click on the line folds the
-/// box shut, and another opens it again. Folded, the box holds only its line, with the robots of
+/// The lines of the list that fold something away, a repository's and the one standing for the
+/// quiet projects, all laid out alike, so their chevrons stand in one column.
+private enum FoldingLine {
+    /// How far a line's chevron stands in from the list's edge.
+    static let inset: CGFloat = 8
+    /// The room above and below a line's text, which a folded repository's throb fills.
+    static let padding: CGFloat = 7
+    /// The width of the chevron's slot, fixed so the guide under an open repository's chevron runs
+    /// down its middle.
+    static let chevronWidth: CGFloat = 10
+}
+
+/// A folding line's chevron, pointing at what the line holds while it shows.
+private struct Chevron: View {
+    let open: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .rotationEffect(.degrees(open ? 90 : 0))
+            .frame(width: FoldingLine.chevronWidth)
+            .accessibilityHidden(true)
+    }
+}
+
+/// One repository's worktrees: its line, with a disclosure chevron, the repository's name and the
+/// disk its worktrees take, then their cards, set in from the list's edge and hung from a guide
+/// that runs down from the chevron, so they read as the repository's at a glance. A click on the
+/// line folds the cards away, and another shows them again. Folded, the line holds the robots of
 /// the agents in its worktrees at its end, and throbs as their cards would while one of them waits
 /// on the user.
 private struct RepositoryGroup: View {
@@ -91,41 +116,60 @@ private struct RepositoryGroup: View {
     let fold: Fold
     let dashboard: DashboardModel
 
-    /// How far the line stands in from the box's own inset, so its chevron clears the edge.
-    private static let lineInset: CGFloat = 6
-    /// How far the cards stand in from the box's own inset, past its line's chevron.
-    private static let cardIndent: CGFloat = 14
+    /// The room between the line and the cards, and between cards, as between the list's rows.
+    private static let spacing: CGFloat = 8
+    /// How far the cards stand in from the list's edge, well past the chevron.
+    private static let cardIndent: CGFloat = 24
+    /// Where the guide runs, from the list's edge: down the middle of the chevron.
+    private static let guideOffset = FoldingLine.inset + FoldingLine.chevronWidth / 2
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            switch fold {
-            case .open(let cards):
+        switch fold {
+        case .open(let cards):
+            VStack(alignment: .leading, spacing: Self.spacing) {
                 header(open: true)
-                    .padding(.horizontal, Self.lineInset)
-                ForEach(cards, id: \.path) { card in
-                    CardView(model: card, dashboard: dashboard)
-                        .padding(.leading, Self.cardIndent)
-                }
-            case .folded(let sessions, let subagents, _):
-                HStack(spacing: 12) {
-                    header(open: false)
-                    if !sessions.isEmpty || !subagents.isEmpty {
-                        // Laid out first and never cut, as on a card's tray.
-                        TrayAgents(sessions: sessions, subagents: subagents)
-                            .fixedSize()
-                            .layoutPriority(1)
+                    .padding(.horizontal, FoldingLine.inset)
+                    .padding(.vertical, FoldingLine.padding)
+                VStack(alignment: .leading, spacing: Self.spacing) {
+                    ForEach(cards, id: \.path) { card in
+                        CardView(model: card, dashboard: dashboard)
                     }
                 }
-                .padding(.horizontal, Self.lineInset)
+                .padding(.leading, Self.cardIndent)
+                .background(alignment: .topLeading) { guide }
+            }
+        case .folded(let sessions, let subagents, let waiting):
+            HStack(spacing: 12) {
+                header(open: false)
+                if !sessions.isEmpty || !subagents.isEmpty {
+                    // Laid out first and never cut, as on a card's tray.
+                    TrayAgents(sessions: sessions, subagents: subagents)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+            }
+            .padding(.horizontal, FoldingLine.inset)
+            .padding(.vertical, FoldingLine.padding)
+            // Open, the cards of the agents that wait throb themselves; folded, the line throbs
+            // for them.
+            .background {
+                if waiting {
+                    Throb(cornerRadius: Surface.cornerRadius)
+                }
             }
         }
-        .padding(Surface.groupInset)
-        .background { GroupSurface(waiting: waitingWhileFolded) }
     }
 
-    /// Open, the cards of the agents that wait throb themselves; folded, the box throbs for them.
-    private var waitingWhileFolded: Bool {
-        if case .folded(_, _, let waiting) = fold { waiting } else { false }
+    /// The hairline the cards hang from, from just below the chevron to the foot of the last card.
+    private var guide: some View {
+        Rectangle()
+            .fill(Surface.guide)
+            .frame(width: 1)
+            // Up through the room between the line and the first card, to just below the chevron,
+            // which sits above the foot of the line's text.
+            .padding(.top, -(Self.spacing + FoldingLine.padding))
+            .offset(x: Self.guideOffset - 0.5)
+            .accessibilityHidden(true)
     }
 
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
@@ -135,10 +179,7 @@ private struct RepositoryGroup: View {
             dashboard.perform(.toggleRepositoryFold(commonDir: commonDir))
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(open ? 90 : 0))
-                    .accessibilityHidden(true)
+                Chevron(open: open)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(name)
                         .fontWeight(.semibold)
@@ -201,10 +242,7 @@ private struct QuietProjectsRow: View {
             dashboard.perform(.toggleQuietProjects)
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(open ? 90 : 0))
-                    .accessibilityHidden(true)
+                Chevron(open: open)
                 Text(label)
                     .font(.callout)
             }
@@ -214,7 +252,7 @@ private struct QuietProjectsRow: View {
         .buttonStyle(.plain)
         .hoverTip(tooltip)
         .accessibilityValue(tooltip)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
+        .padding(.horizontal, FoldingLine.inset)
+        .padding(.vertical, FoldingLine.padding)
     }
 }
