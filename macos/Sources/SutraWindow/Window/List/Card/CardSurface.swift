@@ -22,12 +22,37 @@ struct CardSurface: View {
                 )
             shape.strokeBorder(Surface.edge)
             if waiting {
-                SwellLayer(swell: Surface.wash, shape: .rectangle(cornerRadius: Surface.cornerRadius))
-                SwellLayer(
-                    swell: Surface.waitingEdge,
-                    shape: .edge(cornerRadius: Surface.cornerRadius, width: 1)
-                )
+                Throb(cornerRadius: Surface.cornerRadius)
             }
         }
+    }
+}
+
+/// The ground a repository's worktrees stand on: a shade off the window, sunk rather than raised,
+/// with the same thin edge, so the box reads as holding its cards rather than as another card.
+/// Folded, it holds only its line, and throbs as a card does while an agent in it waits.
+struct GroupSurface: View {
+    let waiting: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Surface.groupCornerRadius)
+        ZStack {
+            shape.fill(Surface.group)
+            shape.strokeBorder(Surface.edge)
+            if waiting {
+                Throb(cornerRadius: Surface.groupCornerRadius)
+            }
+        }
+    }
+}
+
+/// A waiting surface's throb: its edge turns amber and it takes a faint amber wash, swelling and
+/// fading together.
+private struct Throb: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        SwellLayer(swell: Surface.wash, shape: .rectangle(cornerRadius: cornerRadius))
+        SwellLayer(swell: Surface.waitingEdge, shape: .edge(cornerRadius: cornerRadius, width: 1))
     }
 }

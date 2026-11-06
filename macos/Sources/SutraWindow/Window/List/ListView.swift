@@ -75,11 +75,12 @@ private struct Rows: View {
     }
 }
 
-/// One repository's worktrees: a light line with a disclosure chevron, the repository's name and
-/// the disk its worktrees take, then their cards, set in a little so they read as the repository's
-/// at a glance. A click on the line folds the group shut, and another opens it again. Folded, the
-/// line stands alone on a card's surface, the robots of the agents in its worktrees at its end,
-/// and throbs as their cards would while one of them waits on the user.
+/// One repository's worktrees, in a box of their own: its line along the top, with a disclosure
+/// chevron, the repository's name and the disk its worktrees take, then their cards, set in from
+/// the list's edge, so they read as the repository's at a glance. A click on the line folds the
+/// box shut, and another opens it again. Folded, the box holds only its line, with the robots of
+/// the agents in its worktrees at its end, and throbs as their cards would while one of them waits
+/// on the user.
 private struct RepositoryGroup: View {
     /// The git folder the worktrees share, which the click names to the core.
     let commonDir: String
@@ -90,39 +91,41 @@ private struct RepositoryGroup: View {
     let fold: Fold
     let dashboard: DashboardModel
 
+    /// How far the line stands in from the box's own inset, so its chevron clears the edge.
+    private static let lineInset: CGFloat = 6
+    /// How far the cards stand in from the box's own inset, past its line's chevron.
+    private static let cardIndent: CGFloat = 14
+
     var body: some View {
-        switch fold {
-        case .open(let cards):
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            switch fold {
+            case .open(let cards):
                 header(open: true)
-                    // The chevron where it stands on a folded group's surface, so it turns in
-                    // place.
-                    .padding(.leading, 15)
-                    .padding(.trailing, 4)
-                    // A little more room above the line than below, so it reads as its cards'
-                    // heading.
-                    .padding(.top, 4)
+                    .padding(.horizontal, Self.lineInset)
                 ForEach(cards, id: \.path) { card in
                     CardView(model: card, dashboard: dashboard)
-                        .padding(.leading, 12)
+                        .padding(.leading, Self.cardIndent)
                 }
-            }
-        case .folded(let sessions, let subagents, let waiting):
-            HStack(spacing: 12) {
-                header(open: false)
-                if !sessions.isEmpty || !subagents.isEmpty {
-                    // Laid out first and never cut, as on a card's tray.
-                    TrayAgents(sessions: sessions, subagents: subagents)
-                        .fixedSize()
-                        .layoutPriority(1)
+            case .folded(let sessions, let subagents, _):
+                HStack(spacing: 12) {
+                    header(open: false)
+                    if !sessions.isEmpty || !subagents.isEmpty {
+                        // Laid out first and never cut, as on a card's tray.
+                        TrayAgents(sessions: sessions, subagents: subagents)
+                            .fixedSize()
+                            .layoutPriority(1)
+                    }
                 }
+                .padding(.horizontal, Self.lineInset)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(1)
-            .background { CardSurface(waiting: waiting) }
         }
+        .padding(Surface.groupInset)
+        .background { GroupSurface(waiting: waitingWhileFolded) }
+    }
+
+    /// Open, the cards of the agents that wait throb themselves; folded, the box throbs for them.
+    private var waitingWhileFolded: Bool {
+        if case .folded(_, _, let waiting) = fold { waiting } else { false }
     }
 
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,

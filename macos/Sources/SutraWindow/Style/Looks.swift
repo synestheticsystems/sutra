@@ -115,5 +115,13 @@ enum Surface {
     /// A card's thin edge, and the track a bar fills along.
     static let edge = Color(nsColor: .separatorColor)
 
+    /// The ground of a repository's box, sunk a shade below the window as its cards rise above it.
+    static let group = Color.primary.opacity(0.035)
+
     static let cornerRadius: CGFloat = 10
+    /// A repository's box rounds as its cards do, from as far out as it holds them in, so its
+    /// corners and theirs run alike.
+    static let groupCornerRadius: CGFloat = cornerRadius + groupInset
+    /// How far a repository's box holds its contents in from its edge.
+    static let groupInset: CGFloat = 8
 }
