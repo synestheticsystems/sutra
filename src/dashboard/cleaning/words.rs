@@ -154,6 +154,16 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Why a click on Clean whose clean would take `folder`, which another question asks about,
+    /// goes no further.
+    pub(super) fn asked_already(&self, folder: &Path) -> String {
+        format!(
+            "A question about cleaning {} is waiting for your answer. Try again once you've \
+             answered it.",
+            self.folder(folder)
+        )
+    }
+
     /// Why a click on Clean goes no further.
     pub(super) fn refused(&self, err: &PrepareError) -> String {
         match err {
@@ -490,6 +500,17 @@ mod tests {
         assert_eq!(
             words.refused(&busy),
             "A build is using target/debug. Try again once it finishes."
+        );
+    }
+
+    #[test]
+    fn a_folder_another_question_asks_about_is_a_refusal_naming_it() {
+        let project = project();
+        let words = Context::new(&project, &clicked("target"), Path::new(HOME), false);
+        assert_eq!(
+            words.asked_already(Path::new("/Users/dev/.cargo/build/36")),
+            "A question about cleaning ~/.cargo/build/36 is waiting for your answer. Try again \
+             once you've answered it."
         );
     }
 

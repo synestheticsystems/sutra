@@ -1,17 +1,84 @@
 //! What happens when the user asks for a clean: working out what it means on a thread of its own,
 //! then queueing it, after a question only when the click does more than it says. While a question
-//! waits for its answer the dashboard goes on, and the card shows the clean meanwhile.
+//! waits for its answer the dashboard goes on, and the folders it asks about wait with it: their
+//! cards show the clean, and neither cleaning by itself nor another click on Clean takes them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use super::queue::By;
-use super::{Cleaning, OFFER_QUIET_AT_LEAST, Report, words};
+use super::{Cleaning, OFFER_QUIET_AT_LEAST, Report, overlap, words};
 use crate::dashboard::state::{Alert, Proposal};
 use crate::map::clean::{self, CargoEnv, IdleClean, IdleCleans, PrepareError, Prepared};
 use crate::map::{ArtifactDir, Project, Snapshot};
+
+/// The questions waiting for an answer, and every folder each would clean, so that the answer
+/// decides those folders. Until it comes, neither cleaning by itself nor a new click on Clean, on a
+/// card or the toolbar, takes one of them, a folder inside one or a folder holding one, and each
+/// shows on its card as being cleaned. Cleans of other folders go on meanwhile, and so do cleans
+/// the user asked for before.
+#[derive(Debug, Default)]
+pub(super) struct OpenQuestions {
+    /// Each folder an open question would clean, by what the user clicked for it.
+    folders: HashMap<PathBuf, Asked>,
+}
+
+/// What the user clicked for a clean that a question then asked about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Asked {
+    /// Clean on the card of this build folder.
+    Clean(PathBuf),
+    /// The toolbar's clean of every idle folder.
+    CleanIdle,
+}
+
+impl OpenQuestions {
+    /// `asked`'s question is open, about the clean started from `clicked` that deletes what
+    /// `prepared` deletes.
+    fn open(&mut self, asked: &Asked, clicked: &Path, prepared: &Prepared) {
+        for folder in folders_of(clicked, prepared) {
+            self.folders.insert(folder.to_path_buf(), asked.clone());
+        }
+    }
+
+    /// `asked`'s question was answered, and lets its folders go.
+    fn answered(&mut self, asked: &Asked) {
+        self.folders.retain(|_, open| open != asked);
+    }
+
+    fn is_open(&self, asked: &Asked) -> bool {
+        self.folders.values().any(|open| open == asked)
+    }
+
+    /// Whether an open question would clean `folder`.
+    pub(super) fn asks_about(&self, folder: &Path) -> bool {
+        self.folders.contains_key(folder)
+    }
+
+    /// The folder an open question would clean that the clean started from `clicked` would take,
+    /// deleting what `prepared` deletes: the same folder, one inside it or one holding it. `None`
+    /// when the clean keeps clear of them all.
+    pub(super) fn asked_about_in(&self, clicked: &Path, prepared: &Prepared) -> Option<&Path> {
+        folders_of(clicked, prepared).find_map(|folder| {
+            self.folders
+                .keys()
+                .find(|asked| overlap(asked, folder))
+                .map(PathBuf::as_path)
+        })
+    }
+
+    fn folders(&self) -> impl Iterator<Item = &PathBuf> {
+        self.folders.keys()
+    }
+}
+
+/// The folders the clean started from `clicked` deletes: that one, as the map shows it, and each
+/// that `prepared` deletes.
+fn folders_of<'a>(clicked: &'a Path, prepared: &'a Prepared) -> impl Iterator<Item = &'a Path> {
+    std::iter::once(clicked).chain(prepared.plan.folders())
+}
 
 /// The card a click on Clean came from, which whatever is said about the clean speaks of even if
 /// the map has moved on while it was worked out.
@@ -41,8 +108,9 @@ impl Cleaning {
         home: &Path,
     ) {
         let clicked = dir.path.clone();
-        // A second click while the first is worked out or asked about would only do the same again.
-        if self.preparing.contains_key(&clicked) || self.asking.contains(&clicked) {
+        // A folder whose clean is worked out or asked about already, from its card or the
+        // toolbar, waits for that: another click would only ask again.
+        if self.preparing.contains_key(&clicked) || self.questions.asks_about(&clicked) {
             return;
         }
         let about = Clicked {
@@ -73,10 +141,11 @@ impl Cleaning {
     }
 
     /// What the click on `clicked` means has been worked out, or its thread ended with no word
-    /// (`None`). Say why not, or queue the clean. Choosing Clean on a folder's card says what it
-    /// wants, unless other projects' builds would go too, which only a question can name. The
-    /// clean's thread takes the locks first, so a build started meanwhile, or a folder changed,
-    /// stops it there.
+    /// (`None`). Say why not, or queue the clean. One that would take a folder another question
+    /// asks about goes no further, as that answer decides the folder. Choosing Clean on a folder's
+    /// card says what it wants, unless other projects' builds would go too, which only a question
+    /// can name. The clean's thread takes the locks first, so a build started meanwhile, or a
+    /// folder changed, stops it there.
     pub(super) fn asking(
         &mut self,
         clicked: &Path,
@@ -102,9 +171,15 @@ impl Cleaning {
                 return;
             }
         };
+        if let Some(asked) = self.questions.asked_about_in(clicked, &prepared) {
+            let refused = Alert::notice(words.cannot_clean(), words.asked_already(asked));
+            self.alerts.push(refused);
+            return;
+        }
         if prepared.sharing.reaches_other_projects() {
             let question = words.question(&prepared.plan, &prepared.sizes, &prepared.sharing);
-            self.asking.insert(clicked.to_path_buf());
+            let asked = Asked::Clean(clicked.to_path_buf());
+            self.questions.open(&asked, clicked, &prepared);
             let proposal = Proposal::Clean {
                 clicked: clicked.to_path_buf(),
                 prepared: Box::new(prepared),
@@ -117,7 +192,8 @@ impl Cleaning {
     }
 
     /// The user answered the question about the clean of `clicked`, with `prepared` to go on a
-    /// yes. Either way its card stops showing the wait.
+    /// yes. Either way the question lets its folders go, and on a no their cards stop showing the
+    /// wait.
     pub(in crate::dashboard) fn answered_clean(
         &mut self,
         clicked: PathBuf,
@@ -126,7 +202,7 @@ impl Cleaning {
         now: SystemTime,
         home: &Path,
     ) {
-        self.asking.remove(&clicked);
+        self.questions.answered(&Asked::Clean(clicked.clone()));
         if let Some(prepared) = prepared {
             self.queue(clicked, prepared, By::User);
             self.start_next(map, now, home);
@@ -142,10 +218,18 @@ impl Cleaning {
         home: &Path,
     ) {
         // A second click while the first is worked out or asked about would only ask again.
-        if self.preparing_idle || self.asking_idle {
+        if self.preparing_idle || self.questions.is_open(&Asked::CleanIdle) {
             return;
         }
-        let being_cleaned: HashSet<PathBuf> = self.folders.keys().cloned().collect();
+        // The toolbar's offer leaves out each folder whose card shows a clean of its own, and so
+        // does the question that follows it.
+        let being_cleaned: HashSet<PathBuf> = self
+            .folders
+            .keys()
+            .chain(self.preparing.keys())
+            .chain(self.questions.folders())
+            .cloned()
+            .collect();
         let env = CargoEnv::of_this_process(home);
         let preparing = self.threads.run(
             "sutra-clean-prepare",
@@ -162,8 +246,16 @@ impl Cleaning {
 
     /// The cleans of the idle folders have been worked out, or their thread ended with no word
     /// (`None`). Ask once, naming how many and how much; `answered_idle` takes the answer.
-    pub(super) fn asking_idle(&mut self, found: Option<IdleCleans>) {
+    pub(super) fn asking_idle(&mut self, mut found: Option<IdleCleans>) {
         self.preparing_idle = false;
+        // A card's question opened while these were worked out keeps the folders it asks about.
+        if let Some(found) = &mut found {
+            found.cleans.retain(|clean| {
+                self.questions
+                    .asked_about_in(&clean.clicked, &clean.prepared)
+                    .is_none()
+            });
+        }
         if let Some((title, detail)) = words::nothing_to_ask(found.as_ref()) {
             self.alerts.push(Alert::notice(title, detail));
             return;
@@ -172,13 +264,17 @@ impl Cleaning {
             return;
         };
         let question = words::idle_question(&cleans, &left_out, OFFER_QUIET_AT_LEAST);
-        self.asking_idle = true;
+        for clean in &cleans {
+            self.questions
+                .open(&Asked::CleanIdle, &clean.clicked, &clean.prepared);
+        }
         self.alerts
             .push(Alert::question(question, Proposal::CleanIdle(cleans)));
     }
 
-    /// The user answered the question about every idle folder, with `cleans` to go on a yes. Each
-    /// looks at whether its project is still idle when its turn comes, as `map` shows it then.
+    /// The user answered the question about every idle folder, with `cleans` to go on a yes. Either
+    /// way the question lets its folders go. Each clean looks at whether its project is still idle
+    /// when its turn comes, as `map` shows it then.
     pub(in crate::dashboard) fn answered_idle(
         &mut self,
         cleans: Option<Vec<IdleClean>>,
@@ -186,7 +282,7 @@ impl Cleaning {
         now: SystemTime,
         home: &Path,
     ) {
-        self.asking_idle = false;
+        self.questions.answered(&Asked::CleanIdle);
         let Some(cleans) = cleans else {
             return;
         };
@@ -205,19 +301,32 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::dashboard::cleaning::tests::{cleaning, prepared_at};
+    use crate::dashboard::cleaning::tests::{
+        ALWAYS_SHORT, cleaning, idle_clean, next_report, prepared_at, prepared_of, reporting,
+    };
     use crate::dashboard::cleaning::{CleanState, IdleOffer};
     use crate::map::clean::{Sharing, WORTH_CLEANING_BYTES};
     use crate::map::test_support::{TempDir, at, cargo_target, measured, project_at, snapshot_of};
 
-    /// A clean of `folder` that takes builds of the project `other` with it.
-    fn reaching(folder: &Path, other: &str) -> Prepared {
-        let mut prepared = prepared_at(folder);
+    /// A clean of `folders` that takes builds of the project `other` with it.
+    fn reaching(folders: &[&Path], other: &str) -> Prepared {
+        let mut prepared = prepared_of(folders);
         prepared.sharing = Sharing {
             projects: vec![other.to_string()],
             ..Sharing::default()
         };
         prepared
+    }
+
+    /// A project at `name` in `fixture` holding a measured build folder, idle since it has no
+    /// activity, and that folder.
+    fn idle_project(fixture: &TempDir, name: &str, bytes: u64) -> (Project, PathBuf) {
+        let folder = fixture.dir(&format!("{name}/target"));
+        let project = Project {
+            artifacts: vec![cargo_target(folder.clone(), measured(bytes))],
+            ..project_at(fixture.path(name))
+        };
+        (project, folder)
     }
 
     #[test]
@@ -263,7 +372,7 @@ mod tests {
             );
             cleaning.asking(
                 &folder,
-                Some(Ok(reaching(&folder, "fwd"))),
+                Some(Ok(reaching(&[&folder], "fwd"))),
                 None,
                 at(100),
                 fixture.root(),
@@ -308,7 +417,7 @@ mod tests {
         let mut cleaning = asked();
         cleaning.answered_clean(
             folder.clone(),
-            Some(reaching(&folder, "fwd")),
+            Some(reaching(&[&folder], "fwd")),
             None,
             at(200),
             fixture.root(),
@@ -328,8 +437,7 @@ mod tests {
         };
         let map = Arc::new(snapshot_of(vec![app.clone()]));
         let mut cleaning = cleaning();
-        // No volume holds this much, so room is always short.
-        cleaning.set_keep_free_floor(Some(u64::MAX));
+        cleaning.set_keep_free_floor(ALWAYS_SHORT);
         let offered = Some(IdleOffer {
             folders: 1,
             bytes: 5 * WORTH_CLEANING_BYTES,
@@ -337,7 +445,7 @@ mod tests {
         assert_eq!(cleaning.idle_offer(&map, at(100)), offered);
 
         cleaning.start(&app, &dir, Arc::clone(&map), fixture.root());
-        let prepared = Some(Ok(reaching(&folder, "fwd")));
+        let prepared = Some(Ok(reaching(&[&folder], "fwd")));
         cleaning.asking(&folder, prepared, None, at(100), fixture.root());
         assert_eq!(cleaning.idle_offer(&map, at(100)), None);
         let looked = Instant::now();
@@ -359,6 +467,197 @@ mod tests {
             cleaning.preparing_unasked,
             "and cleaning by itself may pick it"
         );
+    }
+
+    #[test]
+    fn a_question_holds_every_folder_its_clean_deletes_until_the_answer() {
+        let fixture = TempDir::new("asking-holds-the-plan");
+        let (app, target) = idle_project(&fixture, "app", 5 * WORTH_CLEANING_BYTES);
+        // The build-dir a config sets, which lies in another project and shows on its card.
+        let (cache, build_dir) = idle_project(&fixture, "cache", 5 * WORTH_CLEANING_BYTES);
+        let map = Arc::new(snapshot_of(vec![app.clone(), cache.clone()]));
+        let mut cleaning = cleaning();
+        cleaning.set_keep_free_floor(ALWAYS_SHORT);
+
+        cleaning.start(&app, &app.artifacts[0], Arc::clone(&map), fixture.root());
+        let prepared = Some(Ok(reaching(&[&target, &build_dir], "fwd")));
+        cleaning.asking(&target, prepared, None, at(100), fixture.root());
+        assert!(
+            cleaning.state_of(&cache.artifacts[0]).is_some(),
+            "the build-dir's card shows the wait too"
+        );
+        let looked = Instant::now();
+        cleaning.keep_free_space(&map, looked, at(100), fixture.root());
+        assert!(
+            !cleaning.preparing_unasked,
+            "cleaning by itself leaves the build-dir to the answer"
+        );
+
+        cleaning.answered_clean(target.clone(), None, None, at(200), fixture.root());
+        assert_eq!(
+            cleaning.state_of(&cache.artifacts[0]),
+            None,
+            "a no lets it go"
+        );
+        let next_look = looked + Duration::from_secs(60);
+        cleaning.keep_free_space(&map, next_look, at(200), fixture.root());
+        assert!(
+            cleaning.preparing_unasked,
+            "and cleaning by itself may pick it"
+        );
+    }
+
+    #[test]
+    fn the_toolbars_question_holds_its_folders_until_the_answer_while_cleaning_by_itself_goes_on() {
+        let fixture = TempDir::new("asking-idle-holds");
+        let (app, asked) = idle_project(&fixture, "app", 10 * WORTH_CLEANING_BYTES);
+        let (other, elsewhere) = idle_project(&fixture, "other", 5 * WORTH_CLEANING_BYTES);
+        let map = Arc::new(snapshot_of(vec![app.clone(), other]));
+        let (mut cleaning, inbox) = reporting();
+        cleaning.set_keep_free_floor(ALWAYS_SHORT);
+
+        cleaning.asking_idle(Some(IdleCleans {
+            cleans: vec![idle_clean(&[&asked])],
+            left_out: Vec::new(),
+        }));
+        assert!(
+            cleaning.state_of(&app.artifacts[0]).is_some(),
+            "its card shows the wait"
+        );
+        cleaning.keep_free_space(&map, Instant::now(), at(100), fixture.root());
+        let Report::UnaskedPrepared { clicked, .. } = next_report(&inbox) else {
+            panic!("cleaning by itself works out a clean");
+        };
+        assert_eq!(
+            clicked, elsewhere,
+            "the larger goes first unless a question asks about it"
+        );
+
+        cleaning.answered_idle(None, None, at(200), fixture.root());
+        assert_eq!(
+            cleaning.state_of(&app.artifacts[0]),
+            None,
+            "a no lets it go"
+        );
+    }
+
+    #[test]
+    fn a_click_whose_clean_takes_a_folder_a_question_asks_about_is_refused_and_one_apart_goes() {
+        let fixture = TempDir::new("asking-taken");
+        let asked = fixture.dir("cache/app");
+        let map = Arc::new(snapshot_of(Vec::new()));
+        let mut cleaning = cleaning();
+        cleaning.asking_idle(Some(IdleCleans {
+            cleans: vec![idle_clean(&[&asked])],
+            left_out: Vec::new(),
+        }));
+        cleaning.take_alerts();
+        // A click on Clean in the project `name`, whose clean takes `build_dir` with its target.
+        let click = |cleaning: &mut Cleaning, name: &str, build_dir: &Path| {
+            let (project, target) = idle_project(&fixture, name, 5_000);
+            cleaning.start(
+                &project,
+                &project.artifacts[0],
+                Arc::clone(&map),
+                fixture.root(),
+            );
+            let prepared = Some(Ok(prepared_of(&[&target, build_dir])));
+            cleaning.asking(&target, prepared, None, at(100), fixture.root());
+            cleaning.take_alerts()
+        };
+
+        for (name, build_dir) in [
+            ("inside", asked.join("debug")),
+            ("around", fixture.path("cache")),
+        ] {
+            let alerts = click(&mut cleaning, name, &build_dir);
+            let [Alert::Notice { title, detail }] = alerts.as_slice() else {
+                panic!("one notice, got {alerts:?}");
+            };
+            assert_eq!(*title, format!("Can't clean target in {name}"));
+            assert!(detail.contains("~/cache/app"), "{detail}");
+        }
+        assert!(cleaning.running.is_empty() && cleaning.waiting.is_empty());
+
+        let apart = fixture.dir("elsewhere/build");
+        assert!(click(&mut cleaning, "apart", &apart).is_empty());
+        assert_eq!(cleaning.running.len(), 1, "a clean of other folders goes");
+    }
+
+    #[test]
+    fn the_toolbars_clean_leaves_out_each_folder_a_card_is_working_out_or_asking_about() {
+        let fixture = TempDir::new("asking-idle-leaves-out");
+        let package = |name: &str| {
+            fixture.package(name);
+            idle_project(&fixture, name, 5 * WORTH_CLEANING_BYTES)
+        };
+        let (asked_project, asked) = package("asked");
+        let (worked_out_project, _) = package("worked-out");
+        let (idle, still_idle) = package("idle");
+        let map = Arc::new(snapshot_of(vec![
+            asked_project.clone(),
+            worked_out_project.clone(),
+            idle,
+        ]));
+        let (mut cleaning, inbox) = reporting();
+        let start = |cleaning: &mut Cleaning, project: &Project| {
+            cleaning.start(
+                project,
+                &project.artifacts[0],
+                Arc::clone(&map),
+                fixture.root(),
+            );
+        };
+        start(&mut cleaning, &asked_project);
+        let prepared = Some(Ok(reaching(&[&asked], "fwd")));
+        cleaning.asking(&asked, prepared, None, at(100), fixture.root());
+        start(&mut cleaning, &worked_out_project);
+
+        cleaning.start_idle(Arc::clone(&map), at(100), fixture.root());
+        let found = loop {
+            if let Report::IdlePrepared(found) = next_report(&inbox) {
+                break found.expect("the search finished");
+            }
+        };
+        let cleaned: Vec<&PathBuf> = found.cleans.iter().map(|clean| &clean.clicked).collect();
+        assert_eq!(cleaned, [&still_idle]);
+    }
+
+    #[test]
+    fn the_toolbars_question_leaves_out_what_a_card_asked_about_while_it_was_worked_out() {
+        let fixture = TempDir::new("asking-idle-meanwhile");
+        let (app, target) = idle_project(&fixture, "app", 5_000);
+        let build_dir = fixture.dir("cache/app");
+        let map = Arc::new(snapshot_of(vec![app.clone()]));
+        let mut cleaning = cleaning();
+        cleaning.start(&app, &app.artifacts[0], Arc::clone(&map), fixture.root());
+        let prepared = Some(Ok(reaching(&[&target, &build_dir], "fwd")));
+        cleaning.asking(&target, prepared, None, at(100), fixture.root());
+        cleaning.take_alerts();
+
+        let taking = fixture.dir("other/target");
+        let apart = fixture.dir("apart/target");
+        cleaning.asking_idle(Some(IdleCleans {
+            cleans: vec![
+                idle_clean(&[&target]),
+                idle_clean(&[&taking, &build_dir.join("debug")]),
+                idle_clean(&[&apart]),
+            ],
+            left_out: Vec::new(),
+        }));
+
+        let alerts = cleaning.take_alerts();
+        let [
+            Alert::Question {
+                proposal: Proposal::CleanIdle(cleans),
+                ..
+            },
+        ] = alerts.as_slice()
+        else {
+            panic!("one question, got {alerts:?}");
+        };
+        let asked: Vec<&PathBuf> = cleans.iter().map(|clean| &clean.clicked).collect();
+        assert_eq!(asked, [&apart]);
     }
 
     #[test]

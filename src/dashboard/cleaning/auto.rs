@@ -241,9 +241,10 @@ impl Cleaning {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dashboard::cleaning::tests::{cleaning, prepared_at};
+    use crate::dashboard::cleaning::tests::{ALWAYS_SHORT, cleaning, idle_clean, prepared_at};
     use crate::map::AgentStatus;
     use crate::map::Project;
+    use crate::map::clean::IdleCleans;
     use crate::map::test_support::{
         TempDir, agent_session, at, cargo_target, measured, project_at, snapshot_of,
     };
@@ -309,9 +310,6 @@ mod tests {
         assert_eq!(choices[3].bytes, Some(100_000_000_000));
     }
 
-    /// A floor no volume reaches, so a clean is always wanted.
-    const ALWAYS_SHORT: Option<u64> = Some(u64::MAX);
-
     fn keeping(floor: Option<u64>) -> Cleaning {
         Cleaning {
             keeping_free: KeepingFree::with_floor(floor),
@@ -363,10 +361,27 @@ mod tests {
         let fixture = TempDir::new("auto-while-asking");
         let (_, _, map) = idle_project_in(&fixture);
         let mut cleaning = keeping(ALWAYS_SHORT);
-        cleaning.asking.insert(fixture.path("other/target"));
-        cleaning.asking_idle = true;
+        // A card's question and the toolbar's, each about a folder of its own.
+        let card = fixture.dir("card/target");
+        let dir = cargo_target(card.clone(), measured(LARGE));
+        let home = fixture.root();
+        cleaning.start(
+            &project_at(fixture.path("card")),
+            &dir,
+            Arc::clone(&map),
+            home,
+        );
+        let mut reaching = prepared_at(&card);
+        reaching.sharing.projects = vec!["fwd".to_string()];
+        cleaning.asking(&card, Some(Ok(reaching)), None, now(), home);
+        let other = fixture.dir("other/target");
+        cleaning.asking_idle(Some(IdleCleans {
+            cleans: vec![idle_clean(&[&other])],
+            left_out: Vec::new(),
+        }));
+        assert_eq!(cleaning.take_alerts().len(), 2, "both questions are open");
 
-        cleaning.keep_free_space(&map, Instant::now(), now(), fixture.root());
+        cleaning.keep_free_space(&map, Instant::now(), now(), home);
         assert!(cleaning.preparing_unasked);
     }
 

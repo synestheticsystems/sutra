@@ -11,14 +11,14 @@ mod words;
 pub(super) use auto::{free_bytes, keep_free_choices};
 pub(super) use threads::{CleanOutcome, Report, Threads};
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::state::{Alert, Question};
 use crate::map::clean;
 use crate::map::{ArtifactDir, Snapshot};
-use asking::Clicked;
+use asking::{Clicked, OpenQuestions};
 use auto::KeepingFree;
 use queue::{By, Running, Waiting};
 
@@ -35,12 +35,10 @@ pub(super) struct Cleaning {
     folders: HashMap<PathBuf, Stage>,
     /// Each click on Clean still being worked out, by the folder clicked.
     preparing: HashMap<PathBuf, Clicked>,
-    /// Each click on Clean whose question is open, by the folder clicked.
-    asking: HashSet<PathBuf>,
+    /// The questions waiting for an answer, and the folders each would clean.
+    questions: OpenQuestions,
     /// The cleans of every idle folder are being worked out.
     preparing_idle: bool,
-    /// The question about cleaning every idle folder is open.
-    asking_idle: bool,
     /// A clean Sutra chose by itself is being worked out.
     preparing_unasked: bool,
     /// Cleans waiting their turn, behind `CLEANS_AT_ONCE` running or a running clean of the same
@@ -106,9 +104,8 @@ impl Cleaning {
             threads,
             folders: HashMap::new(),
             preparing: HashMap::new(),
-            asking: HashSet::new(),
+            questions: OpenQuestions::default(),
             preparing_idle: false,
-            asking_idle: false,
             preparing_unasked: false,
             waiting: VecDeque::new(),
             running: Vec::new(),
@@ -156,8 +153,7 @@ impl Cleaning {
     }
 
     /// Whether a clean is being worked out, waits or runs. A question waiting for the user is no
-    /// work in progress: the folder it asks about shows as being cleaned, which keeps every other
-    /// clean off it meanwhile.
+    /// work in progress: cleaning by itself goes on meanwhile, clear of the folders it asks about.
     fn is_busy(&self) -> bool {
         !self.running.is_empty()
             || !self.waiting.is_empty()
@@ -221,14 +217,13 @@ impl Cleaning {
     }
 
     /// What a clean means for the card of `dir`, `None` for a folder not being cleaned or measured
-    /// since.
+    /// since. A folder one clean is deleting while another clean of it is worked out or asked about
+    /// shows how far the delete has come.
     pub(super) fn state_of(&self, dir: &ArtifactDir) -> Option<CleanState> {
-        if self.preparing.contains_key(&dir.path) || self.asking.contains(&dir.path) {
-            let before = dir.measurement.usage().map(|usage| usage.bytes);
-            return Some(CleanState::Deleting { before, freed: 0 });
-        }
-        match self.folders.get(&dir.path)? {
-            Stage::Deleting { before } => {
+        let pending =
+            self.preparing.contains_key(&dir.path) || self.questions.asks_about(&dir.path);
+        match self.folders.get(&dir.path) {
+            Some(Stage::Deleting { before }) => {
                 let running = self
                     .running
                     .iter()
@@ -239,10 +234,14 @@ impl Cleaning {
                     freed,
                 })
             }
-            Stage::Deleted { at, left } if !measured_since(dir, *at) => {
+            _ if pending => {
+                let before = dir.measurement.usage().map(|usage| usage.bytes);
+                Some(CleanState::Deleting { before, freed: 0 })
+            }
+            Some(Stage::Deleted { at, left }) if !measured_since(dir, *at) => {
                 Some(CleanState::Deleted { left: *left })
             }
-            Stage::Deleted { .. } => None,
+            Some(Stage::Deleted { .. }) | None => None,
         }
     }
 }
@@ -250,6 +249,12 @@ impl Cleaning {
 /// The question before Sutra starts keeping `floor` free, with `free` free now.
 pub(super) fn keep_free_question(floor: u64, free: Option<u64>) -> Question {
     words::keep_free_question(floor, free, auto::QUIET_AT_LEAST)
+}
+
+/// Whether deleting one of two folders deletes some of the other: they are the same folder, or one
+/// holds the other.
+fn overlap(one: &Path, other: &Path) -> bool {
+    one.starts_with(other) || other.starts_with(one)
 }
 
 fn measured_since(dir: &ArtifactDir, at: SystemTime) -> bool {
@@ -269,6 +274,9 @@ pub(super) mod tests {
     use crate::map::clean::{CleanPlan, Origin, Plan, PlannedFolder, Prepared, Progress};
     use crate::map::test_support::{at, cargo_target, project_at, snapshot_of, usage};
     use crate::map::{DirUsage, Measurement};
+
+    /// A floor no volume reaches, so keeping it free always wants a clean.
+    pub(in crate::dashboard) const ALWAYS_SHORT: Option<u64> = Some(u64::MAX);
 
     /// Cleaning keeping no free space, whose threads report to no one: a test that starts one has
     /// it do its work, and drops what it finds.
@@ -355,6 +363,25 @@ pub(super) mod tests {
                 before: Some(1_000),
                 freed: 0
             })
+        );
+    }
+
+    #[test]
+    fn a_folder_being_deleted_shows_how_far_the_delete_has_come_while_a_question_asks_about_it() {
+        let mut cleaning = deleting_two();
+        let shared = Path::new("/cache/app");
+        cleaning.asking_idle(Some(clean::IdleCleans {
+            cleans: vec![idle_clean(&[shared])],
+            left_out: Vec::new(),
+        }));
+        let dir = cargo_target(shared, crate::map::test_support::measured(5_000));
+        assert_eq!(
+            cleaning.state_of(&dir),
+            Some(CleanState::Deleting {
+                before: Some(1_000),
+                freed: 0
+            }),
+            "the size the running clean started from, not the map's"
         );
     }
 
@@ -453,6 +480,21 @@ pub(super) mod tests {
             sizes,
             clean::Sharing::default(),
         )
+    }
+
+    /// The clean of `folders` as the toolbar's search finds one, started from the first of them in
+    /// the project holding it.
+    pub(in crate::dashboard) fn idle_clean(folders: &[&Path]) -> clean::IdleClean {
+        let clicked = folders[0];
+        let project = clicked
+            .parent()
+            .expect("a build folder lies in its project");
+        clean::IdleClean {
+            clicked: clicked.to_path_buf(),
+            project_name: project_at(project).name,
+            project_path: project.to_path_buf(),
+            prepared: prepared_of(folders),
+        }
     }
 
     pub(super) fn prepared_clean(folder: &str) -> Prepared {

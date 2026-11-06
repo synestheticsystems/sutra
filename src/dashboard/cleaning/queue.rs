@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::{CleanOutcome, Cleaning, OFFER_QUIET_AT_LEAST, Report, Stage, auto, words};
+use super::{CleanOutcome, Cleaning, OFFER_QUIET_AT_LEAST, Report, Stage, auto, overlap, words};
 use crate::dashboard::state::Alert;
 use crate::map::Snapshot;
 use crate::map::clean::{self, Prepared, Progress};
@@ -22,8 +22,9 @@ pub(super) enum By {
     /// `project` is still idle when its turn comes. Its end is told as `User`.
     UserForIdle { project: PathBuf },
     /// Sutra chose it to keep free space, so it goes only if room is still short on the volume
-    /// holding the home folder, every folder it deletes is on that volume, and the project at
-    /// `project` is still idle when its turn comes. Nobody is waiting, so a banner tells of its end.
+    /// holding the home folder, every folder it deletes is on that volume and clear of those a
+    /// question waiting for the user asks about, and the project at `project` is still idle when
+    /// its turn comes. Nobody is waiting, so a banner tells of its end.
     Sutra { project: PathBuf },
 }
 
@@ -89,10 +90,16 @@ impl Cleaning {
                 if !self.keeping_free.is_short_of_room(home) {
                     return false;
                 }
-                // The plan can reach past the folder picked, to a build-dir set on another disk,
-                // and emptying that gives none of the room back.
+                // The folder was picked on its own, and its plan can reach further: to a
+                // build-dir set on another disk, where emptying it gives none of the room back. A
+                // question may also have asked about one of its folders since, and the user's
+                // answer decides that folder.
                 let may_go = still_idle(project, auto::QUIET_AT_LEAST)
-                    && auto::is_all_on_volume_of(&waiting.prepared, home);
+                    && auto::is_all_on_volume_of(&waiting.prepared, home)
+                    && self
+                        .questions
+                        .asked_about_in(&waiting.clicked, &waiting.prepared)
+                        .is_none();
                 if !may_go {
                     self.keeping_free.pass_over(waiting.clicked.clone(), now);
                 }
@@ -142,7 +149,7 @@ impl Cleaning {
         waiting.prepared.plan.folders().into_iter().any(|folder| {
             running_folders
                 .iter()
-                .any(|running| folder.starts_with(running) || running.starts_with(folder))
+                .any(|running| overlap(folder, running))
         })
     }
 
@@ -271,11 +278,11 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::CleanState;
     use crate::dashboard::cleaning::tests::{
-        cleaning, deleting_two, next_report, prepared_at, prepared_clean, prepared_of, reporting,
-        target,
+        ALWAYS_SHORT, cleaning, deleting_two, idle_clean, next_report, prepared_at, prepared_clean,
+        prepared_of, reporting, target,
     };
     use crate::map::Project;
-    use crate::map::clean::{CleanError, Cleaned, Freed};
+    use crate::map::clean::{CleanError, Cleaned, Freed, IdleCleans};
     use crate::map::test_support::{at, cargo_target, project_at, snapshot_of};
 
     #[test]
@@ -478,8 +485,7 @@ mod tests {
         let project = fixture.path("app");
         let map = snapshot_of(vec![project_at(project.clone())]);
         let mut cleaning = cleaning();
-        // No volume holds this much, so room is always short.
-        cleaning.set_keep_free_floor(Some(u64::MAX));
+        cleaning.set_keep_free_floor(ALWAYS_SHORT);
         let may_start = |cleaning: &mut Cleaning, build_dir: &Path| {
             let waiting = Waiting {
                 clicked: target.clone(),
@@ -501,6 +507,46 @@ mod tests {
             !may_start(&mut cleaning, Path::new("/dev")),
             "emptying it frees nothing on the volume short of room"
         );
+        assert!(cleaning.keeping_free_passed_over(&target));
+    }
+
+    #[test]
+    fn a_clean_sutra_chose_keeps_out_of_a_folder_a_question_asks_about_and_goes_elsewhere() {
+        let fixture = crate::map::test_support::TempDir::new("cleaning-asked-about");
+        let target = fixture.dir("app/target");
+        let project = fixture.path("app");
+        let asked = fixture.dir("cache/app/target");
+        let map = snapshot_of(vec![project_at(project.clone())]);
+        let mut cleaning = cleaning();
+        cleaning.set_keep_free_floor(ALWAYS_SHORT);
+        cleaning.asking_idle(Some(IdleCleans {
+            cleans: vec![idle_clean(&[&asked])],
+            left_out: Vec::new(),
+        }));
+        let may_start = |cleaning: &mut Cleaning, build_dir: &Path| {
+            let waiting = Waiting {
+                clicked: target.clone(),
+                prepared: prepared_of(&[&target, build_dir]),
+                by: By::Sutra {
+                    project: project.clone(),
+                },
+            };
+            cleaning.may_start(&waiting, Some(&map), at(1_000), fixture.root())
+        };
+
+        assert!(
+            may_start(&mut cleaning, &fixture.dir("elsewhere")),
+            "a build-dir apart from it goes"
+        );
+        let inside = fixture.dir("cache/app/target/debug");
+        let around = fixture.path("cache/app");
+        for build_dir in [&asked, &inside, &around] {
+            assert!(
+                !may_start(&mut cleaning, build_dir),
+                "{} waits for the answer",
+                build_dir.display()
+            );
+        }
         assert!(cleaning.keeping_free_passed_over(&target));
     }
 
