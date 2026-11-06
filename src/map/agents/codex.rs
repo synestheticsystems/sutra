@@ -1,8 +1,8 @@
 //! Codex lists every thread in `<home>/.codex/state_5.sqlite` (table `threads`: where it runs and
 //! when it last wrote) and appends each thread's events to its rollout file. Whether a turn is
-//! running comes from the newest turn event near the end of the rollout, and how long the thread
-//! has been silent from when the rollout was last written. The same goes for the threads Codex
-//! spawns as sub-agents (see `sub_agents`).
+//! running comes from the newest turn event in the rollout, and how long the thread has been
+//! silent from when the rollout was last written. The same goes for the threads Codex spawns as
+//! sub-agents (see `sub_agents`).
 
 mod rollout;
 mod sub_agents;
@@ -266,7 +266,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use super::rollout::{test_event, write_test_rollout};
+    use super::rollout::{test_event, test_outputs_past_a_chunk, write_test_rollout};
     use super::*;
     use crate::map::ScanOptions;
     use crate::map::test_support::{TempDir, set_mtime};
@@ -600,6 +600,61 @@ mod tests {
         assert_eq!(
             sessions[0].subagents_at_work, 1,
             "the lead wrote too long ago to count"
+        );
+    }
+
+    #[test]
+    fn a_thread_and_a_sub_agent_whose_turns_outgrow_a_chunk_stay_at_work_across_loads() {
+        let home = TempDir::new("agents-codex-long-turns");
+        let h = home.root();
+        let sessions = h.join(".codex").join("sessions");
+        let written_just_now = |name: &str, lines: &[String]| {
+            let path = sessions.join(format!("{name}.jsonl"));
+            write_test_rollout(&path, lines);
+            set_mtime(&path, SystemTime::now() - Duration::from_secs(5));
+            path
+        };
+        let mut long_turn = vec![test_event("task_started")];
+        long_turn.extend(test_outputs_past_a_chunk());
+        let working = written_just_now("working", &long_turn);
+        let explorer = written_just_now("explorer", &long_turn);
+        let resting = rollout(h, "resting", "task_complete", 5 * MINUTE_MS);
+        let conn = create_db(h);
+        insert(&conn, recent("working", &working, h, MINUTE_MS));
+        insert(&conn, recent("resting", &resting, h, 5 * MINUTE_MS));
+        let source = spawned_by("resting");
+        insert(
+            &conn,
+            Row {
+                source: &source,
+                ..recent("explorer", &explorer, h, 10 * SECOND_MS)
+            },
+        );
+        let boundary = home.boundary(&ScanOptions::default());
+        let mut rollouts = Rollouts::default();
+        let at_work = |sessions: &[AgentSession]| -> Vec<(AgentStatus, usize)> {
+            let sessions = sessions.iter();
+            sessions.map(|s| (s.status, s.subagents_at_work)).collect()
+        };
+
+        let first = load(h, &boundary, &mut rollouts).unwrap();
+        assert_eq!(ids(&first), ["working", "resting"]);
+        let busy = AgentStatus::Busy;
+        assert_eq!(
+            at_work(&first),
+            [(busy, 0), (busy, 1)],
+            "when the rollouts are first read"
+        );
+
+        long_turn.extend(test_outputs_past_a_chunk());
+        written_just_now("working", &long_turn);
+        written_just_now("explorer", &long_turn);
+
+        let second = load(h, &boundary, &mut rollouts).unwrap();
+        assert_eq!(
+            at_work(&second),
+            [(busy, 0), (busy, 1)],
+            "when only what the turns appended is read"
         );
     }
 
