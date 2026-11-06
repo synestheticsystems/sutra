@@ -17,8 +17,8 @@ pub struct AgentSession {
     pub session_id: String,
     pub pid: Option<u32>,
     /// The working directory, canonical where it may be resolved; as the harness recorded it when
-    /// it lies in a private folder Settings keeps Sutra out of, outside the sandbox grant, or no
-    /// longer exists.
+    /// it lies in a private folder Sutra stays out of, outside the sandbox grant, or no longer
+    /// exists.
     pub cwd: PathBuf,
     pub status: AgentStatus,
     /// What the agent is waiting for, in the harness's own words (for example "permission_prompt").

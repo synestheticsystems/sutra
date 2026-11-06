@@ -16,7 +16,7 @@ use std::time::SystemTime;
 
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::{Card, Unreadable, UnreadableLook, format};
-use crate::map::{FolderAccess, FolderSize, Project, Snapshot};
+use crate::map::{FolderAccess, FolderSize, KeptOutBy, Project, Snapshot};
 use crate::notifications::Notifier;
 
 /// What every card reads besides its own project and the map.
@@ -70,16 +70,24 @@ pub(super) fn tray_total(project: &Project, ctx: &CardContext) -> Option<FolderS
     tray::total_on_card(project, |dir| ctx.cleaning.state_of(dir))
 }
 
-/// Why the card shows nothing from inside its folder. Kept out by the user's choice: `in Desktop,
-/// not watched`, or, in the store edition for a folder outside every root, `outside the granted
+/// Why the card shows nothing from inside its folder. Kept out by the user's choice, or until
+/// macOS asks them: `in Desktop, not watched`, `in Documents, waiting for macOS`, `in Documents,
+/// macOS said no`, or, in the store edition for a folder outside every root, `outside the granted
 /// folder`. Failed: `folder missing` or `can't read this folder`. `None` for a folder Sutra reads.
 fn unreadable(project: &Project, roots: &[PathBuf], sandboxed: bool) -> Option<Unreadable> {
     let (reason, look) = match project.access {
         FolderAccess::Readable => return None,
-        FolderAccess::KeptOut(private) => (
-            format!("in {}, not watched", private.name()),
-            UnreadableLook::KeptOut,
-        ),
+        FolderAccess::KeptOut(private, by) => {
+            let why = match by {
+                KeptOutBy::Settings => "not watched",
+                KeptOutBy::Prompt => "waiting for macOS",
+                KeptOutBy::MacOs => "macOS said no",
+            };
+            (
+                format!("in {}, {why}", private.name()),
+                UnreadableLook::KeptOut,
+            )
+        }
         FolderAccess::Denied
             if sandboxed && !roots.iter().any(|root| project.path.starts_with(root)) =>
         {
@@ -145,10 +153,31 @@ mod tests {
         assert_eq!(
             label(
                 "/Users/dev/Desktop/app",
-                FolderAccess::KeptOut(PrivateFolder::Desktop),
+                FolderAccess::KeptOut(PrivateFolder::Desktop, KeptOutBy::Settings),
                 false
             ),
             kept_out("in Desktop, not watched")
+        );
+    }
+
+    #[test]
+    fn a_folder_macos_keeps_out_says_whether_it_is_still_asking_or_said_no_and_looks_quiet() {
+        let in_documents = |by| {
+            let project = Project {
+                access: FolderAccess::KeptOut(PrivateFolder::Documents, by),
+                ..project_at("/Users/dev/Documents/Codex/task/work/app")
+            };
+            let unreadable = unreadable(&project, &[PathBuf::from(HOME)], false).unwrap();
+            assert_eq!(unreadable.look, UnreadableLook::KeptOut, "{by:?}");
+            unreadable.reason
+        };
+        assert_eq!(
+            in_documents(KeptOutBy::Prompt),
+            "in Documents, waiting for macOS"
+        );
+        assert_eq!(
+            in_documents(KeptOutBy::MacOs),
+            "in Documents, macOS said no"
         );
     }
 

@@ -329,6 +329,7 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
     Snapshot {
         roots: vec![PathBuf::from("/code")],
         skipped_private_folders: Vec::new(),
+        refused_private_folders: Vec::new(),
         sandboxed: false,
         projects,
         unplaced_agents: Vec::new(),

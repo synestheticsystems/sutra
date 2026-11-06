@@ -267,7 +267,7 @@ mod tests {
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, cargo_target, project_at, snapshot_of, usage,
     };
-    use crate::map::{Measurement, PrivateFolder};
+    use crate::map::{KeptOutBy, Measurement, PrivateFolder};
 
     /// A package building in the fixture's `shared` folder.
     fn package_building_in_shared(fixture: &TempDir, dir: &str) {
@@ -571,7 +571,7 @@ mod tests {
         let shared = shared_folder(&fixture);
         package_building_in_shared(&fixture, "private");
         let private = Project {
-            access: FolderAccess::KeptOut(PrivateFolder::Desktop),
+            access: FolderAccess::KeptOut(PrivateFolder::Desktop, KeptOutBy::Settings),
             ..project_at(fixture.path("private"))
         };
 

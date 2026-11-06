@@ -18,10 +18,11 @@ use rayon::prelude::*;
 use super::route::Index;
 use crate::map::devrunner::FolderEnvironments;
 use crate::map::grant::Roots;
-use crate::map::scan::Boundary;
+use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
-    ActivitySource, AgentSession, FolderAccess, Measurement, Project, RepoInfo, ScanOptions,
-    ScanStats, Snapshot, Source, SourceProblem, SubagentWithParent, agents, devrunner, scan,
+    ActivitySource, AgentSession, FolderAccess, KeptOutBy, Measurement, PrivateFolder, Project,
+    RepoInfo, ScanOptions, ScanStats, Snapshot, Source, SourceProblem, SubagentWithParent, agents,
+    devrunner, scan,
 };
 use artifacts::artifact_dirs;
 use placement::{Place, Placed};
@@ -33,8 +34,8 @@ pub(super) struct State {
     home: PathBuf,
     roots: Vec<PathBuf>,
     sandboxed: bool,
-    opts: ScanOptions,
-    /// What every source may touch, built from the roots, the home folder and `opts`.
+    /// What every source may touch, discovery's walk included, built from the roots, the home
+    /// folder and the scan options, and kept up with what macOS answers about the private folders.
     boundary: Boundary,
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
@@ -50,17 +51,19 @@ pub(super) struct State {
 }
 
 impl State {
-    /// An empty map over `roots`; `rediscover` fills it.
+    /// An empty map over `roots`, staying out of each private folder the walk would enter until
+    /// macOS answers whether Sutra may read it (`macos_answered`); `rediscover` fills it.
     pub(super) fn new(roots: &Roots, opts: &ScanOptions) -> State {
         let home = canonical(&roots.home);
         let dirs: Vec<PathBuf> = roots.dirs.iter().map(|root| canonical(root)).collect();
+        let mut boundary = Boundary::new(&dirs, &home, opts);
+        boundary.keep_out_until_macos_answers();
         State {
             index: Index::new(&home, []),
-            boundary: Boundary::new(&dirs, &home, opts),
+            boundary,
             home,
             roots: dirs,
             sandboxed: roots.sandboxed,
-            opts: opts.clone(),
             projects: BTreeMap::new(),
             unplaced_agents: Vec::new(),
             unplaced_subagents: Vec::new(),
@@ -90,7 +93,7 @@ impl State {
         let forbidden = |folder: &Path| {
             matches!(
                 scan::folder_access(folder, &self.boundary),
-                FolderAccess::Denied | FolderAccess::KeptOut(_)
+                FolderAccess::Denied | FolderAccess::KeptOut(..)
             )
         };
         let folders: BTreeSet<&Path> = self
@@ -126,6 +129,27 @@ impl State {
         self.boundary.may_read(path)
     }
 
+    /// The private folders waiting for macOS to answer whether Sutra may read them, each with its
+    /// path, for the engine to ask about.
+    pub(super) fn awaiting_macos(&self) -> Vec<(PrivateFolder, PathBuf)> {
+        self.boundary.awaiting_macos()
+    }
+
+    /// macOS answered whether Sutra may read the private folder `folder`. One it let in is entered
+    /// by the next rediscovery. In one it refused nothing more can be read, so only what keeps its
+    /// projects out has changed, and they say so at once.
+    pub(super) fn macos_answered(&mut self, folder: PrivateFolder, answer: MacOsAnswer) {
+        self.boundary.macos_answered(folder, answer);
+        if answer == MacOsAnswer::Refused {
+            let waiting = FolderAccess::KeptOut(folder, KeptOutBy::Prompt);
+            for tracked in self.projects.values_mut() {
+                if tracked.project.access == waiting {
+                    tracked.project.access = FolderAccess::KeptOut(folder, KeptOutBy::MacOs);
+                }
+            }
+        }
+    }
+
     /// Rebuild the map from discovery and every source. What discovery cannot see carries over:
     /// artifact sizes, activity observed while watching, and the environment last seen, so the
     /// reload that follows can tell whether it changed. `observed_at` is `None` for the first
@@ -136,7 +160,7 @@ impl State {
             return;
         }
         let started = Instant::now();
-        let discovery = scan::discover(&self.roots, &self.home, &self.opts);
+        let discovery = scan::discover(&self.boundary);
         let mut previous = mem::take(&mut self.projects);
         let boundary = &self.boundary;
         // Each worktree's search for build folders is metadata I/O like the walk before it.
@@ -365,6 +389,7 @@ impl State {
         Snapshot {
             roots: self.roots.clone(),
             skipped_private_folders: self.boundary.skipped_private_folders(),
+            refused_private_folders: self.boundary.refused_private_folders(),
             sandboxed: self.sandboxed,
             projects,
             unplaced_agents: self.unplaced_agents.clone(),

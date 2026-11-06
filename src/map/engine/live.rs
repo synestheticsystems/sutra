@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
@@ -11,15 +12,25 @@ use std::time::{Duration, Instant, SystemTime};
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
 use notify::{Event, EventKind};
 
+use super::probe::{self, Probe};
 use super::route::Route;
 use super::sizing::{Job, Measured, Sizing, Urgency};
 use super::state::State;
 use super::timers::{TICK, Timers, WALK_AFTER_LOST_EVENTS};
 use super::watch::Watches;
 use crate::map::grant::Roots;
-use crate::map::{ScanOptions, Snapshot, Source};
+use crate::map::scan::MacOsAnswer;
+use crate::map::{PrivateFolder, ScanOptions, Snapshot, Source};
 
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long the first walk waits for macOS to answer about the private folders it would enter.
+/// macOS answers at once for a folder the user answered about on an earlier launch. On 2026-11-06
+/// a new process's first listing of a folder macOS guards, refused with no prompt, took 3 to 10 ms
+/// in 23 runs and 31 ms once, and tccd answered requests it had answered before in 10 to 35 ms. So
+/// a folder answered on an earlier launch goes into the first walk, and needs no second. While a
+/// prompt waits for the user, the first map goes out this much later, without its folder.
+const WAIT_FOR_MACOS: Duration = Duration::from_millis(100);
 
 /// What reaches the engine thread.
 pub(super) enum Message {
@@ -27,15 +38,19 @@ pub(super) enum Message {
     Measured(Measured),
     /// A clean just deleted from these folders.
     Cleaned(Vec<PathBuf>),
+    /// macOS answered whether Sutra may read this private folder (see `probe`).
+    MacOsAnswered(PrivateFolder, MacOsAnswer),
     /// The dashboard is about to start another engine, or is stopping, so this one ends.
     Stop,
 }
 
 /// Run the engine until it is told to stop or the receiving end of `snapshots` is dropped.
-/// `messages` feeds `inbox`, for the watcher and the sizing pool to report on.
+/// `messages` feeds `inbox`, for the watcher, the sizing pool and the threads that ask macOS about
+/// the private folders, listing each with `probe`, to report on.
 pub(super) fn run(
     roots: &Roots,
     opts: &ScanOptions,
+    probe: &Probe,
     snapshots: &SyncSender<Arc<Snapshot>>,
     messages: Sender<Message>,
     inbox: &Receiver<Message>,
@@ -47,6 +62,12 @@ pub(super) fn run(
         let _ = snapshots.send(Arc::new(state.snapshot()));
         return;
     }
+    let asked = state.awaiting_macos();
+    let unanswered = asked.len();
+    probe::ask(asked, probe, &messages);
+    if wait_for_macos(&mut state, unanswered, inbox).is_break() {
+        return;
+    }
     // Watching starts before the scan, so a change made while it runs is not missed.
     let watches = Watches::over_roots(state.roots(), messages.clone());
     state.report_problems(&[Source::Watcher], watches.problems());
@@ -55,6 +76,31 @@ pub(super) fn run(
     engine.queue_unmeasured(Instant::now());
     engine.dispatch();
     engine.run(inbox);
+}
+
+/// Wait up to `WAIT_FOR_MACOS` for macOS to answer about the `unanswered` private folders `state`
+/// keeps out until it does, so the first walk enters each one answered by then. `Break` when the
+/// engine is told to stop meanwhile.
+fn wait_for_macos(
+    state: &mut State,
+    mut unanswered: usize,
+    inbox: &Receiver<Message>,
+) -> ControlFlow<()> {
+    let deadline = Instant::now() + WAIT_FOR_MACOS;
+    while unanswered > 0 {
+        match inbox.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Message::MacOsAnswered(folder, answer)) => {
+                state.macos_answered(folder, answer);
+                unanswered -= 1;
+            }
+            Ok(Message::Stop) => return ControlFlow::Break(()),
+            // The first walk measures every folder a clean left. Nothing else runs yet to send.
+            Ok(Message::Cleaned(_) | Message::Fs(_) | Message::Measured(_)) => {}
+            // `run` holds a sender, so the inbox stays open until the wait is up.
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    ControlFlow::Continue(())
 }
 
 /// File events went missing, and not every tree has been walked since.
@@ -114,6 +160,9 @@ impl<'a> Engine<'a> {
                 Ok(Message::Fs(event)) => self.on_fs_event(event),
                 Ok(Message::Measured(measured)) => self.on_measured(measured),
                 Ok(Message::Cleaned(folders)) => self.on_cleaned(folders, Instant::now()),
+                Ok(Message::MacOsAnswered(folder, answer)) => {
+                    self.on_macos_answer(folder, answer, Instant::now());
+                }
                 Ok(Message::Stop) => return,
                 Err(RecvTimeoutError::Timeout) => {}
                 // The sizing pool holds a sender for as long as the engine runs.
@@ -239,6 +288,17 @@ impl<'a> Engine<'a> {
             }
         }
         self.dispatch();
+    }
+
+    /// macOS answered, after the first walk, whether Sutra may read the private folder `folder`.
+    /// One it let in is entered by a rediscovery, which then finds, sizes and watches what it
+    /// holds. The projects in one it refused say so at once.
+    fn on_macos_answer(&mut self, folder: PrivateFolder, answer: MacOsAnswer, now: Instant) {
+        self.state.macos_answered(folder, answer);
+        match answer {
+            MacOsAnswer::LetIn => self.timers.rediscover.mark((), now),
+            MacOsAnswer::Refused => self.dirty = true,
+        }
     }
 
     fn on_measured(&mut self, measured: Measured) {

@@ -32,6 +32,7 @@ use crate::model::{Environment, State};
 
 mod discovery;
 mod environments;
+mod private_folders;
 mod sizing;
 
 /// The map the engine would publish first, built in the calling thread without watching, so a test

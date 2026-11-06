@@ -75,8 +75,8 @@ private struct Happening: View {
     }
 }
 
-/// Why the folder cannot be read. A folder kept out by the user's own choice gets a quiet sign, so
-/// the warning sign stays for a folder that is missing or refused.
+/// Why the folder cannot be read. A folder kept out by the user's own choice, or until macOS asks
+/// them, gets a quiet sign, so the warning sign stays for a folder that is missing or locked.
 private struct UnreadableLine: View {
     let unreadable: Unreadable
 

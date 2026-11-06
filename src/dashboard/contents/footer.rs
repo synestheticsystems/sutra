@@ -1,13 +1,13 @@
 //! What shows under the list when there is something to show: how far the first sizing has come,
-//! the warning that a stopped scanner needs a relaunch, and the sources whose failure loses only
-//! some folders or some changes.
+//! the warning that a stopped scanner needs a relaunch, the sources whose failure loses only some
+//! folders or some changes, and where to let Sutra into the private folders macOS keeps it out of.
 
 use std::io;
 use std::path::Path;
 
 use super::banner::problem_line;
-use crate::dashboard::Footer;
-use crate::map::{Snapshot, Source, SourceProblem};
+use crate::dashboard::{Footer, format};
+use crate::map::{PrivateFolder, Snapshot, Source, SourceProblem};
 
 /// The footer under `map`, `None` while there is nothing to say. `engine_stopped` when the
 /// engine's channel closed, so the map no longer updates.
@@ -22,15 +22,32 @@ pub(in crate::dashboard) fn footer(
         .filter(|problem| worth_showing(problem))
         .map(|problem| problem_line(problem, home))
         .collect();
+    let refused = refused(&map.refused_private_folders);
     let stopped = engine_stopped.then(|| "Scanner stopped. Quit and relaunch Sutra.".to_string());
     let sizing = map.sizing();
     // Unfinished, some folder is still unsized, so the total is above nought.
     let sizing = (!sizing.is_finished()).then(|| sizing.sized as f32 / sizing.total as f32);
-    let needs_saying = sizing.is_some() || !problems.is_empty() || stopped.is_some();
+    let needs_saying =
+        sizing.is_some() || !problems.is_empty() || refused.is_some() || stopped.is_some();
     needs_saying.then_some(Footer {
         sizing,
         problems,
+        refused,
         stopped,
+    })
+}
+
+/// Where to let Sutra into the private `folders` macOS keeps it out of: `macOS said no to
+/// Documents. Change its mind in System Settings › Privacy & Security › Files and Folders.` `None`
+/// while macOS keeps Sutra out of none.
+fn refused(folders: &[PrivateFolder]) -> Option<String> {
+    let names: Vec<&str> = folders.iter().map(|folder| folder.name()).collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "macOS said no to {}. Change its mind in System Settings \u{203a} Privacy & Security \
+             \u{203a} Files and Folders.",
+            format::all(&names)
+        )
     })
 }
 
@@ -87,5 +104,29 @@ mod tests {
             Some("Scanner stopped. Quit and relaunch Sutra.")
         );
         assert_eq!(stopped.sizing, None);
+    }
+
+    #[test]
+    fn the_footer_says_where_to_let_sutra_into_the_private_folders_macos_keeps_it_out_of() {
+        let home = Path::new("/Users/dev");
+        let refusing = |folders: &[PrivateFolder]| Snapshot {
+            refused_private_folders: folders.to_vec(),
+            ..snapshot_of(Vec::new())
+        };
+        let documents = footer(&refusing(&[PrivateFolder::Documents]), false, home).unwrap();
+        assert_eq!(
+            documents.refused.as_deref(),
+            Some(
+                "macOS said no to Documents. Change its mind in System Settings \u{203a} \
+                 Privacy & Security \u{203a} Files and Folders."
+            )
+        );
+        let two = [PrivateFolder::Desktop, PrivateFolder::Documents];
+        let both = footer(&refusing(&two), false, home)
+            .unwrap()
+            .refused
+            .unwrap();
+        assert!(both.starts_with("macOS said no to Desktop and Documents. "));
+        assert_eq!(footer(&refusing(&[]), false, home), None);
     }
 }

@@ -38,7 +38,8 @@ pub use agents::{
 };
 pub use disk::{DirUsage, Measurement};
 pub use project::{
-    ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, Project, RepoInfo,
+    ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, KeptOutBy, Project,
+    RepoInfo,
 };
 
 /// A home folder macOS guards with a privacy prompt the first time an app reads anything inside.
@@ -77,7 +78,8 @@ impl PrivateFolder {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanOptions {
     /// The private folders the scanner may enter, as the user chose them in Settings. macOS asks
-    /// the user about each the first time an app reads anything inside it.
+    /// the user about each the first time an app reads anything inside it, and the scanner stays
+    /// out of each until macOS has answered (see `Boundary::keep_out_until_macos_answers`).
     pub private_folders: BTreeSet<PrivateFolder>,
 }
 
@@ -89,6 +91,9 @@ pub struct Snapshot {
     /// The private folders inside the roots that Settings keeps Sutra out of, which the walk skips
     /// (see `ScanOptions`).
     pub skipped_private_folders: Vec<PathBuf>,
+    /// The private folders Settings lets Sutra into and macOS keeps it out of, because the user
+    /// said no to macOS's prompt. Only System Settings can change that.
+    pub refused_private_folders: Vec<PrivateFolder>,
     /// Running inside the App Sandbox, where signals to other processes fail, so the UI offers no
     /// terminate button.
     pub sandboxed: bool,

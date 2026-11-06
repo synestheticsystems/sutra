@@ -96,6 +96,60 @@ fn build_bytes(engine: &Engine, project: PathBuf) -> u64 {
         .measured_build_bytes()
 }
 
+/// The private folders `state` still waits for macOS's answer about.
+fn awaiting(state: &State) -> Vec<PrivateFolder> {
+    let awaiting = state.awaiting_macos().into_iter();
+    awaiting.map(|(folder, _)| folder).collect()
+}
+
+#[test]
+fn the_first_walk_waits_for_macos_until_every_folder_is_answered_its_wait_is_up_or_a_stop() {
+    let fixture = TempDir::new("live-wait-for-macos");
+    let roots = Roots {
+        home: fixture.root().to_path_buf(),
+        dirs: vec![fixture.root().to_path_buf()],
+        sandboxed: false,
+    };
+    let all = ScanOptions {
+        private_folders: PrivateFolder::ALL.into(),
+    };
+    let mut state = State::new(&roots, &all);
+    let (messages, inbox) = mpsc::channel();
+    let answered = |folder, answer| Message::MacOsAnswered(folder, answer);
+
+    messages
+        .send(answered(PrivateFolder::Documents, MacOsAnswer::LetIn))
+        .unwrap();
+    let started = Instant::now();
+    assert!(wait_for_macos(&mut state, 3, &inbox).is_continue());
+    assert!(
+        started.elapsed() >= WAIT_FOR_MACOS,
+        "two are still unanswered"
+    );
+    assert_eq!(
+        awaiting(&state),
+        [PrivateFolder::Desktop, PrivateFolder::Downloads]
+    );
+
+    for message in [
+        answered(PrivateFolder::Desktop, MacOsAnswer::Refused),
+        answered(PrivateFolder::Downloads, MacOsAnswer::LetIn),
+        Message::Stop,
+    ] {
+        messages.send(message).unwrap();
+    }
+    assert!(wait_for_macos(&mut state, 2, &inbox).is_continue());
+    assert_eq!(awaiting(&state), []);
+    assert!(
+        matches!(inbox.try_recv(), Ok(Message::Stop)),
+        "the wait ends with the last answer"
+    );
+
+    let mut asking = State::new(&roots, &all);
+    messages.send(Message::Stop).unwrap();
+    assert!(wait_for_macos(&mut asking, 3, &inbox).is_break());
+}
+
 #[test]
 fn a_change_below_the_top_of_a_tree_shows_once_every_tree_is_walked_after_lost_events() {
     let fixture = TempDir::new("live-walk-after-loss");

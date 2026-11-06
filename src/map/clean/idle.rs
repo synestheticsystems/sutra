@@ -199,7 +199,8 @@ mod tests {
         node_modules, project_at, snapshot_of, subagent_at_work,
     };
     use crate::map::{
-        AgentStatus, Harness, Measurement, PrivateFolder, Source, SourceProblem, SubagentWithParent,
+        AgentStatus, Harness, KeptOutBy, Measurement, PrivateFolder, Source, SourceProblem,
+        SubagentWithParent,
     };
     use std::io;
 
@@ -320,7 +321,7 @@ mod tests {
                 ..quiet_project("unsized", 9, LARGE)
             },
             Project {
-                access: FolderAccess::KeptOut(PrivateFolder::Desktop),
+                access: FolderAccess::KeptOut(PrivateFolder::Desktop, KeptOutBy::Settings),
                 ..quiet_project("private", 9, LARGE)
             },
             quiet_project("worth-it", 9, WORTH_CLEANING_BYTES),

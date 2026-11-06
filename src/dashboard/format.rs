@@ -103,10 +103,20 @@ pub(super) fn plural(n: u64, noun: &str) -> String {
 
 /// `a`, `a or b`, `a, b or c`.
 pub(super) fn either(items: &[&str]) -> String {
+    joined(items, "or")
+}
+
+/// `a`, `a and b`, `a, b and c`.
+pub(super) fn all(items: &[&str]) -> String {
+    joined(items, "and")
+}
+
+/// `items` in a list whose last two `word` joins.
+fn joined(items: &[&str], word: &str) -> String {
     match items {
         [] => String::new(),
         [only] => only.to_string(),
-        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+        [rest @ .., last] => format!("{} {word} {last}", rest.join(", ")),
     }
 }
 
@@ -289,6 +299,13 @@ mod tests {
         assert_eq!(either(&["a"]), "a");
         assert_eq!(either(&["a", "b"]), "a or b");
         assert_eq!(either(&["a", "b", "c"]), "a, b or c");
+    }
+
+    #[test]
+    fn all_joins_with_commas_and_a_last_and() {
+        assert_eq!(all(&["a"]), "a");
+        assert_eq!(all(&["a", "b"]), "a and b");
+        assert_eq!(all(&["a", "b", "c"]), "a, b and c");
     }
 
     #[test]

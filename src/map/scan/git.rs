@@ -31,7 +31,7 @@ pub fn git_activity(repo: &RepoInfo) -> Option<SystemTime> {
 }
 
 /// `repo_info` for discovery, which must not touch a git dir outside `may_read` (a repository in a
-/// private folder Settings keeps Sutra out of): such a git dir fails as `PermissionDenied`.
+/// private folder Sutra stays out of): such a git dir fails as `PermissionDenied`.
 pub(super) fn repo_info_within(
     worktree: &Path,
     may_read: &dyn Fn(&Path) -> bool,

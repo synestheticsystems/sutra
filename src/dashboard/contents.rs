@@ -268,10 +268,10 @@ pub struct Unreadable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum UnreadableLook {
-    /// Kept out by the user's own choice, in Settings or in the folder granted: a quiet sign, since
-    /// nothing went wrong.
+    /// Kept out by the user's own choice, in Settings, in the folder granted or in answer to
+    /// macOS's prompt, or until they answer it: a quiet sign, since nothing went wrong.
     KeptOut,
-    /// Missing or refused: the warning sign.
+    /// Missing, or locked by its own permissions: the warning sign.
     Failed,
 }
 
@@ -445,6 +445,9 @@ pub struct Footer {
     /// Sources whose failure loses only some folders or some changes, one line each, for an alert
     /// sign's tooltip.
     pub problems: Vec<String>,
+    /// The private folders macOS keeps Sutra out of, and where the user can let it in, beside the
+    /// quiet sign the cards in them show.
+    pub refused: Option<String>,
     /// The scanner stopped, which only a relaunch mends.
     pub stopped: Option<String>,
 }

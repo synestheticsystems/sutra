@@ -76,7 +76,7 @@ fn classify(admin_dir: &Path, boundary: &Boundary) -> Registration {
         return Registration::Unreadable((admin_dir.to_path_buf(), io::ErrorKind::InvalidData));
     };
     let access = match boundary.kept_out_by(folder) {
-        Some(private) => FolderAccess::KeptOut(private),
+        Some((private, by)) => FolderAccess::KeptOut(private, by),
         None => match fs::symlink_metadata(&dot_git) {
             // Inside the sandbox a folder outside the grant can be stat'ed but not listed, so the
             // `.git` file being there says nothing about whether the folder reads.

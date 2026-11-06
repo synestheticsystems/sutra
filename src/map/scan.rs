@@ -18,10 +18,10 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 pub use artifacts::{find_artifacts, is_cargo_target};
-pub use boundary::{Boundary, folder_access};
+pub use boundary::{Boundary, MacOsAnswer, folder_access};
 pub use git::{git_activity, repo_info};
 
-use super::{FolderAccess, RepoInfo, ScanOptions, ScanStats, Source, SourceProblem};
+use super::{FolderAccess, RepoInfo, ScanStats, Source, SourceProblem};
 
 /// Everything discovery found under the roots.
 #[derive(Debug, Default)]
@@ -46,8 +46,8 @@ pub struct Worktree {
     /// Canonical path.
     pub path: PathBuf,
     pub repo: RepoInfo,
-    /// Whether Sutra reads the folder. A registered worktree may lie in a private folder Settings
-    /// keeps Sutra out of, outside the sandbox grant, or on a volume that is not mounted (a locked
+    /// Whether Sutra reads the folder. A registered worktree may lie in a private folder Sutra
+    /// stays out of, outside the sandbox grant, or on a volume that is not mounted (a locked
     /// worktree); the walk reads every worktree it finds.
     pub access: FolderAccess,
 }
@@ -58,11 +58,11 @@ pub struct Worktree {
 /// for as long as a heavy build runs.
 const DISCOVERY_THREADS: usize = 4;
 
-/// Walk the roots, stopping at every repository root, then add each repository's linked worktrees
-/// from its registry, wherever they live.
-pub fn discover(roots: &[PathBuf], home: &Path, opts: &ScanOptions) -> Discovery {
+/// Walk the boundary's roots, stopping at every repository root, then add each repository's linked
+/// worktrees from its registry, wherever they live, reading nothing the boundary keeps out.
+pub fn discover(boundary: &Boundary) -> Discovery {
     let started = Instant::now();
-    on_discovery_threads(|| discover_on_current_pool(roots, home, opts, started))
+    on_discovery_threads(|| discover_on_current_pool(boundary, started))
 }
 
 /// Run `work` and what it runs in parallel on discovery's threads.
@@ -78,14 +78,8 @@ pub(crate) fn on_discovery_threads<T: Send>(work: impl FnOnce() -> T + Send) -> 
     }
 }
 
-fn discover_on_current_pool(
-    roots: &[PathBuf],
-    home: &Path,
-    opts: &ScanOptions,
-    started: Instant,
-) -> Discovery {
-    let boundary = Boundary::new(roots, home, opts);
-    let walked = walk::walk(&boundary);
+fn discover_on_current_pool(boundary: &Boundary, started: Instant) -> Discovery {
+    let walked = walk::walk(boundary);
 
     let may_read = |path: &Path| boundary.may_read(path);
     let resolved: Vec<_> = walked
@@ -119,7 +113,7 @@ fn discover_on_current_pool(
         .collect();
     let registries: Vec<_> = common_dirs
         .par_iter()
-        .map(|common_dir| registry::read(common_dir, &boundary))
+        .map(|common_dir| registry::read(common_dir, boundary))
         .collect();
     let mut unreadable_dirs = walked.unreadable_dirs;
     for registry in registries {
@@ -154,13 +148,18 @@ fn discover_on_current_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::PrivateFolder;
     use crate::map::test_support::{TempDir, git};
+    use crate::map::{KeptOutBy, PrivateFolder, ScanOptions};
+
+    /// The boundary of a scan with the fixture's `home` folder as both the root and the home folder.
+    fn home_boundary(fixture: &TempDir, opts: &ScanOptions) -> Boundary {
+        let home = fixture.path("home");
+        Boundary::new(std::slice::from_ref(&home), &home, opts)
+    }
 
     /// Discover with the fixture's `home` folder as both the root and the home folder.
     fn discover_home(fixture: &TempDir, opts: &ScanOptions) -> Discovery {
-        let home = fixture.path("home");
-        discover(std::slice::from_ref(&home), &home, opts)
+        discover(&home_boundary(fixture, opts))
     }
 
     fn paths(discovery: &Discovery) -> Vec<PathBuf> {
@@ -397,12 +396,54 @@ mod tests {
         let found = discover_home(&fixture, &ScanOptions::default());
         assert_eq!(
             worktree(&found, &private).access,
-            FolderAccess::KeptOut(PrivateFolder::Desktop)
+            FolderAccess::KeptOut(PrivateFolder::Desktop, KeptOutBy::Settings)
         );
         assert_eq!(
             worktree(&discover_home(&fixture, &desktop), &private).access,
             FolderAccess::Readable
         );
+    }
+
+    #[test]
+    fn discover_stays_out_of_a_private_folder_until_macos_lets_sutra_in() {
+        let fixture = TempDir::new("scan-discover-asking");
+        let notes = fixture.repo("home/Documents/notes");
+        let main = fixture.repo("home/code/app");
+        let task = fixture.path("home/Documents/Codex/task");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "task",
+                task.to_str().unwrap(),
+            ],
+        );
+        let documents = ScanOptions {
+            private_folders: [PrivateFolder::Documents].into(),
+        };
+        let mut boundary = home_boundary(&fixture, &documents);
+        boundary.keep_out_until_macos_answers();
+
+        let found = discover(&boundary);
+        assert_eq!(paths(&found), [task.clone(), main.clone()]);
+        let waiting = worktree(&found, &task);
+        assert_eq!(
+            waiting.access,
+            FolderAccess::KeptOut(PrivateFolder::Documents, KeptOutBy::Prompt)
+        );
+        assert_eq!(
+            waiting.repo.branch.as_deref(),
+            Some("task"),
+            "its registration outside the folder still reads"
+        );
+
+        boundary.macos_answered(PrivateFolder::Documents, MacOsAnswer::LetIn);
+        let found = discover(&boundary);
+        assert_eq!(paths(&found), [task.clone(), notes, main]);
+        assert_eq!(worktree(&found, &task).access, FolderAccess::Readable);
     }
 
     #[test]
@@ -462,7 +503,8 @@ mod tests {
         std::os::unix::fs::symlink(fixture.path("home"), fixture.path("home-link")).unwrap();
 
         let link = fixture.path("home-link");
-        let found = discover(std::slice::from_ref(&link), &link, &ScanOptions::default());
+        let boundary = Boundary::new(std::slice::from_ref(&link), &link, &ScanOptions::default());
+        let found = discover(&boundary);
         assert_eq!(paths(&found), [app]);
     }
 }

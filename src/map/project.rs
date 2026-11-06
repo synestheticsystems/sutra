@@ -87,14 +87,26 @@ impl Project {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderAccess {
     Readable,
-    /// In a private folder Settings keeps Sutra out of, because reading anything inside it would
-    /// raise macOS's privacy prompt.
-    KeptOut(PrivateFolder),
+    /// In a private folder Sutra stays out of, and what keeps it out. Reading anything inside one
+    /// would raise macOS's privacy prompt, or wait for the user to answer it.
+    KeptOut(PrivateFolder, KeptOutBy),
     /// The folder no longer exists, or lies on a volume that is not mounted (a locked worktree).
     Missing,
     /// The folder exists but cannot be listed. Inside the App Sandbox every folder outside the
     /// grant is like this: it can be seen to exist, not opened.
     Denied,
+}
+
+/// What keeps Sutra out of a private folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptOutBy {
+    /// The folder's switch in Settings is off.
+    Settings,
+    /// macOS's privacy prompt, which the user has not answered yet. Until macOS says whether Sutra
+    /// may read the folder, any read inside it waits for the answer, so Sutra stays out.
+    Prompt,
+    /// macOS, because the user said no to its prompt, now or on an earlier launch.
+    MacOs,
 }
 
 /// A project folder's size, its build folders included.

@@ -53,10 +53,10 @@ pub fn load(home: &Path, boundary: &Boundary, last_read: &mut LastRead) -> Loade
 }
 
 /// The canonical form of a recorded working directory, or the path as recorded when it may not or
-/// cannot be resolved. Resolving a folder inside a private folder Settings keeps Sutra out of
-/// would raise the privacy prompt; a session can outlive its folder (agents delete worktrees); and
-/// inside the sandbox a folder outside the grant cannot be resolved. The recorded path is then
-/// still the best join key.
+/// cannot be resolved. Resolving a folder inside a private folder Sutra stays out of would raise
+/// the privacy prompt, or wait for its answer; a session can outlive its folder (agents delete
+/// worktrees); and inside the sandbox a folder outside the grant cannot be resolved. The recorded
+/// path is then still the best join key.
 fn resolve_cwd(recorded: &str, boundary: &Boundary) -> PathBuf {
     let recorded = PathBuf::from(recorded);
     if !boundary.may_read(&recorded) {
