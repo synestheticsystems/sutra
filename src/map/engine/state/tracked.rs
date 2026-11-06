@@ -131,7 +131,7 @@ impl Tracked {
         let sessions = self.project.agents.iter().map(|agent| agent.last_activity);
         let subagents = self.project.subagents.iter();
         let agent = sessions
-            .chain(subagents.map(|away| away.subagent.last_write))
+            .chain(subagents.map(|working| working.subagent.last_write))
             .flatten()
             .max();
         self.agent_activity = self.agent_activity.max(agent);
