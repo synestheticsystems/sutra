@@ -2,7 +2,7 @@
 //! environment working in it, and how much disk it holds, its build folders apart.
 
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::{AgentSession, Measurement, PrivateFolder};
@@ -125,6 +125,17 @@ pub struct RepoInfo {
     pub head: Option<String>,
 }
 
+impl RepoInfo {
+    /// The folder the repository goes by: for the usual repository, whose common dir is its main
+    /// worktree's `.git`, the main worktree's folder; for a bare one, the common dir itself.
+    pub fn folder(&self) -> &Path {
+        match self.common_dir.file_name() {
+            Some(dir) if dir == ".git" => self.common_dir.parent().unwrap_or(&self.common_dir),
+            _ => &self.common_dir,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactDir {
     pub path: PathBuf,
@@ -215,6 +226,19 @@ mod tests {
         projects.sort_by(Project::newest_first);
         let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["new", "old", "a", "b"]);
+    }
+
+    #[test]
+    fn a_repository_goes_by_its_main_worktrees_folder_and_a_bare_one_by_its_own() {
+        let repo = |common_dir: &str| RepoInfo {
+            common_dir: PathBuf::from(common_dir),
+            git_dir: PathBuf::from(common_dir),
+            worktree_name: None,
+            branch: None,
+            head: None,
+        };
+        assert_eq!(repo("/code/app/.git").folder(), Path::new("/code/app"));
+        assert_eq!(repo("/code/app.git").folder(), Path::new("/code/app.git"));
     }
 
     #[test]

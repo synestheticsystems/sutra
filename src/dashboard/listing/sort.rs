@@ -4,8 +4,9 @@ use std::cmp::Reverse;
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::focus::disk_bytes;
+use super::{Cards, repository};
 use crate::dashboard::SortOrder;
-use crate::map::Project;
+use crate::map::{Project, Snapshot};
 
 /// How finely the Activity sort tells activity apart. Projects whose last activity falls in the
 /// same five minutes of the clock rank alike and stand in name order, so that agents at work in
@@ -15,14 +16,19 @@ use crate::map::Project;
 const ACTIVITY_SLICE: Duration = Duration::from_secs(5 * 60);
 
 impl SortOrder {
-    pub(in crate::dashboard) const ALL: [SortOrder; 3] =
-        [SortOrder::Activity, SortOrder::Name, SortOrder::Disk];
+    pub(in crate::dashboard) const ALL: [SortOrder; 4] = [
+        SortOrder::Activity,
+        SortOrder::Name,
+        SortOrder::Disk,
+        SortOrder::Repository,
+    ];
 
     pub(in crate::dashboard) fn label(self) -> &'static str {
         match self {
             SortOrder::Activity => "Activity",
             SortOrder::Name => "Name",
             SortOrder::Disk => "Disk",
+            SortOrder::Repository => "Repository",
         }
     }
 
@@ -31,18 +37,32 @@ impl SortOrder {
             SortOrder::Activity => "Newest activity first",
             SortOrder::Name => "By name",
             SortOrder::Disk => "Largest folders first",
+            SortOrder::Repository => "Grouped by repository",
         }
     }
 
-    /// `projects` in this order. They arrive newest activity first, and the Disk sort is stable,
-    /// so projects of the same size keep that order; it weighs `focus::disk_bytes`.
+    /// One section's `projects` as this sort lays them out: the Repository sort gathers them into
+    /// their repositories' groups, and the others leave them in no group. `map` gives each group
+    /// every worktree of its repository.
+    pub(super) fn lay_out<'a>(self, projects: Vec<&'a Project>, map: &'a Snapshot) -> Cards<'a> {
+        match self {
+            SortOrder::Repository => repository::group(projects, map),
+            SortOrder::Activity | SortOrder::Name | SortOrder::Disk => {
+                Cards::ungrouped(self.arrange(projects))
+            }
+        }
+    }
+
+    /// `projects` in this order, in no group. They arrive newest activity first, and the Disk sort
+    /// is stable, so projects of the same size keep that order; it weighs `focus::disk_bytes`. The
+    /// Repository sort orders the cards it leaves in no group as the Activity sort does.
     pub(super) fn arrange<'a>(
         self,
         projects: impl IntoIterator<Item = &'a Project>,
     ) -> Vec<&'a Project> {
         let mut arranged: Vec<&Project> = projects.into_iter().collect();
         match self {
-            SortOrder::Activity => arranged.sort_by_cached_key(|project| {
+            SortOrder::Activity | SortOrder::Repository => arranged.sort_by_cached_key(|project| {
                 let slice = activity_slice(project);
                 (
                     Reverse(slice),
@@ -59,7 +79,7 @@ impl SortOrder {
 
 /// The slice of the clock (see `ACTIVITY_SLICE`) holding `project`'s last activity; `None`, which
 /// the Activity sort puts last, for a project with no activity known.
-fn activity_slice(project: &Project) -> Option<u64> {
+pub(super) fn activity_slice(project: &Project) -> Option<u64> {
     let since_epoch = project.last_activity?.duration_since(UNIX_EPOCH).ok()?;
     Some(since_epoch.as_secs() / ACTIVITY_SLICE.as_secs())
 }
@@ -139,6 +159,18 @@ mod tests {
             "newer by four minutes, same slice"
         );
         assert_eq!(order(1_500), ["b", "a"], "into the next slice");
+    }
+
+    #[test]
+    fn the_repository_sort_leaves_its_cards_in_no_group_in_the_activity_order() {
+        let projects = [
+            active("a-older", Some(1_000)),
+            active("b-newer", Some(1_500)),
+        ];
+        assert_eq!(
+            names(SortOrder::Repository.arrange(&projects)),
+            ["b-newer", "a-older"]
+        );
     }
 
     #[test]

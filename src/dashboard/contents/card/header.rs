@@ -1,14 +1,54 @@
-//! A card's identity: the name's tooltip (the folder and its last activity), and the branch chip
-//! and its tooltip (the branch in full, and which worktree this is).
+//! A card's identity: its name, the name's tooltip (the folder and its last activity), and the
+//! branch chip and its tooltip (the branch in full, and which worktree this is). A card nested
+//! under its repository's header goes by its branch instead, as the header names the repository.
 
 use std::path::Path;
 
-use crate::dashboard::format;
+use super::Naming;
+use crate::dashboard::{Chip, format};
 use crate::map::{ActivitySource, Project, RepoInfo};
 
+/// What a card goes by.
+pub(super) struct Identity {
+    pub(super) name: String,
+    pub(super) name_tooltip: String,
+    pub(super) branch: Option<Chip>,
+}
+
+/// What `project`'s card goes by, as `naming` says, its last activity read at `last_activity`, the
+/// moment on the user's clock (see `format::timestamp`). Going by its branch, the card needs no
+/// chip, and the name's tooltip gives the branch in full, which the name may cut short, before the
+/// folder. A folder in no repository has no branch, and goes by its name whatever `naming` says.
+pub(super) fn identity(
+    project: &Project,
+    naming: Naming,
+    home: &Path,
+    last_activity: Option<&str>,
+) -> Identity {
+    let folder = name_tooltip(project, home, last_activity);
+    match (naming, &project.repo) {
+        (Naming::Branch, Some(repo)) => {
+            let branch = branch(repo);
+            Identity {
+                name_tooltip: format!("{branch}\n{folder}"),
+                name: branch,
+                branch: None,
+            }
+        }
+        (Naming::Folder | Naming::Branch, repo) => Identity {
+            name: project.name.clone(),
+            name_tooltip: folder,
+            branch: repo.as_ref().map(|repo| Chip {
+                text: branch(repo),
+                tooltip: branch_tooltip(repo, home),
+            }),
+        },
+    }
+}
+
 /// The name's tooltip: the folder, then when its last activity was and where it came from, read
-/// at `last_activity`, the moment on the user's clock (see `format::timestamp`).
-pub(super) fn name_tooltip(project: &Project, home: &Path, last_activity: Option<&str>) -> String {
+/// at `last_activity`.
+fn name_tooltip(project: &Project, home: &Path, last_activity: Option<&str>) -> String {
     let folder = format::tilde(&project.path, home);
     let source = project.activity_source.map(|source| match source {
         ActivitySource::Git => "from git",
@@ -27,7 +67,7 @@ pub(super) fn name_tooltip(project: &Project, home: &Path, last_activity: Option
 
 /// The branch chip: the branch, `detached abc1234`, or `no commits`. A linked worktree's own name
 /// is left to the tooltip (see `worktree`).
-pub(super) fn branch(repo: &RepoInfo) -> String {
+fn branch(repo: &RepoInfo) -> String {
     match (&repo.branch, &repo.head) {
         (Some(branch), _) => branch.clone(),
         (None, Some(head)) => format!("detached {head}"),
@@ -37,7 +77,7 @@ pub(super) fn branch(repo: &RepoInfo) -> String {
 
 /// The branch chip's tooltip: the branch in full, which the chip cuts short when it is long, then
 /// which worktree of which repository this is.
-pub(super) fn branch_tooltip(repo: &RepoInfo, home: &Path) -> String {
+fn branch_tooltip(repo: &RepoInfo, home: &Path) -> String {
     format!("{}\n{}", branch(repo), worktree(repo, home))
 }
 
@@ -46,15 +86,9 @@ fn worktree(repo: &RepoInfo, home: &Path) -> String {
     let Some(name) = &repo.worktree_name else {
         return "Main worktree".to_string();
     };
-    // A non-bare repository's common dir is the main worktree's `.git`; its parent names the
-    // repository the way the user knows it.
-    let repository = match repo.common_dir.file_name() {
-        Some(dir) if dir == ".git" => repo.common_dir.parent().unwrap_or(&repo.common_dir),
-        _ => &repo.common_dir,
-    };
     format!(
         "Linked worktree {name} of {}",
-        format::tilde(repository, home)
+        format::tilde(repo.folder(), home)
     )
 }
 
@@ -114,6 +148,42 @@ mod tests {
             branch_tooltip(&repo(Some("map-wt"), Some(long), None), home),
             format!("{long}\nLinked worktree map-wt of ~/code/app")
         );
+    }
+
+    #[test]
+    fn a_nested_card_goes_by_its_branch_given_in_full_above_its_folder_and_needs_no_chip() {
+        let home = Path::new(HOME);
+        let long = "claude/worktree-map-subagents-and-the-five-minute-slices";
+        let worktree = Project {
+            repo: Some(repo(Some("app-wt"), Some(long), None)),
+            ..project_at("/Users/dev/code/app-wt")
+        };
+        let at = Some("2026-11-04 10:23");
+
+        let nested = identity(&worktree, Naming::Branch, home, at);
+        assert_eq!(nested.name, long);
+        assert_eq!(
+            nested.name_tooltip,
+            format!("{long}\n~/code/app-wt\nLast activity 2026-11-04 10:23")
+        );
+        assert_eq!(nested.branch, None);
+
+        let alone = identity(&worktree, Naming::Folder, home, at);
+        assert_eq!(alone.name, "app-wt");
+        assert_eq!(
+            alone.name_tooltip,
+            "~/code/app-wt\nLast activity 2026-11-04 10:23"
+        );
+        assert_eq!(alone.branch.map(|chip| chip.text).as_deref(), Some(long));
+    }
+
+    #[test]
+    fn a_folder_in_no_repository_goes_by_its_name_whatever_the_naming() {
+        let notes = project_at("/Users/dev/code/notes");
+        let identity = identity(&notes, Naming::Branch, Path::new(HOME), None);
+        assert_eq!(identity.name, "notes");
+        assert_eq!(identity.name_tooltip, "~/code/notes");
+        assert_eq!(identity.branch, None);
     }
 
     #[test]

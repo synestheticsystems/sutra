@@ -46,7 +46,7 @@ pub(super) fn tray(
 /// The folder's whole size as the card shows it: what the map measured, with each build folder a
 /// clean is at work on counted at what the clean has left of it. The map only learns that from its
 /// next walk, and a walk landing during the clean changes nothing here.
-fn total_on_card(
+pub(super) fn total_on_card(
     project: &Project,
     clean_state: impl Fn(&ArtifactDir) -> Option<CleanState>,
 ) -> Option<FolderSize> {

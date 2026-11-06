@@ -145,13 +145,15 @@ impl Arrangement {
 mod tests {
     use std::path::PathBuf;
 
-    use super::super::fixtures::{agent, now, project, quiet, shown, snapshot};
+    use super::super::fixtures::{
+        agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+    };
     use super::*;
     use crate::map::test_support::{cargo_target, measured, node_modules};
     use crate::map::{AgentStatus, Measurement, Project};
 
     fn listed(map: &Snapshot, arrangement: &Arrangement) -> Vec<String> {
-        shown(&Listing::new(map, arrangement, now()))
+        shown(&Listing::new(map, arrangement, now()).rows)
     }
 
     /// An arrangement with the pointer over the list `map` shows.
@@ -173,6 +175,40 @@ mod tests {
 
         arrangement.pointer_left();
         assert_eq!(listed(&b_active, &arrangement), ["b", "a"], "re-sorted");
+    }
+
+    #[test]
+    fn while_the_pointer_is_over_the_list_no_group_moves_and_a_newcomer_joins_its_own() {
+        let (a, b) = ("/code/a/.git", "/code/b/.git");
+        let before = snapshot(
+            vec![
+                main_worktree(a, "main", project("a", 10)),
+                main_worktree(b, "main", project("b", 20)),
+            ],
+            vec![],
+        );
+        let mut arrangement = pointed_at(&before);
+        arrangement.set_sort(SortOrder::Repository, &before, now());
+        assert_eq!(listed(&before, &arrangement), ["a: a", "b: b"]);
+
+        // A worktree of b's at work now, which puts b's group first in the sort.
+        let b_active = snapshot(
+            vec![
+                linked_worktree(b, "fix", project("b-fix", 0)),
+                main_worktree(a, "main", project("a", 10)),
+                main_worktree(b, "main", project("b", 20)),
+            ],
+            vec![],
+        );
+        arrangement.observe(&b_active, now());
+        assert_eq!(listed(&b_active, &arrangement), ["a: a", "b: b, b-fix"]);
+
+        arrangement.pointer_left();
+        assert_eq!(
+            listed(&b_active, &arrangement),
+            ["b: b, b-fix", "a: a"],
+            "re-sorted"
+        );
     }
 
     #[test]

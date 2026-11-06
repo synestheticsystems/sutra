@@ -1,12 +1,14 @@
 //! What the list shows, in order: the projects in focus in the user's sort, the agents working
 //! outside every project, and one row standing for the quiet projects, which opens to list them.
-//! A typed filter lists every project it admits instead. Judged at one instant, so the cards and
+//! A typed filter lists every project it admits instead. The Repository sort gathers the cards
+//! above the quiet row into their repositories' groups. Judged at one instant, so the cards and
 //! the counts always agree.
 
 mod arrangement;
 mod filter;
 mod focus;
 mod hold;
+mod repository;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
@@ -16,11 +18,14 @@ use std::time::SystemTime;
 
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
+use self::repository::Group;
 use crate::map::{AgentSession, Project, Snapshot};
 
 /// One row of the list.
 pub(super) enum Row<'a> {
     Project(&'a Project),
+    /// One repository's worktrees, under the header that names it: the Repository sort's group.
+    Repository(Group<'a>),
     /// The agents working outside every project: all of them, or those the filter admits.
     Elsewhere(Vec<&'a AgentSession>),
     /// "▸ 764 quiet": the projects outside the focus, behind one row.
@@ -28,6 +33,28 @@ pub(super) enum Row<'a> {
         count: usize,
         shown: bool,
     },
+}
+
+/// One section's cards as the list lays them out: the Repository sort's groups, then the cards in
+/// no group, which in the other sorts are all of them.
+struct Cards<'a> {
+    groups: Vec<Group<'a>>,
+    ungrouped: Vec<&'a Project>,
+}
+
+impl<'a> Cards<'a> {
+    /// `projects`, in the order given, in no group.
+    fn ungrouped(projects: Vec<&'a Project>) -> Cards<'a> {
+        Cards {
+            groups: Vec::new(),
+            ungrouped: projects,
+        }
+    }
+
+    fn into_rows(self) -> impl Iterator<Item = Row<'a>> {
+        let groups = self.groups.into_iter().map(Row::Repository);
+        groups.chain(self.ungrouped.into_iter().map(Row::Project))
+    }
 }
 
 /// The agents working outside every project that have something to show.
@@ -66,9 +93,13 @@ impl<'a> Listing<'a> {
     ) -> Listing<'a> {
         let sort = arrangement.sort();
         let cards = |section, projects: Vec<&'a Project>| {
-            hold.arrange(section, sort.arrange(projects))
-                .into_iter()
-                .map(Row::Project)
+            let sorted = match section {
+                Section::Main => sort.lay_out(projects, snapshot),
+                // No header stands below the quiet row: a repository whose worktrees are all quiet
+                // shows none, and one with a worktree in focus has its header above the row.
+                Section::Quiet => Cards::ungrouped(sort.arrange(projects)),
+            };
+            hold.arrange(section, sorted).into_rows()
         };
         let mut rows = Vec::new();
         match arrangement.query() {
@@ -112,9 +143,16 @@ impl<'a> Listing<'a> {
         let mut order = Order::default();
         let mut past_quiet_row = false;
         for row in &self.rows {
+            let section = if past_quiet_row {
+                &mut order.quiet
+            } else {
+                &mut order.main
+            };
             match row {
-                Row::Project(project) if past_quiet_row => order.quiet.push(project.path.clone()),
-                Row::Project(project) => order.main.push(project.path.clone()),
+                Row::Project(project) => section.push(project.path.clone()),
+                Row::Repository(group) => {
+                    section.extend(group.cards.iter().map(|card| card.path.clone()));
+                }
                 Row::QuietProjects { .. } => past_quiet_row = true,
                 Row::Elsewhere(_) => {}
             }
@@ -130,7 +168,7 @@ pub(super) mod fixtures {
     use std::time::{Duration, SystemTime};
 
     use crate::map::test_support::{agent_session, at, project_at, snapshot_of};
-    use crate::map::{AgentSession, AgentStatus, Project, Snapshot};
+    use crate::map::{AgentSession, AgentStatus, Project, RepoInfo, Snapshot};
 
     pub(in crate::dashboard) fn now() -> SystemTime {
         at(1_000_000_000)
@@ -147,6 +185,46 @@ pub(super) mod fixtures {
     /// A project out of focus: no activity known, and nothing in it.
     pub(in crate::dashboard) fn quiet(name: &str) -> Project {
         project_at(PathBuf::from("/code").join(name))
+    }
+
+    /// `project` as the main worktree of the repository whose git dir is `common_dir`, on
+    /// `branch`.
+    pub(in crate::dashboard) fn main_worktree(
+        common_dir: &str,
+        branch: &str,
+        project: Project,
+    ) -> Project {
+        let common_dir = PathBuf::from(common_dir);
+        Project {
+            repo: Some(RepoInfo {
+                git_dir: common_dir.clone(),
+                common_dir,
+                worktree_name: None,
+                branch: Some(branch.to_string()),
+                head: None,
+            }),
+            ..project
+        }
+    }
+
+    /// `project` as a worktree linked to the repository whose git dir is `common_dir`, under its
+    /// folder's name, on `branch`.
+    pub(in crate::dashboard) fn linked_worktree(
+        common_dir: &str,
+        branch: &str,
+        project: Project,
+    ) -> Project {
+        let common_dir = PathBuf::from(common_dir);
+        Project {
+            repo: Some(RepoInfo {
+                git_dir: common_dir.join("worktrees").join(&project.name),
+                common_dir,
+                worktree_name: Some(project.name.clone()),
+                branch: Some(branch.to_string()),
+                head: None,
+            }),
+            ..project
+        }
     }
 
     pub(in crate::dashboard) fn agent(cwd: &str, status: AgentStatus) -> AgentSession {
@@ -167,13 +245,17 @@ pub(super) mod fixtures {
         }
     }
 
-    /// What the rows show, one word each: a project's name, `elsewhere`, or `quiet:<count>`.
-    pub(in crate::dashboard) fn shown(listing: &super::Listing) -> Vec<String> {
-        listing
-            .rows
-            .iter()
+    /// What `rows` show, a few words each: a project's name, a repository's group as
+    /// `name: card, card`, `elsewhere`, or `quiet:<count>`.
+    pub(in crate::dashboard) fn shown(rows: &[super::Row]) -> Vec<String> {
+        let names = |projects: &[&Project]| {
+            let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+            names.join(", ")
+        };
+        rows.iter()
             .map(|row| match row {
                 super::Row::Project(project) => project.name.clone(),
+                super::Row::Repository(group) => format!("{}: {}", group.name, names(&group.cards)),
                 super::Row::Elsewhere(_) => "elsewhere".to_string(),
                 super::Row::QuietProjects { count, .. } => format!("quiet:{count}"),
             })
@@ -183,9 +265,65 @@ pub(super) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{agent, now, project, quiet, shown, snapshot};
+    use super::fixtures::{
+        agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+    };
     use super::*;
+    use crate::dashboard::SortOrder;
     use crate::map::{AgentStatus, Harness};
+
+    /// The user's arrangement once they chose the Repository sort for `map`.
+    fn by_repository(map: &Snapshot) -> Arrangement {
+        let mut arrangement = Arrangement::default();
+        arrangement.set_sort(SortOrder::Repository, map, now());
+        arrangement
+    }
+
+    #[test]
+    fn the_repository_sort_groups_the_focus_and_leaves_the_quiet_projects_in_no_group() {
+        let app = "/code/app/.git";
+        let map = snapshot(
+            vec![
+                linked_worktree(app, "fix", project("app-fix", 1)),
+                project("notes", 1),
+                main_worktree(app, "main", quiet("app")),
+                main_worktree("/code/old/.git", "main", quiet("old")),
+            ],
+            vec![agent("/tmp/scratch", AgentStatus::Busy)],
+        );
+        let mut arrangement = by_repository(&map);
+        arrangement.toggle_quiet(Some(&map), now());
+        let listing = Listing::new(&map, &arrangement, now());
+        assert_eq!(
+            shown(&listing.rows),
+            [
+                "app: app-fix",
+                "notes",
+                "elsewhere",
+                "quiet:2",
+                "app",
+                "old"
+            ],
+            "no header for old, whose only worktree is quiet"
+        );
+    }
+
+    #[test]
+    fn under_a_filter_the_repository_sort_groups_every_worktree_it_admits() {
+        let app = "/code/app/.git";
+        let map = snapshot(
+            vec![
+                main_worktree(app, "main", quiet("app")),
+                linked_worktree(app, "fix", project("app-fix", 1)),
+                project("site", 1),
+            ],
+            vec![],
+        );
+        let mut arrangement = by_repository(&map);
+        arrangement.set_filter_text("app".to_string(), Some(&map), now());
+        let listing = Listing::new(&map, &arrangement, now());
+        assert_eq!(shown(&listing.rows), ["app: app, app-fix"]);
+    }
 
     #[test]
     fn the_list_shows_the_focused_projects_then_the_agents_elsewhere_then_the_quiet_row() {
@@ -194,7 +332,10 @@ mod tests {
             vec![agent("/tmp/scratch", AgentStatus::Busy)],
         );
         let listing = Listing::new(&map, &Arrangement::default(), now());
-        assert_eq!(shown(&listing), ["recent", "older", "elsewhere", "quiet:1"]);
+        assert_eq!(
+            shown(&listing.rows),
+            ["recent", "older", "elsewhere", "quiet:1"]
+        );
     }
 
     #[test]
@@ -203,7 +344,7 @@ mod tests {
         let mut arrangement = Arrangement::default();
         arrangement.toggle_quiet(Some(&map), now());
         let listing = Listing::new(&map, &arrangement, now());
-        assert_eq!(shown(&listing), ["recent", "quiet:2", "a", "b"]);
+        assert_eq!(shown(&listing.rows), ["recent", "quiet:2", "a", "b"]);
     }
 
     #[test]
@@ -218,7 +359,7 @@ mod tests {
         let mut arrangement = Arrangement::default();
         arrangement.set_filter_text("APP".to_string(), Some(&map), now());
         let listing = Listing::new(&map, &arrangement, now());
-        assert_eq!(shown(&listing), ["app", "app-old", "elsewhere"]);
+        assert_eq!(shown(&listing.rows), ["app", "app-old", "elsewhere"]);
         let Row::Elsewhere(agents) = &listing.rows[2] else {
             panic!("the agents elsewhere come last");
         };

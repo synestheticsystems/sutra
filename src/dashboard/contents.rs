@@ -75,6 +75,11 @@ pub enum SortOrder {
     Name,
     /// Largest folders first.
     Disk,
+    /// Each git repository's worktrees together under a header naming it, the main worktree first
+    /// and the linked ones as the Activity sort orders them; the repositories by their newest
+    /// five-minute slice, then by name; the folders in no repository after them, as the Activity
+    /// sort orders them.
+    Repository,
 }
 
 /// The toolbar's clean: a click cleans every idle build folder, a right click sets what Sutra keeps
@@ -129,6 +134,19 @@ pub enum ListRow {
         // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
         card: Box<Card>,
     },
+    /// One repository's worktrees, in the Repository sort: a header with the repository's name and
+    /// the disk its worktrees take, then their cards, nested under it, the main worktree first.
+    /// The header names the repository, so each card goes by its branch.
+    Repository {
+        /// The git folder the worktrees share, which the window knows the group by.
+        common_dir: String,
+        /// The main worktree's folder name, or a bare repository's own, less `.git`.
+        name: String,
+        /// The disk its worktrees on the map take between them, listed or not, as their trays
+        /// write it: the sizes measured so far, added up, and `None` before the first.
+        total: Option<String>,
+        cards: Vec<Card>,
+    },
     /// The agents working outside every project, under `heading`, each beside the folder it works
     /// in, those waiting on the user first.
     Elsewhere {
@@ -154,11 +172,13 @@ pub struct Card {
     pub path: String,
     /// The folder in full, with `~` for the home folder: shown while the pointer is over the card.
     pub location: String,
+    /// The folder's name; nested under its repository's header, the branch.
     pub name: String,
-    /// The folder, then when its last activity was and where it came from.
+    /// The folder, then when its last activity was and where it came from; nested, the branch in
+    /// full before them.
     pub name_tooltip: String,
     /// The branch chip and its tooltip (which worktree of which repository this is); `None` for a
-    /// plain folder.
+    /// plain folder, and for a card nested under its repository's header, which goes by its branch.
     pub branch: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,

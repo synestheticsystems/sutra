@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::dashboard::cleaning::Cleaning;
-use crate::dashboard::{Card, Chip, Unreadable, UnreadableLook, format};
-use crate::map::{FolderAccess, Project, Snapshot};
+use crate::dashboard::{Card, Unreadable, UnreadableLook, format};
+use crate::map::{FolderAccess, FolderSize, Project, Snapshot};
 use crate::notifications::Notifier;
 
 /// What every card reads besides its own project and the map.
@@ -28,18 +28,25 @@ pub(in crate::dashboard) struct CardContext<'a> {
     pub(in crate::dashboard) now: SystemTime,
 }
 
-/// The card of `project`, on `map`.
-pub(super) fn card(project: &Project, map: &Snapshot, ctx: &CardContext) -> Card {
+/// What a card goes by, which its place on the list decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Naming {
+    /// Its folder's name, beside its branch on a chip.
+    Folder,
+    /// Its branch, nested under the header that names its repository.
+    Branch,
+}
+
+/// The card of `project`, on `map`, going by what `naming` says.
+pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &CardContext) -> Card {
     let last_activity = project.last_activity.and_then(format::timestamp);
+    let identity = header::identity(project, naming, ctx.home, last_activity.as_deref());
     Card {
         path: format::path_text(&project.path),
         location: format::tilde(&project.path, ctx.home),
-        name: project.name.clone(),
-        name_tooltip: header::name_tooltip(project, ctx.home, last_activity.as_deref()),
-        branch: project.repo.as_ref().map(|repo| Chip {
-            text: header::branch(repo),
-            tooltip: header::branch_tooltip(repo, ctx.home),
-        }),
+        name: identity.name,
+        name_tooltip: identity.name_tooltip,
+        branch: identity.branch,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
         agents: agents::lozenges(&project.agents, ctx.now),
@@ -53,6 +60,12 @@ pub(super) fn card(project: &Project, map: &Snapshot, ctx: &CardContext) -> Card
         waiting: agents::any_waiting(&project.agents),
         menu: menu::entries(project, ctx.cleaning, ctx.notifier, map.sandboxed),
     }
+}
+
+/// The total on `project`'s tray: its folder's whole size, with what a clean has left of the
+/// build folders it is at work on; `None` until the folder is sized.
+pub(super) fn tray_total(project: &Project, ctx: &CardContext) -> Option<FolderSize> {
+    tray::total_on_card(project, |dir| ctx.cleaning.state_of(dir))
 }
 
 /// Why the card shows nothing from inside its folder. Kept out by the user's choice: `in Desktop,
@@ -162,7 +175,7 @@ mod tests {
         let waiting: Vec<bool> = map
             .projects
             .iter()
-            .map(|project| card(project, &map, &ctx).waiting)
+            .map(|project| card(project, Naming::Folder, &map, &ctx).waiting)
             .collect();
         assert_eq!(waiting, [true, false, false]);
     }
@@ -177,7 +190,7 @@ mod tests {
             home: Path::new(HOME),
             now: now(),
         };
-        let card = card(&map.projects[0], &map, &ctx);
+        let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
         assert_eq!(card.path, "/Users/dev/code/app");
         assert_eq!(card.location, "~/code/app");
         assert_eq!(card.name, "app");

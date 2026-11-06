@@ -318,7 +318,7 @@ pub(super) mod tests {
     }
 
     /// Cleaning that deleted `/code/app/target` at second 100, leaving 42 bytes.
-    pub(super) fn deleted() -> Cleaning {
+    pub(in crate::dashboard) fn deleted() -> Cleaning {
         let mut cleaning = cleaning();
         cleaning.folders.insert(
             PathBuf::from("/code/app/target"),

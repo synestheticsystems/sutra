@@ -14,11 +14,14 @@ public enum Listing: Equatable {
 /// One row of the list.
 public enum Row: Identifiable, Equatable {
     case card(CardModel)
+    /// One repository's worktrees under its header, in the Repository sort.
+    case repository(commonDir: String, name: String, total: String?, cards: [CardModel])
     case elsewhere(heading: String, agents: [ElsewhereAgent], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
 
     public enum ID: Hashable {
         case card(path: String)
+        case repository(commonDir: String)
         case elsewhere
         case quietProjects
     }
@@ -26,6 +29,7 @@ public enum Row: Identifiable, Equatable {
     public var id: ID {
         switch self {
         case .card(let model): .card(path: model.path)
+        case .repository(let commonDir, _, _, _): .repository(commonDir: commonDir)
         case .elsewhere: .elsewhere
         case .quietProjects: .quietProjects
         }
@@ -35,6 +39,11 @@ public enum Row: Identifiable, Equatable {
         switch (lhs, rhs) {
         // The same model is the same row, whatever its card now says: the card redraws itself.
         case (.card(let lhs), .card(let rhs)): lhs === rhs
+        // A group is the same while its header reads the same over the same card models.
+        case (.repository(let lhsDir, let lhsName, let lhsTotal, let lhsCards),
+              .repository(let rhsDir, let rhsName, let rhsTotal, let rhsCards)):
+            lhsDir == rhsDir && lhsName == rhsName && lhsTotal == rhsTotal
+                && lhsCards.elementsEqual(rhsCards, by: ===)
         case (.elsewhere(let lhsHeading, let lhsAgents, let lhsWaiting),
               .elsewhere(let rhsHeading, let rhsAgents, let rhsWaiting)):
             lhsHeading == rhsHeading && lhsAgents == rhsAgents && lhsWaiting == rhsWaiting
@@ -68,7 +77,7 @@ public final class CardModel {
 }
 
 /// The models of the cards on the list, by folder. A card that leaves the list takes its model
-/// with it.
+/// with it, and a card that moves into a group or out of one keeps it.
 @MainActor
 struct CardModels {
     private var byPath: [String: CardModel] = [:]
@@ -86,14 +95,22 @@ struct CardModels {
             byPath = [:]
             return .empty(message: message)
         case .rows(let rows):
+            let previous = byPath
             var kept: [String: CardModel] = [:]
+            func model(of card: Card) -> CardModel {
+                let model = previous[card.path] ?? CardModel(card)
+                model.show(card)
+                kept[card.path] = model
+                return model
+            }
             let shown = rows.map { row -> Row in
                 switch row {
                 case .card(let card):
-                    let model = byPath[card.path] ?? CardModel(card)
-                    model.show(card)
-                    kept[card.path] = model
-                    return .card(model)
+                    return .card(model(of: card))
+                case .repository(let commonDir, let name, let total, let cards):
+                    return .repository(
+                        commonDir: commonDir, name: name, total: total, cards: cards.map(model(of:))
+                    )
                 case .elsewhere(let heading, let agents, let waiting):
                     return .elsewhere(heading: heading, agents: agents, waiting: waiting)
                 case .quietProjects(_, let open, let label, let tooltip):

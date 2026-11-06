@@ -56,6 +56,8 @@ private struct Rows: View {
                     switch row {
                     case .card(let card):
                         CardView(model: card, dashboard: dashboard)
+                    case .repository(_, let name, let total, let cards):
+                        RepositoryGroup(name: name, total: total, cards: cards, dashboard: dashboard)
                     case .elsewhere(let heading, let agents, let waiting):
                         ElsewhereCard(heading: heading, agents: agents, waiting: waiting)
                     case .quietProjects(let open, let label, let tooltip):
@@ -66,6 +68,40 @@ private struct Rows: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 12)
+        }
+    }
+}
+
+/// One repository's worktrees: a light line with the repository's name and the disk its worktrees
+/// take, then their cards, set in a little so they read as the repository's at a glance.
+private struct RepositoryGroup: View {
+    let name: String
+    let total: String?
+    let cards: [CardModel]
+    let dashboard: DashboardModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(name)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let total {
+                    Text(total)
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            // A little more room above the line than below, so it reads as its cards' heading.
+            .padding(.top, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            ForEach(cards, id: \.path) { card in
+                CardView(model: card, dashboard: dashboard)
+                    .padding(.leading, 12)
+            }
         }
     }
 }

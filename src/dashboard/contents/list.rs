@@ -1,15 +1,16 @@
 //! The list, or what stands in its place: what the store edition needs before it can read
 //! anything, the wait for the first map, or why nothing is listed. Otherwise the rows: a card per
-//! project, the agents working outside every project, and the row standing for the quiet
+//! project, or in the Repository sort each repository's cards under a header with its name and
+//! disk, then the agents working outside every project, and the row standing for the quiet
 //! projects.
 
 use std::path::PathBuf;
 
-use super::card::{self, CardContext, agents};
+use super::card::{self, CardContext, Naming, agents};
 use crate::dashboard::listing::{FOCUS_LARGE_BYTES, FOCUS_RECENT, Listing, Row};
 use crate::dashboard::{ElsewhereAgent, List, ListRow, format};
 use crate::map::grant::GrantError;
-use crate::map::{AgentSession, Snapshot};
+use crate::map::{AgentSession, FolderSize, Project, Snapshot};
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
@@ -47,7 +48,17 @@ pub(in crate::dashboard) fn list(
 fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
     match row {
         Row::Project(project) => ListRow::Card {
-            card: Box::new(card::card(project, map, cards)),
+            card: Box::new(card::card(project, Naming::Folder, map, cards)),
+        },
+        Row::Repository(group) => ListRow::Repository {
+            common_dir: format::path_text(group.common_dir),
+            name: group.name.clone(),
+            total: total_of(&group.worktrees, cards),
+            cards: group
+                .cards
+                .iter()
+                .map(|project| card::card(project, Naming::Branch, map, cards))
+                .collect(),
         },
         Row::Elsewhere(working) => ListRow::Elsewhere {
             heading: "Elsewhere".to_string(),
@@ -61,6 +72,20 @@ fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
             tooltip: what_makes_one_quiet(),
         },
     }
+}
+
+/// What `worktrees` take on disk between them, as their trays write it: the totals the trays show,
+/// added up, at least that when part of one could not be read. A worktree still being sized adds
+/// nothing, and the sum says nothing of it; `None` while none is sized.
+fn total_of(worktrees: &[&Project], cards: &CardContext) -> Option<String> {
+    let total = worktrees
+        .iter()
+        .filter_map(|worktree| card::tray_total(worktree, cards))
+        .reduce(|total, size| FolderSize {
+            bytes: total.bytes + size.bytes,
+            partial: total.partial || size.partial,
+        })?;
+    Some(format::size(total.bytes, total.partial))
 }
 
 /// Agents whose working folder lies in no project, each with that folder, in the order the map
@@ -121,14 +146,28 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::dashboard::AgentLook;
-    use crate::dashboard::cleaning::tests::cleaning;
+    use crate::dashboard::cleaning::Cleaning;
+    use crate::dashboard::cleaning::tests::{cleaning, deleted};
     use crate::dashboard::listing::Arrangement;
-    use crate::dashboard::listing::fixtures::{agent, now, project, quiet, snapshot};
-    use crate::map::AgentStatus;
+    use crate::dashboard::listing::fixtures::{
+        agent, linked_worktree, main_worktree, now, project, quiet, snapshot,
+    };
+    use crate::dashboard::{AgentLook, SortOrder};
+    use crate::map::test_support::{cargo_target, measured, project_at, usage};
+    use crate::map::{AgentStatus, DirUsage, Measurement};
     use crate::notifications::Notifier;
 
     const HOME: &str = "/Users/dev";
+
+    /// What the cards read, with `cleaning` at work.
+    fn context<'a>(cleaning: &'a Cleaning, notifier: &'a Notifier) -> CardContext<'a> {
+        CardContext {
+            notifier,
+            cleaning,
+            home: Path::new(HOME),
+            now: now(),
+        }
+    }
 
     /// What `list` gives for `map` as the user arranged it, under the root `/code`.
     fn listed(map: &Snapshot, arrangement: &Arrangement) -> List {
@@ -188,6 +227,94 @@ mod tests {
         assert_eq!(agents[1].lozenge.look, AgentLook::Waiting);
         assert!(*waiting, "the row throbs while one waits");
         assert_eq!((*count, *open, label.as_str()), (1, false, "1 quiet"));
+    }
+
+    #[test]
+    fn a_repositorys_group_is_its_name_its_disk_and_its_cards_going_by_their_branches() {
+        let app = "/code/app/.git";
+        let sized = |bytes, project| Project {
+            own_files: measured(bytes),
+            ..project
+        };
+        let map = snapshot(
+            vec![
+                sized(2_000_000_000, main_worktree(app, "main", project("app", 1))),
+                linked_worktree(app, "fix", project("app-fix", 1)),
+                sized(500_000_000, linked_worktree(app, "old", quiet("app-old"))),
+            ],
+            vec![],
+        );
+        let mut arrangement = Arrangement::default();
+        arrangement.set_sort(SortOrder::Repository, &map, now());
+        let List::Rows { rows } = listed(&map, &arrangement) else {
+            panic!("a map with projects lists them");
+        };
+        let [
+            ListRow::Repository {
+                common_dir,
+                name,
+                total,
+                cards,
+            },
+            ListRow::QuietProjects { .. },
+        ] = rows.as_slice()
+        else {
+            panic!("the group, then the quiet row: {rows:?}");
+        };
+        assert_eq!((common_dir.as_str(), name.as_str()), (app, "app"));
+        assert_eq!(
+            total.as_deref(),
+            Some("2.5 GB"),
+            "the quiet worktree's size too, and nothing yet of the one being sized"
+        );
+        let shown: Vec<(&str, &str, bool)> = cards
+            .iter()
+            .map(|card| {
+                (
+                    card.path.as_str(),
+                    card.name.as_str(),
+                    card.branch.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("/code/app", "main", false),
+                ("/code/app-fix", "fix", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repositorys_total_waits_for_a_first_size_and_says_when_it_is_a_lower_bound() {
+        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
+        let cards = context(&cleaning, &notifier);
+        let being_sized = project_at("/code/app");
+        let read_in_part = Project {
+            own_files: Measurement::Measured(DirUsage {
+                unreadable_dirs: 1,
+                ..usage(5_000_000)
+            }),
+            ..project_at("/code/app-fix")
+        };
+        assert_eq!(total_of(&[&being_sized], &cards), None);
+        assert_eq!(
+            total_of(&[&being_sized, &read_in_part], &cards).as_deref(),
+            Some("\u{2265}5 MB")
+        );
+    }
+
+    #[test]
+    fn a_repositorys_total_falls_with_what_a_clean_leaves_as_its_worktrees_trays_do() {
+        let (cleaning, notifier) = (deleted(), Notifier::new(|_, _| {}));
+        let cards = context(&cleaning, &notifier);
+        let app = Project {
+            own_files: measured(1_000_000_000),
+            artifacts: vec![cargo_target("/code/app/target", measured(12_300_000_000))],
+            ..project_at("/code/app")
+        };
+        assert_eq!(total_of(&[&app], &cards).as_deref(), Some("1 GB"));
     }
 
     #[test]
