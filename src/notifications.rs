@@ -113,6 +113,12 @@ impl Notifier {
         self.transitions.has_pending_waits()
     }
 
+    /// Drop the waits still to be announced: the map stopped updating, and with it word of
+    /// whether they go on.
+    pub fn forget_pending_waits(&mut self) {
+        self.transitions.forget_pending_waits();
+    }
+
     /// Forget the previous map, so the first snapshot of an engine started afresh is recorded
     /// rather than announced as a flood of changes.
     pub fn forget_map(&mut self) {

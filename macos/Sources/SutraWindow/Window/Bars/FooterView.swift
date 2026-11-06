@@ -3,15 +3,15 @@ import SwiftUI
 
 /// What shows under the list while there is something to say: an alert sign whose tooltip names
 /// the sources whose failure loses only some folders or some changes, where to let Sutra into the
-/// private folders macOS keeps it out of, the warning that the scanner stopped, and a thin bar
-/// along the bottom while the first sizing runs.
+/// private folders macOS keeps it out of, and a thin bar along the bottom while the first sizing
+/// runs.
 struct FooterView: View {
     let dashboard: DashboardModel
 
     var body: some View {
         if let footer = dashboard.footer {
             VStack(spacing: 0) {
-                if !footer.problems.isEmpty || footer.refused != nil || footer.stopped != nil {
+                if !footer.problems.isEmpty || footer.refused != nil {
                     Divider()
                     HStack(spacing: 8) {
                         if !footer.problems.isEmpty {
@@ -27,11 +27,6 @@ struct FooterView: View {
                             Label(refused, systemImage: "eye.slash")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
-                        }
-                        if let stopped = footer.stopped {
-                            Text(stopped)
-                                .font(.callout)
-                                .foregroundStyle(Hue.red.ink)
                         }
                     }
                     .padding(.horizontal, 16)

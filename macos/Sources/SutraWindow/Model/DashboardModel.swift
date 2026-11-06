@@ -9,10 +9,13 @@ import SutraCore
 @Observable
 public final class DashboardModel {
     private(set) var title: String
-    /// How many agents wait on the user.
-    public private(set) var waiting: UInt32
+    /// What the Dock badge says: how many agents wait on the user, or a warning once the map no
+    /// longer updates.
+    public private(set) var dockBadge: String?
     private(set) var toolbar: Toolbar
     private(set) var banner: Banner?
+    /// The line over the list once the map no longer updates; nothing in the window moves then.
+    private(set) var stopped: String?
     public private(set) var listing: Listing
     private(set) var footer: Footer?
     private(set) var settings: SutraCore.Settings
@@ -39,9 +42,10 @@ public final class DashboardModel {
         let contents = core.contents()
         var cards = CardModels()
         title = contents.title
-        waiting = contents.waiting
+        dockBadge = contents.dockBadge
         toolbar = contents.toolbar
         banner = contents.banner
+        stopped = contents.stopped
         listing = cards.listing(of: contents.list)
         footer = contents.footer
         receivedDialog = contents.dialog
@@ -58,9 +62,10 @@ public final class DashboardModel {
     func refresh() {
         let contents = core.contents()
         replace(\.title, with: contents.title)
-        replace(\.waiting, with: contents.waiting)
+        replace(\.dockBadge, with: contents.dockBadge)
         replace(\.toolbar, with: contents.toolbar)
         replace(\.banner, with: contents.banner)
+        replace(\.stopped, with: contents.stopped)
         replace(\.listing, with: cards.listing(of: contents.list))
         replace(\.footer, with: contents.footer)
         if contents.dialog?.id != receivedDialog?.id {

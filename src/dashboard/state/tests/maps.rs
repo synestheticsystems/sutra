@@ -38,12 +38,6 @@ fn nothing_is_offered_for_cleaning_once_the_engine_has_stopped_or_a_source_goes_
 }
 
 #[test]
-fn the_window_title_counts_the_agents_waiting_and_says_nothing_of_none() {
-    assert_eq!(window_title(0), "Sutra");
-    assert_eq!(window_title(2), "Sutra \u{00b7} 2 waiting");
-}
-
-#[test]
 fn the_contents_count_the_agents_waiting_for_the_title_and_the_dock() {
     let (mut state, _inbox) = dashboard_at(Path::new("/Users/dev"), Path::new("/code"), None);
     assert_eq!(state.contents(now()).list, List::Scanning);
@@ -56,8 +50,47 @@ fn the_contents_count_the_agents_waiting_for_the_title_and_the_dock() {
 
     let contents = state.contents(now());
     assert_eq!(contents.title, "Sutra \u{00b7} 1 waiting");
-    assert_eq!(contents.waiting, 1);
+    assert_eq!(contents.dock_badge.as_deref(), Some("1"));
+    assert_eq!(contents.stopped, None);
     assert!(card_at(&contents, Path::new("/code/app")).waiting);
+}
+
+#[test]
+fn once_the_running_engine_stops_the_window_keeps_its_last_map_and_claims_no_news() {
+    let fixture = TempDir::new("state-engine-stopped");
+    let (mut state, inbox) = dashboard(&fixture);
+    state.start_engine();
+    let running = match inbox.recv_timeout(Duration::from_secs(30)) {
+        Ok(Event::Snapshot(engine, first)) => {
+            // The first map only primes the notifier: waits found in it are not news.
+            state.on_snapshot(engine, first, now());
+            engine
+        }
+        _ => panic!("the engine's first map"),
+    };
+    // The engine's last map, as if it had found an agent waiting a moment ago.
+    let waiting = Project {
+        agents: vec![agent_session("s1", AgentStatus::Waiting)],
+        ..project_at("/code/app")
+    };
+    state.on_snapshot(running, Arc::new(snapshot_of(vec![waiting])), now());
+    assert!(state.has_pending_waits());
+
+    state.on_engine_stopped(running);
+
+    let contents = state.contents(now());
+    assert_eq!(contents.title, "Sutra \u{00b7} stopped");
+    assert_eq!(contents.dock_badge.as_deref(), Some("!"));
+    assert_eq!(
+        contents.stopped.as_deref(),
+        Some("Updates stopped, so this is how things last stood. Quit and reopen Sutra.")
+    );
+    assert!(
+        card_at(&contents, Path::new("/code/app")).waiting,
+        "the last map stays"
+    );
+    assert!(!state.has_pending_waits(), "no wait is announced after it");
+    state.stop();
 }
 
 #[test]

@@ -2,8 +2,9 @@ import AppKit
 import SutraCore
 import SwiftUI
 
-/// The window's contents: the toolbar, then the scope bar, the banner, the list and the footer, or
-/// the help panel in the list's place; and the core's dialogs over them.
+/// The window's contents: the toolbar, then the scope bar, the banner, the line saying updates
+/// stopped, the list and the footer, or the help panel in the list's place; and the core's dialogs
+/// over them.
 public struct DashboardView: View {
     private let dashboard: DashboardModel
 
@@ -22,6 +23,7 @@ public struct DashboardView: View {
             } else {
                 ScopeBar(dashboard: dashboard, filterFocus: $filterFocused)
                 BannerView(dashboard: dashboard)
+                StoppedLine(dashboard: dashboard)
                 ListView(dashboard: dashboard)
                 FooterView(dashboard: dashboard)
             }
@@ -36,8 +38,9 @@ public struct DashboardView: View {
             dashboard.showFilter()
             filterFocused = true
         })
-        // Nothing moves while macOS is set to reduce motion, nor while nobody can see the window.
-        .environment(\.motion, reduceMotion || !seen ? .steady : .live)
+        // Nothing moves while macOS is set to reduce motion, while nobody can see the window, or
+        // once the map no longer updates, when a pulse would claim news Sutra no longer has.
+        .environment(\.motion, reduceMotion || !seen || dashboard.stopped != nil ? .steady : .live)
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didChangeOcclusionStateNotification
         )) { _ in

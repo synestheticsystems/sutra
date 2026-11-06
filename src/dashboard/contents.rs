@@ -6,6 +6,7 @@
 pub(super) mod banner;
 pub(super) mod card;
 pub(super) mod footer;
+pub(super) mod heading;
 pub(super) mod list;
 pub(super) mod toolbar;
 
@@ -14,14 +15,19 @@ pub(super) use card::CardContext;
 /// Everything the window shows at one instant.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct WindowContents {
-    /// `Sutra · 2 waiting` while agents wait on the user, else `Sutra`.
+    /// `Sutra · 2 waiting` while agents wait on the user, `Sutra · stopped` once the map no longer
+    /// updates, else `Sutra`.
     pub title: String,
-    /// How many agents wait on the user, for the Dock badge, which shows none at 0.
-    pub waiting: u32,
+    /// The Dock badge: how many agents wait on the user, none at 0, or `!` once the map no longer
+    /// updates.
+    pub dock_badge: Option<String>,
     pub toolbar: Toolbar,
     /// The strip above the list while a source that alone tells of a kind of thing cannot be read,
     /// so its absence does not pass for nothing running.
     pub banner: Option<Banner>,
+    /// Once the engine has stopped, which only a relaunch mends, the line over the list saying it
+    /// shows how things last stood. Nothing in the window moves meanwhile: what moves claims news.
+    pub stopped: Option<String>,
     pub list: List,
     /// What shows under the list while there is something to say.
     pub footer: Option<Footer>,
@@ -448,8 +454,6 @@ pub struct Footer {
     /// The private folders macOS keeps Sutra out of, and where the user can let it in, beside the
     /// quiet sign the cards in them show.
     pub refused: Option<String>,
-    /// The scanner stopped, which only a relaunch mends.
-    pub stopped: Option<String>,
 }
 
 /// An alert: a notice to read, or a question to answer.

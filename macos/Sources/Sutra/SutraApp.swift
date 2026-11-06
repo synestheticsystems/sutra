@@ -11,8 +11,8 @@ struct SutraApp: App {
     var body: some Scene {
         Window("Sutra", id: "dashboard") {
             DashboardView(dashboard: delegate.dashboard)
-                .onChange(of: delegate.dashboard.waiting, initial: true) { _, waiting in
-                    NSApp.dockTile.badgeLabel = waiting == 0 ? nil : waiting.formatted()
+                .onChange(of: delegate.dashboard.dockBadge, initial: true) { _, badge in
+                    NSApp.dockTile.badgeLabel = badge
                 }
         }
         .defaultSize(width: 520, height: 640)

@@ -128,6 +128,11 @@ impl Transitions {
     pub(super) fn has_pending_waits(&self) -> bool {
         !self.waits.is_empty()
     }
+
+    /// Drop the waits not yet announced, keeping what the last load recorded of each agent.
+    pub(super) fn forget_pending_waits(&mut self) {
+        self.waits.clear();
+    }
 }
 
 /// What to say when a unit enters `state`, or `None` for a state not worth a sound.
@@ -304,6 +309,22 @@ mod tests {
         );
         assert!(!transitions.has_pending_waits());
         assert!(transitions.lasting_waits(t0() + secs(60)).is_empty());
+    }
+
+    #[test]
+    fn a_wait_forgotten_once_the_map_stops_updating_is_never_announced() {
+        let mut transitions = primed_with_busy("s1");
+        let waiting = agent("s1", AgentStatus::Waiting, Some(t0()));
+        assert!(
+            transitions
+                .advance([], [("sutra", &waiting)], t0())
+                .is_empty()
+        );
+        assert!(transitions.has_pending_waits());
+
+        transitions.forget_pending_waits();
+        assert!(!transitions.has_pending_waits());
+        assert!(transitions.lasting_waits(t0() + WAIT_DELAY).is_empty());
     }
 
     #[test]

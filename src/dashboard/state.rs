@@ -22,7 +22,7 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
 use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
-use super::contents::{CardContext, banner, card, footer, list, toolbar};
+use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
 use super::{Action, PrivateFolderSwitch, Settings, WindowContents, format};
@@ -169,10 +169,12 @@ impl State {
         }
     }
 
-    /// The channel of engine `engine` closed, so its map no longer changes.
+    /// The channel of engine `engine` closed, so its map no longer changes. No later map can end
+    /// the waits still to be announced, so none is announced after it may have ended.
     pub(super) fn on_engine_stopped(&mut self, engine: EngineId) {
         if self.sent_by_the_running_engine(engine) {
             self.engine_stopped = true;
+            self.notifier.forget_pending_waits();
         }
     }
 
@@ -234,8 +236,8 @@ impl State {
             self.cleaning.keep_free_floor(),
         );
         WindowContents {
-            title: window_title(waiting),
-            waiting: format::count(waiting),
+            title: heading::title(waiting, self.engine_stopped),
+            dock_badge: heading::dock_badge(waiting, self.engine_stopped),
             toolbar: toolbar::toolbar(
                 listing.as_ref(),
                 &self.arrangement,
@@ -245,6 +247,8 @@ impl State {
                 &self.home,
             ),
             banner: map.and_then(|map| banner::banner(&map.problems, self.sandboxed, &self.home)),
+            // With no map shown, the list says the engine stopped before its first.
+            stopped: (self.engine_stopped && map.is_some()).then(|| heading::STOPPED.to_string()),
             list: list::list(
                 listing.as_ref(),
                 self.arrangement.filter(),
@@ -253,7 +257,7 @@ impl State {
                 self.engine_stopped,
                 &cards,
             ),
-            footer: map.and_then(|map| footer::footer(map, self.engine_stopped, &self.home)),
+            footer: map.and_then(|map| footer::footer(map, &self.home)),
             dialog: self.dialogs.shown(),
             settings: Settings {
                 keep_free: self.cleaning.keep_free_floor(),
@@ -494,13 +498,5 @@ impl State {
         self.watching
             .as_ref()
             .is_some_and(|watching| watching.started(id))
-    }
-}
-
-/// `Sutra · 2 waiting` while agents wait on the user, else `Sutra`.
-fn window_title(waiting: usize) -> String {
-    match waiting {
-        0 => "Sutra".to_string(),
-        n => format!("Sutra \u{00b7} {n} waiting"),
     }
 }

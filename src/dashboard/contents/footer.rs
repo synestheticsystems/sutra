@@ -1,6 +1,6 @@
 //! What shows under the list when there is something to show: how far the first sizing has come,
-//! the warning that a stopped scanner needs a relaunch, the sources whose failure loses only some
-//! folders or some changes, and where to let Sutra into the private folders macOS keeps it out of.
+//! the sources whose failure loses only some folders or some changes, and where to let Sutra into
+//! the private folders macOS keeps it out of.
 
 use std::io;
 use std::path::Path;
@@ -9,13 +9,8 @@ use super::banner::problem_line;
 use crate::dashboard::{Footer, format};
 use crate::map::{PrivateFolder, Snapshot, Source, SourceProblem};
 
-/// The footer under `map`, `None` while there is nothing to say. `engine_stopped` when the
-/// engine's channel closed, so the map no longer updates.
-pub(in crate::dashboard) fn footer(
-    map: &Snapshot,
-    engine_stopped: bool,
-    home: &Path,
-) -> Option<Footer> {
+/// The footer under `map`, `None` while there is nothing to say.
+pub(in crate::dashboard) fn footer(map: &Snapshot, home: &Path) -> Option<Footer> {
     let problems: Vec<String> = map
         .problems
         .iter()
@@ -23,17 +18,14 @@ pub(in crate::dashboard) fn footer(
         .map(|problem| problem_line(problem, home))
         .collect();
     let refused = refused(&map.refused_private_folders);
-    let stopped = engine_stopped.then(|| "Scanner stopped. Quit and relaunch Sutra.".to_string());
     let sizing = map.sizing();
     // Unfinished, some folder is still unsized, so the total is above nought.
     let sizing = (!sizing.is_finished()).then(|| sizing.sized as f32 / sizing.total as f32);
-    let needs_saying =
-        sizing.is_some() || !problems.is_empty() || refused.is_some() || stopped.is_some();
+    let needs_saying = sizing.is_some() || !problems.is_empty() || refused.is_some();
     needs_saying.then_some(Footer {
         sizing,
         problems,
         refused,
-        stopped,
     })
 }
 
@@ -85,25 +77,18 @@ mod tests {
     }
 
     #[test]
-    fn the_footer_shows_while_sizing_runs_or_the_scanner_stopped_and_not_otherwise() {
+    fn the_footer_shows_while_sizing_runs_and_not_once_everything_is_sized() {
         let home = Path::new("/Users/dev");
         let sizing = snapshot_of(vec![crate::map::Project {
             artifacts: vec![cargo_target("/code/app/target", Measurement::Measuring)],
             own_files: measured(10),
             ..project_at("/code/app")
         }]);
-        let shown = footer(&sizing, false, home).unwrap();
+        let shown = footer(&sizing, home).unwrap();
         assert_eq!(shown.sizing, Some(0.5));
-        assert_eq!(shown.stopped, None);
 
         let sized = snapshot_of(Vec::new());
-        assert_eq!(footer(&sized, false, home), None);
-        let stopped = footer(&sized, true, home).unwrap();
-        assert_eq!(
-            stopped.stopped.as_deref(),
-            Some("Scanner stopped. Quit and relaunch Sutra.")
-        );
-        assert_eq!(stopped.sizing, None);
+        assert_eq!(footer(&sized, home), None);
     }
 
     #[test]
@@ -113,7 +98,7 @@ mod tests {
             refused_private_folders: folders.to_vec(),
             ..snapshot_of(Vec::new())
         };
-        let documents = footer(&refusing(&[PrivateFolder::Documents]), false, home).unwrap();
+        let documents = footer(&refusing(&[PrivateFolder::Documents]), home).unwrap();
         assert_eq!(
             documents.refused.as_deref(),
             Some(
@@ -122,11 +107,8 @@ mod tests {
             )
         );
         let two = [PrivateFolder::Desktop, PrivateFolder::Documents];
-        let both = footer(&refusing(&two), false, home)
-            .unwrap()
-            .refused
-            .unwrap();
+        let both = footer(&refusing(&two), home).unwrap().refused.unwrap();
         assert!(both.starts_with("macOS said no to Desktop and Documents. "));
-        assert_eq!(footer(&refusing(&[]), false, home), None);
+        assert_eq!(footer(&refusing(&[]), home), None);
     }
 }
