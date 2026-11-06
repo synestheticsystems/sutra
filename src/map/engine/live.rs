@@ -1,6 +1,8 @@
 //! The engine thread: it owns the map, turns file events and finished measurements into
 //! refreshes, and publishes a snapshot at most every `PUBLISH_INTERVAL` while anything changed.
 
+mod worked;
+
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::ops::ControlFlow;
@@ -12,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
 use notify::{Event, EventKind};
 
+use self::worked::worked_at;
 use super::probe::{self, Probe};
 use super::route::Route;
 use super::sizing::{Job, Measured, Sizing, Urgency};
@@ -256,12 +259,14 @@ impl<'a> Engine<'a> {
                 Route::Rediscover => self.timers.rediscover.mark((), now),
                 Route::Artifact(artifact) => self.timers.artifacts.mark(artifact, now),
                 Route::FileChange(project) => {
-                    self.dirty |= self.state.touch(&project, SystemTime::now());
+                    let readable = self.state.is_readable(&project);
+                    if let Some(at) = worked_at(&event.kind, path, readable, SystemTime::now()) {
+                        self.dirty |= self.state.touch(&project, at);
+                    }
                     // A folder moved in or out may be or hold a build folder. Saving a file also
                     // renames, so a path now holding a file is no reason to look. Looking in a
                     // private folder would raise the privacy prompt.
-                    let moved_folder =
-                        renamed && self.state.is_readable(&project) && !path.is_file();
+                    let moved_folder = renamed && readable && !path.is_file();
                     if folder_appeared_or_vanished || moved_folder {
                         self.timers.layout.mark(project.clone(), now);
                     }

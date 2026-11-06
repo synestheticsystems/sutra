@@ -352,11 +352,15 @@ impl State {
         true
     }
 
-    /// Record a file change in `project` at `at`. Returns whether the project is on the map.
+    /// Record that a file in `project` was worked on at `at`. Returns whether that is news: the
+    /// project is on the map, and nothing seen in it was as late.
     pub(super) fn touch(&mut self, project: &Path, at: SystemTime) -> bool {
         let Some(tracked) = self.projects.get_mut(project) else {
             return false;
         };
+        if tracked.project.last_activity.is_some_and(|last| last >= at) {
+            return false;
+        }
         tracked.observed = Some((at, ActivitySource::FileChange));
         tracked.recompute_activity();
         true

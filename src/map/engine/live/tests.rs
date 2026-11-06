@@ -1,10 +1,10 @@
 use std::io;
 use std::sync::mpsc;
 
-use notify::event::{DataChange, Flag, RenameMode};
+use notify::event::{DataChange, Flag, MetadataKind, RenameMode};
 
 use super::*;
-use crate::map::test_support::{TempDir, commit, git};
+use crate::map::test_support::{TempDir, at, commit, git, set_mtime};
 use crate::map::{ActivitySource, AgentStatus, SourceProblem, agents};
 
 /// A repository at `rel` in `fixture`, with a `target/` Cargo made.
@@ -531,6 +531,61 @@ fn a_lockfile_changed_alone_counts_as_activity_and_has_the_project_walked() {
     );
     let later = Instant::now() + Duration::from_secs(3_600);
     assert_eq!(engine.timers.own_files.take_due(later), [fixture.path("a")]);
+}
+
+#[test]
+fn a_file_icloud_drive_brings_back_leaves_the_activity_where_it_was_and_a_write_moves_it() {
+    let fixture = TempDir::new("live-download");
+    crate_with_target(&fixture, "a");
+    let a = fixture.path("a");
+    commit(&a, "README.md");
+    let committed = at(1_700_000_000);
+    for file in [".git/index", ".git/logs/HEAD"] {
+        set_mtime(&a.join(file), committed);
+    }
+    let readme = a.join("README.md");
+    set_mtime(&readme, at(1_690_000_000));
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_on(&fixture, &snapshots);
+    let activity = |engine: &Engine| {
+        let snapshot = engine.state.snapshot();
+        (
+            snapshot.projects[0].last_activity,
+            snapshot.projects[0].activity_source,
+        )
+    };
+    let as_committed = (Some(committed), Some(ActivitySource::Git));
+    assert_eq!(activity(&engine), as_committed);
+
+    // What FSEvents reports when an app opens the file and iCloud Drive brings it back.
+    let download = [
+        ModifyKind::Data(DataChange::Content),
+        ModifyKind::Metadata(MetadataKind::Extended),
+        ModifyKind::Metadata(MetadataKind::Ownership),
+        ModifyKind::Metadata(MetadataKind::Any),
+    ];
+    for kind in download {
+        engine.on_fs_event(Ok(
+            Event::new(EventKind::Modify(kind)).add_path(readme.clone())
+        ));
+    }
+    assert_eq!(activity(&engine), as_committed);
+
+    fixture.write("a/README.md", "edited");
+    let written = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+    engine.on_fs_event(Ok(Event::new(written).add_path(readme)));
+    let edited = activity(&engine);
+    assert_eq!(edited.1, Some(ActivitySource::FileChange));
+
+    // Another old file brought back after the edit leaves the edit as the latest work.
+    let notes = fixture.write("a/NOTES.md", "evicted long ago");
+    set_mtime(&notes, at(1_690_000_000));
+    for kind in download {
+        engine.on_fs_event(Ok(
+            Event::new(EventKind::Modify(kind)).add_path(notes.clone())
+        ));
+    }
+    assert_eq!(activity(&engine), edited);
 }
 
 #[test]
