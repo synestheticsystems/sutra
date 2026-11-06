@@ -21,7 +21,7 @@ pub use self::rollout::Rollouts;
 use self::rollout::{Rollout, Turn};
 use self::sub_agents::Threads;
 use super::session::SubagentWork;
-use super::{AgentSession, AgentStatus, Harness, Subagent, resolve_cwd, time_from_unix_ms};
+use super::{AgentSession, AgentStatus, Harness, Subagent, resolve_folder, time_from_unix_ms};
 use crate::map::scan::Boundary;
 use crate::map::{Source, SourceProblem};
 
@@ -182,7 +182,7 @@ impl Thread {
             harness: Harness::Codex,
             session_id: self.id,
             pid: None,
-            cwd: resolve_cwd(&self.cwd, boundary),
+            cwd: resolve_folder(&self.cwd, boundary),
             status,
             // Codex never writes an approval request to disk, so a thread blocked on the user
             // reads as busy, then as quiet.
@@ -211,7 +211,10 @@ impl Thread {
         let spawn = self.thread_spawn();
         Subagent {
             id: self.id,
-            cwd: resolve_cwd(&self.cwd, boundary),
+            cwd: resolve_folder(&self.cwd, boundary),
+            // Codex records where a thread's tool calls run only in its rollout, which is read for
+            // its turn events alone.
+            acted_in: Vec::new(),
             name: spawn.nickname,
             // Codex records no task in a few words for a sub-agent, as Claude Code does.
             description: None,

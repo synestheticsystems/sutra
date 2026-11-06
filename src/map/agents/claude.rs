@@ -22,12 +22,14 @@ use serde::Deserialize;
 
 use self::session_files::{session_folder, session_transcript};
 pub use self::session_model::SessionModels;
-#[cfg(test)]
-pub(crate) use self::subagents::write_test_subagent_at_work;
 pub use self::subagents::{Transcripts, is_subagent_transcript};
+#[cfg(test)]
+pub(crate) use self::subagents::{write_test_subagent_acting, write_test_subagent_at_work};
+#[cfg(test)]
+pub(crate) use self::transcript::TestCall;
 use super::session::SubagentWork;
 use super::{
-    AgentSession, AgentStatus, Harness, Loaded, SessionHost, resolve_cwd, time_from_unix_ms,
+    AgentSession, AgentStatus, Harness, Loaded, SessionHost, resolve_folder, time_from_unix_ms,
 };
 use crate::map::scan::Boundary;
 use crate::map::{Source, SourceProblem};
@@ -240,7 +242,7 @@ impl RegistryEntry {
             harness: Harness::ClaudeCode,
             session_id: self.session_id,
             pid: Some(self.pid),
-            cwd: resolve_cwd(&self.cwd, boundary),
+            cwd: resolve_folder(&self.cwd, boundary),
             status,
             waiting_for,
             kind: self.kind,

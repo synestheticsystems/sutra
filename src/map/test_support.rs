@@ -297,11 +297,13 @@ pub(crate) fn agent_session(id: &str, status: AgentStatus) -> AgentSession {
     }
 }
 
-/// A busy subagent `id` working in `/code/app`, its harness recording nothing more of it.
+/// A busy subagent `id` run in `/code/app`, its harness recording nothing more of it, not even
+/// that it acted anywhere.
 pub(crate) fn subagent_at_work(id: &str) -> Subagent {
     Subagent {
         id: id.to_string(),
         cwd: PathBuf::from("/code/app"),
+        acted_in: Vec::new(),
         name: None,
         description: None,
         agent_type: None,

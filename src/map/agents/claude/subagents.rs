@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use self::meta::{Meta, meta_path, read_meta};
 use super::transcript::{Tail, read_tail};
 use crate::map::AgentStatus;
-use crate::map::agents::resolve_cwd;
+use crate::map::agents::resolve_folder;
 use crate::map::agents::session::{Subagent, SubagentWork};
 use crate::map::scan::Boundary;
 use crate::model::{ReadFailure, note_failure};
@@ -110,14 +110,15 @@ impl<'a> Reader<'a> {
     /// What the transcript at `path` says, as `listed` measures it. One with the length and
     /// modification time it had at the last load still says what it said then, because Claude
     /// Code only appends to it, and is not read again. Of one that has grown, the end is read
-    /// again, and a folder the last load read there holds until an entry names another.
+    /// again, and a folder the last load read there holds until an entry names another, as the
+    /// acts it read hold behind those of the calls appended since.
     fn read(&mut self, path: &Path, listed: &Metadata) -> io::Result<Tail> {
         let (len, modified) = (listed.len(), listed.modified().ok());
         let tail = match self.earlier.read.get(path) {
             Some(known) if known.len == len && known.modified == modified => known.tail.clone(),
-            Some(known) if known.len <= len => read_tail(path, len)?.after(&known.tail),
+            Some(known) if known.len <= len => read_tail(path, len, known.len)?.after(&known.tail),
             // Not read before, or shrunk, so no longer the file that was.
-            _ => read_tail(path, len)?,
+            _ => read_tail(path, len, 0)?,
         };
         let reading = Reading {
             len,
@@ -130,13 +131,17 @@ impl<'a> Reader<'a> {
 
     /// The subagent at work whose transcript at `transcript` ends as `tail` says, of a session
     /// Claude Code started in `session_cwd`. Until its transcript names a folder, it is taken to
-    /// work where Claude Code starts a subagent without a worktree of its own: in its session's.
+    /// run where Claude Code starts a subagent without a worktree of its own: in its session's.
     fn subagent(&mut self, transcript: &Path, tail: Tail, session_cwd: &str) -> Subagent {
         let meta = self.meta(transcript);
         let cwd = tail.cwd.as_deref().unwrap_or(session_cwd);
+        let acted_in = tail.acted_in.folders();
         Subagent {
             id: agent_id(transcript),
-            cwd: resolve_cwd(cwd, self.boundary),
+            cwd: resolve_folder(cwd, self.boundary),
+            acted_in: acted_in
+                .map(|folder| resolve_folder(folder, self.boundary))
+                .collect(),
             name: meta.name,
             description: meta.description,
             agent_type: meta.agent_type,
@@ -240,26 +245,57 @@ fn entries(folder: &Path, failures: &mut Vec<ReadFailure>) -> Vec<(PathBuf, Meta
 }
 
 /// Writes the transcript of the subagent `agent` of the session `session_id` started in `cwd`,
-/// under `home`: set to work in `works_in`, it sent a request to the model at `at` and awaits the
-/// reply. Returns its path.
+/// under `home`: Claude Code runs it in `runs_in`, and it sent a request to the model at `at` and
+/// awaits the reply. Returns its path.
 #[cfg(test)]
 pub(crate) fn write_test_subagent_at_work(
     home: &Path,
     cwd: &str,
     session_id: &str,
     agent: &str,
-    works_in: &str,
+    runs_in: &str,
     at: SystemTime,
+) -> PathBuf {
+    let lines = [
+        super::transcript::test_prompt(at, runs_in),
+        super::transcript::test_request(at),
+    ];
+    write_test_subagent(home, cwd, session_id, agent, &lines)
+}
+
+/// Writes the transcript of the subagent `agent` of the session `session_id` started in `cwd`,
+/// under `home`: Claude Code runs it in that folder, where at `at` it made the tool calls `calls`
+/// and then sent a request to the model, whose reply it awaits. Returns its path.
+#[cfg(test)]
+pub(crate) fn write_test_subagent_acting(
+    home: &Path,
+    cwd: &str,
+    session_id: &str,
+    agent: &str,
+    calls: &[super::transcript::TestCall],
+    at: SystemTime,
+) -> PathBuf {
+    let mut lines = vec![super::transcript::test_prompt(at, cwd)];
+    lines.extend(calls.iter().map(|call| call.reply(at)));
+    lines.push(super::transcript::test_request(at));
+    write_test_subagent(home, cwd, session_id, agent, &lines)
+}
+
+/// Writes `lines` as the transcript of the subagent `agent` of the session `session_id` started
+/// in `cwd`, under `home`. Returns its path.
+#[cfg(test)]
+fn write_test_subagent(
+    home: &Path,
+    cwd: &str,
+    session_id: &str,
+    agent: &str,
+    lines: &[String],
 ) -> PathBuf {
     let projects = home.join(".claude").join("projects");
     let folder = projects.join(super::session_files::folder_name(cwd));
     let subagents = folder.join(session_id).join("subagents");
     let path = subagents.join(format!("agent-{agent}.jsonl"));
-    let lines = [
-        super::transcript::test_prompt(at, works_in),
-        super::transcript::test_request(at),
-    ];
-    super::transcript::write_test_transcript(&path, &lines);
+    super::transcript::write_test_transcript(&path, lines);
     path
 }
 
@@ -268,7 +304,7 @@ mod tests {
     use std::time::Duration;
 
     use super::super::transcript::{
-        self, TEST_FOLDER, TEST_MODEL, test_prompt as prompt, test_reply as reply,
+        self, TEST_FOLDER, TEST_MODEL, TestCall, test_prompt as prompt, test_reply as reply,
         test_request as request, timestamp, write_test_transcript,
     };
     use super::meta::write_test_meta;
@@ -462,11 +498,12 @@ mod tests {
         assert_eq!(failures, [(folder, io::ErrorKind::PermissionDenied)]);
     }
 
-    /// Where the subagents of the session `0b1d` work when given a worktree of their own.
+    /// Where Claude Code runs the subagents of the session `0b1d` that it gives a worktree of their
+    /// own.
     const WORKTREE: &str = "/code/app/.claude/worktrees/agent-a1";
 
     #[test]
-    fn a_subagent_at_work_is_named_by_its_meta_file_and_works_where_its_transcript_says() {
+    fn a_subagent_at_work_is_named_by_its_meta_file_and_runs_where_its_transcript_says() {
         let home = TempDir::new("subagents-described");
         let now = SystemTime::now();
         let path = transcript_path(&home, "a1");
@@ -493,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subagent_with_no_meta_file_or_folder_named_works_unnamed_in_its_sessions_folder() {
+    fn a_subagent_with_no_meta_file_or_folder_named_runs_unnamed_in_its_sessions_folder() {
         let home = TempDir::new("subagents-undescribed");
         let now = SystemTime::now();
         write_test_transcript(&transcript_path(&home, "a1"), &[request(now)]);
@@ -511,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_a_subagent_works_in_holds_across_loads_while_its_transcripts_end_names_none() {
+    fn the_folder_a_subagent_runs_in_holds_across_loads_while_its_transcripts_end_names_none() {
         let home = TempDir::new("subagents-folder-held");
         let now = SystemTime::now();
         let path = transcript_path(&home, "a1");
@@ -533,6 +570,47 @@ mod tests {
             folder(&mut Transcripts::default()),
             Path::new(TEST_FOLDER),
             "without the earlier load's reading, only its session's folder is known"
+        );
+    }
+
+    #[test]
+    fn the_folders_a_subagent_acted_in_resolve_and_hold_across_loads_while_its_end_names_none() {
+        let home = TempDir::new("subagents-acted-in-held");
+        let now = SystemTime::now();
+        // Entered by a link to it, as `/tmp` links to `/private/tmp`.
+        let worktree = home.dir("app-wt/fix");
+        let link = home.path("fix");
+        std::os::unix::fs::symlink(&worktree, &link).unwrap();
+        let command = format!("cd {} && cargo test", link.display());
+        let notes = home.dir("notes");
+        let note = notes.join("fix.md");
+        let path = transcript_path(&home, "a1");
+        let mut lines = vec![
+            prompt(now - MINUTE, TEST_FOLDER),
+            TestCall::Command(&command).reply(now - MINUTE),
+            TestCall::Edit(note.to_str().unwrap()).reply(now - MINUTE),
+            request(now - MINUTE),
+        ];
+        write_test_transcript(&path, &lines);
+        let acted_in = |transcripts: &mut Transcripts| {
+            let (work, ..) = described_work(&home, now - 60 * MINUTE, now, transcripts);
+            work.at_work[0].acted_in.clone()
+        };
+        let mut transcripts = Transcripts::default();
+        assert_eq!(
+            acted_in(&mut transcripts),
+            [worktree.clone(), notes.clone()]
+        );
+
+        // Its calls now lie further back than the end read.
+        lines.extend([transcript::test_context_past_the_end_read(), request(now)]);
+        write_test_transcript(&path, &lines);
+
+        assert_eq!(acted_in(&mut transcripts), [worktree, notes]);
+        assert_eq!(
+            acted_in(&mut Transcripts::default()),
+            Vec::<PathBuf>::new(),
+            "without the earlier load's reading, nothing tells where it acted"
         );
     }
 

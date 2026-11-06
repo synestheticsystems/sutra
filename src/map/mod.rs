@@ -101,8 +101,8 @@ pub struct Snapshot {
     pub projects: Vec<Project>,
     /// Agent sessions whose working directory lies in no known project.
     pub unplaced_agents: Vec<AgentSession>,
-    /// Subagents at work in a folder that lies in no known project, whichever session they work
-    /// for, by session.
+    /// Subagents at work outside every known project, which holds none of the folders they may be
+    /// said to work in (see `Subagent::folders`), whichever session they work for, by session.
     pub unplaced_subagents: Vec<SubagentWithParent>,
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.

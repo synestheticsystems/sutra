@@ -1,7 +1,7 @@
 //! An agent session as the map holds it, whichever harness recorded it.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// How long a subagent mid-turn may go without writing and still count as at work. Its files cannot
@@ -47,8 +47,15 @@ pub struct AgentSession {
 pub struct Subagent {
     /// Claude Code's id for the subagent, or the Codex thread's.
     pub id: String,
-    /// The folder it works in, resolved as a session's is (see `resolve_cwd`).
+    /// The folder its harness runs it in, resolved as a session's is (see `resolve_folder`): for
+    /// Claude Code, its worktree when it has one and else its session's folder, which a `cd` in
+    /// its commands does not move; for Codex, its thread's.
     pub cwd: PathBuf,
+    /// The folders it acted in, the most telling first, each resolved as `cwd` is: for Claude
+    /// Code, the last few its `cd`s entered and then the last few holding the files it edited or
+    /// wrote, newest first, as far as its transcript tells them. A Codex sub-agent's calls are not
+    /// read, so it names none.
+    pub acted_in: Vec<PathBuf>,
     /// Its name, and the task it was given in a few words, when its harness records them.
     pub name: Option<String>,
     pub description: Option<String>,
@@ -65,11 +72,27 @@ pub struct Subagent {
     pub last_write: Option<SystemTime>,
 }
 
+impl Subagent {
+    /// The folders it may be said to work in, the most telling first: those it acted in, then the
+    /// one its harness runs it in. The map shows it on the card of the first project holding one
+    /// of them (see `Place::of_subagent`), and outside every project, among the agents working
+    /// elsewhere, beside the folder it works in (see `works_in`).
+    pub fn folders(&self) -> impl Iterator<Item = &Path> {
+        let acted_in = self.acted_in.iter().map(PathBuf::as_path);
+        acted_in.chain([self.cwd.as_path()])
+    }
+
+    /// The folder it works in: the most telling of its `folders`.
+    pub fn works_in(&self) -> &Path {
+        self.acted_in.first().unwrap_or(&self.cwd)
+    }
+}
+
 /// One of a session's subagents at work, with the session it works for, as the map shows it apart
-/// from that session: on the card of the project its folder lies in, or, outside every project,
-/// among the agents working elsewhere (see `State::refresh_agents`). One at work beside its session
-/// is shown there too, rather than counting on its session alone, so that a card's tray holds all
-/// that is at work in its folder, whichever session it works for. The session still counts it.
+/// from that session: on the card of the project it works on, or, outside every project, among
+/// the agents working elsewhere (see `Subagent::folders`). One at work beside its session is shown
+/// there too, rather than counting on its session alone, so that a card's tray holds all that is
+/// at work in its folder, whichever session it works for. The session still counts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentWithParent {
     pub subagent: Subagent,
@@ -308,6 +331,30 @@ mod tests {
 
         let older = session.with_subagent_work(one(false, Some(at(40_000)), now));
         assert_eq!(older.last_activity, Some(at(50_000)), "an older write");
+    }
+
+    #[test]
+    fn a_subagent_works_in_the_first_folder_it_acted_in_and_else_in_the_one_it_runs_in() {
+        fn folders(subagent: &Subagent) -> Vec<&Path> {
+            subagent.folders().collect()
+        }
+        let unacted = subagent_at_work("a1");
+        assert_eq!(unacted.works_in(), Path::new("/code/app"));
+        assert_eq!(folders(&unacted), [Path::new("/code/app")]);
+
+        let acting = Subagent {
+            acted_in: vec![
+                PathBuf::from("/code/app-wt/fix"),
+                PathBuf::from("/code/notes"),
+            ],
+            ..subagent_at_work("a2")
+        };
+        assert_eq!(acting.works_in(), Path::new("/code/app-wt/fix"));
+        assert_eq!(
+            folders(&acting),
+            ["/code/app-wt/fix", "/code/notes", "/code/app"].map(Path::new),
+            "the folder it runs in last"
+        );
     }
 
     #[test]

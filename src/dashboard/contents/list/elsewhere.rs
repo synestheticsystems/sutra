@@ -1,7 +1,9 @@
 //! The lines of the agents working outside every project: one for each session, beside the folder
 //! it works in, and one for each other folder subagents work in, so that no folder has two lines of
-//! subagents. A subagent at work in a session's folder stands at the end of that session's line, as
-//! on a card's tray; the others stand before their folder.
+//! subagents. A subagent stands by the folder it works in (see `Subagent::works_in`): the most
+//! telling it acted in, and else the one its harness runs it in. One at work in a session's folder
+//! stands at the end of that session's line, as on a card's tray; the others stand before their
+//! folder.
 
 use std::path::Path;
 
@@ -22,7 +24,7 @@ pub(super) fn lines(elsewhere: &Elsewhere, cards: &CardContext) -> Vec<Elsewhere
     });
     let mut lines: Vec<Line> = sessions.collect();
     for &working in &elsewhere.subagents {
-        let folder = working.subagent.cwd.as_path();
+        let folder = working.subagent.works_in();
         match lines.iter_mut().find(|line| line.folder == folder) {
             Some(line) => line.subagents.push(working),
             None => lines.push(Line {
@@ -61,6 +63,8 @@ impl Line<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::{agent, now, subagent_in};
@@ -142,6 +146,35 @@ mod tests {
                 line(None, "/tmp/idle/deeper", &["deeper"]),
             ],
             "a folder inside a session's is a folder of its own"
+        );
+    }
+
+    #[test]
+    fn a_subagent_stands_beside_the_folder_it_acted_in_not_the_one_it_runs_in() {
+        let sessions = [agent("/Users/dev/scratch", AgentStatus::Busy)];
+        let acting = |name: &str, acted_in: &str| {
+            let mut working = subagent(name, "/Users/dev/scratch");
+            working.subagent.acted_in = vec![PathBuf::from(acted_in)];
+            working
+        };
+        let subagents = [
+            acting("reviewer", "/tmp/review/repo"),
+            acting("helper", "/Users/dev/scratch/notes"),
+            subagent("triage", "/Users/dev/scratch"),
+            acting("returned", "/Users/dev/scratch"),
+        ];
+
+        assert_eq!(
+            lines_of(&sessions, &subagents),
+            [
+                line(
+                    Some(AgentLook::Working),
+                    "~/scratch",
+                    &["triage", "returned"]
+                ),
+                line(None, "/tmp/review/repo", &["reviewer"]),
+                line(None, "~/scratch/notes", &["helper"]),
+            ]
         );
     }
 

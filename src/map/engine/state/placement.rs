@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::owner;
 use super::tracked::Tracked;
-use crate::map::{AgentSession, SubagentWithParent};
+use crate::map::{AgentSession, Subagent, SubagentWithParent};
 
 /// Where an agent goes on the map: on the card of the project its folder lies in (see `owner`), or,
 /// when that is none, among the agents working elsewhere, beside the folder.
@@ -20,6 +20,19 @@ impl<'a> Place<'a> {
     /// The place of an agent working in `folder`.
     pub(super) fn of(projects: &'a BTreeMap<PathBuf, Tracked>, folder: &'a Path) -> Place<'a> {
         owner(projects, folder).map_or(Place::Elsewhere, Place::Project)
+    }
+
+    /// The place of `subagent`: the project holding the first of its folders that a project
+    /// holds, the most telling first (see `Subagent::folders`). A subagent that acted only outside
+    /// every project, as one reviewing a scratch clone of its session's repository does, stays on
+    /// the card of the project its harness runs it in.
+    pub(super) fn of_subagent(
+        projects: &'a BTreeMap<PathBuf, Tracked>,
+        subagent: &'a Subagent,
+    ) -> Place<'a> {
+        let mut folders = subagent.folders();
+        let project = folders.find_map(|folder| owner(projects, folder));
+        project.map_or(Place::Elsewhere, Place::Project)
     }
 }
 
@@ -73,6 +86,52 @@ mod tests {
             Place::Project(Path::new("/code/app/.claude/worktrees/wt"))
         );
         assert_eq!(place("/tmp/x"), Place::Elsewhere);
+    }
+
+    #[test]
+    fn a_subagent_goes_on_the_card_of_the_first_project_holding_a_folder_it_acted_in_or_runs_in() {
+        let projects = projects(&["/code/app", "/code/app-wt/fix", "/code/notes"]);
+        // Each subagent runs in its session's folder, `/code/app`, and acted in `acted_in`: the
+        // folders its newest `cd`s entered, then those holding the files it last edited.
+        let acting = |acted_in: &[&str]| Subagent {
+            acted_in: acted_in.iter().map(PathBuf::from).collect(),
+            ..subagent_at_work("a1")
+        };
+        let place = |acted_in: &[&str]| {
+            let subagent = acting(acted_in);
+            match Place::of_subagent(&projects, &subagent) {
+                Place::Project(project) => Some(project.to_path_buf()),
+                Place::Elsewhere => None,
+            }
+        };
+        let on = |project: &str| Some(PathBuf::from(project));
+        assert_eq!(
+            place(&["/code/app-wt/fix/src", "/code/notes"]),
+            on("/code/app-wt/fix"),
+            "where it went beats where it last edited, its notes"
+        );
+        assert_eq!(
+            place(&["/tmp/scratch", "/code/app-wt/fix", "/code/notes"]),
+            on("/code/app-wt/fix"),
+            "where it went last lies in no project, so where it went before"
+        );
+        assert_eq!(
+            place(&["/tmp/clone", "/code/notes"]),
+            on("/code/notes"),
+            "where it went lies in no project, so where it edited"
+        );
+        assert_eq!(
+            place(&["/tmp/clone", "/tmp/clone/src"]),
+            on("/code/app"),
+            "both lie in no project, so where it runs"
+        );
+        assert_eq!(place(&[]), on("/code/app"), "it acted nowhere yet");
+
+        let outside = Subagent {
+            cwd: PathBuf::from("/tmp/scratch"),
+            ..acting(&["/tmp/clone"])
+        };
+        assert_eq!(Place::of_subagent(&projects, &outside), Place::Elsewhere);
     }
 
     #[test]

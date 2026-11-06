@@ -269,7 +269,7 @@ impl State {
 
     /// Reload every agent session and place each where it works (see `Place`), and each of its
     /// subagents at work where the subagent works, even beside the session (see
-    /// `SubagentWithParent`). Returns whether anything changed.
+    /// `Place::of_subagent`). Returns whether anything changed.
     pub(super) fn refresh_agents(&mut self) -> bool {
         let loaded = agents::load(&self.home, &self.boundary, &mut self.agent_files);
         let mut changed = self.report_problems(
@@ -288,7 +288,7 @@ impl State {
         sessions.extend(self.sessions_of(&loaded.being_rewritten));
         for session in sessions {
             for subagent in &session.subagents_at_work {
-                let there = match Place::of(&self.projects, &subagent.cwd) {
+                let there = match Place::of_subagent(&self.projects, subagent) {
                     Place::Project(project) => placed.entry(project.to_path_buf()).or_default(),
                     Place::Elsewhere => &mut unplaced,
                 };
@@ -478,6 +478,7 @@ mod tests {
 
     use super::*;
     use crate::map::AgentStatus;
+    use crate::map::agents::TestCall;
     use crate::map::test_support::TempDir;
 
     fn tracked(path: &str) -> Tracked {
@@ -547,9 +548,9 @@ mod tests {
         state
     }
 
-    /// The live, idle session `0b1d` of this process working in `cwd`, under `home`, with a
-    /// subagent at work in each of `subagents`, named after the folder's last part.
-    fn session_with_subagents(home: &TempDir, cwd: &str, subagents: &[&str]) {
+    /// Registers the live, idle session `0b1d` of this process working in `cwd`, under `home`,
+    /// which started ten minutes ago. Returns the moment its subagents write.
+    fn live_session(home: &TempDir, cwd: &str) -> SystemTime {
         let me = std::process::id();
         let now = SystemTime::now();
         let started = now - std::time::Duration::from_secs(600);
@@ -559,22 +560,123 @@ mod tests {
             "startedAt": ms(started), "updatedAt": ms(started),
         });
         home.write(&format!(".claude/sessions/{me}.json"), registry.to_string());
+        now
+    }
+
+    /// The live session `0b1d` working in `cwd`, under `home`, with a subagent at work in each of
+    /// `subagents`, run there and acting nowhere else, named after the folder's last part.
+    fn session_with_subagents(home: &TempDir, cwd: &str, subagents: &[&str]) {
+        let now = live_session(home, cwd);
         for works_in in subagents {
             let agent = Path::new(works_in).file_name().unwrap().to_str().unwrap();
             agents::write_test_subagent_at_work(home.root(), cwd, "0b1d", agent, works_in, now);
         }
     }
 
-    /// The subagents the map shows at `path`, or elsewhere for `None`, by the folder each works in.
-    fn subagents_at(state: &State, path: Option<&str>) -> Vec<PathBuf> {
-        let subagents = match path {
+    /// The live session `0b1d` working in `cwd`, under `home`, with a subagent at work for each of
+    /// `subagents`, by id with the tool calls it made, run in the session's folder.
+    fn session_with_acting_subagents(home: &TempDir, cwd: &str, subagents: &[(&str, &[TestCall])]) {
+        let now = live_session(home, cwd);
+        for (agent, calls) in subagents {
+            agents::write_test_subagent_acting(home.root(), cwd, "0b1d", agent, calls, now);
+        }
+    }
+
+    /// The subagents the map shows at `path`, or elsewhere for `None`.
+    fn shown_at<'a>(state: &'a State, path: Option<&str>) -> &'a [SubagentWithParent] {
+        match path {
             Some(path) => &state.projects[Path::new(path)].project.subagents,
             None => &state.unplaced_subagents,
-        };
-        subagents
-            .iter()
-            .map(|one| one.subagent.cwd.clone())
-            .collect()
+        }
+    }
+
+    /// The subagents the map shows at `path`, or elsewhere for `None`, by the folder Claude Code
+    /// runs each in.
+    fn subagents_at(state: &State, path: Option<&str>) -> Vec<PathBuf> {
+        let subagents = shown_at(state, path).iter();
+        subagents.map(|one| one.subagent.cwd.clone()).collect()
+    }
+
+    /// The subagents the map shows at `path`, or elsewhere for `None`, by id.
+    fn ids_at<'a>(state: &'a State, path: Option<&str>) -> Vec<&'a str> {
+        let subagents = shown_at(state, path).iter();
+        subagents.map(|one| one.subagent.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_subagent_shows_on_the_card_of_the_newest_project_it_entered_else_edited_in_else_runs_in() {
+        let home = TempDir::new("state-subagents-where-they-act");
+        let (seed, polish, notes) = ("/code/app-wt/seed", "/code/app-wt/polish", "/code/notes");
+        use TestCall::{Command, Edit};
+        session_with_acting_subagents(
+            &home,
+            "/code/app",
+            &[
+                (
+                    "seed",
+                    &[
+                        Command("cd /code/app-wt/seed && cargo test"),
+                        Edit("/code/notes/seed.md"),
+                    ],
+                ),
+                (
+                    "side-trip",
+                    &[
+                        Command("cd /code/app-wt/seed && cargo build"),
+                        Command("cd /nonexistent/scratch && ls"),
+                    ],
+                ),
+                (
+                    "unexpanded",
+                    &[
+                        Command("cd /code/app-wt/polish && cargo test"),
+                        Command("cd $WT/fix-2 && git log"),
+                        Edit("/code/notes/polish.md"),
+                    ],
+                ),
+                (
+                    "relative",
+                    &[
+                        Command("cd crates/core && cargo test"),
+                        Edit("/code/notes/core.md"),
+                    ],
+                ),
+                (
+                    "reviewer",
+                    &[
+                        Command("cd /nonexistent/clone && cargo test"),
+                        Edit("/nonexistent/clone/review.md"),
+                    ],
+                ),
+                ("triage", &[]),
+            ],
+        );
+        let mut state = state_with(&home, &["/code/app", seed, polish, notes]);
+
+        assert!(state.refresh_agents());
+
+        assert_eq!(
+            ids_at(&state, Some(seed)),
+            ["seed", "side-trip"],
+            "where each went, past the notes it wrote and the folder in no project it went to"
+        );
+        assert_eq!(
+            ids_at(&state, Some(polish)),
+            ["unexpanded"],
+            "past a cd into a variable, the cd before"
+        );
+        assert_eq!(
+            ids_at(&state, Some(notes)),
+            ["relative"],
+            "a relative cd names no folder, so the file it edited tells"
+        );
+        assert_eq!(
+            ids_at(&state, Some("/code/app")),
+            ["reviewer", "triage"],
+            "acting only outside every project, or nowhere yet, it shows where it runs"
+        );
+        assert_eq!(ids_at(&state, None), [""; 0]);
+        assert!(!state.refresh_agents(), "the same subagents read again");
     }
 
     #[test]

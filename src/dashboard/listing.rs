@@ -67,7 +67,7 @@ impl<'a> Elsewhere<'a> {
         let sessions = snapshot.unplaced_agents.iter();
         let sessions = sessions.filter(|agent| !agent.is_finished_job() && admits(&agent.cwd));
         let subagents = snapshot.unplaced_subagents.iter();
-        let subagents = subagents.filter(|working| admits(&working.subagent.cwd));
+        let subagents = subagents.filter(|working| admits(working.subagent.works_in()));
         let row = Elsewhere {
             sessions: sessions.collect(),
             subagents: subagents.collect(),
@@ -246,7 +246,8 @@ pub(super) mod fixtures {
         }
     }
 
-    /// A subagent at work in `cwd` for an idle session in `/code/app`.
+    /// A subagent at work in `cwd`, run there and acting nowhere else, for an idle session in
+    /// `/code/app`.
     pub(in crate::dashboard) fn subagent_in(cwd: &str) -> SubagentWithParent {
         let subagent = Subagent {
             cwd: PathBuf::from(cwd),
@@ -286,6 +287,8 @@ pub(super) mod fixtures {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::fixtures::{
         agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot, subagent_in,
     };
@@ -388,22 +391,29 @@ mod tests {
 
     #[test]
     fn a_subagent_at_work_in_no_project_makes_the_elsewhere_row_and_a_filter_finds_its_folder() {
+        let mut builder = subagent_in("/tmp/scratch");
+        builder.subagent.acted_in = vec![PathBuf::from("/tmp/build")];
         let map = Snapshot {
-            unplaced_subagents: vec![subagent_in("/tmp/build"), subagent_in("/tmp/other")],
+            unplaced_subagents: vec![builder, subagent_in("/tmp/other")],
             ..snapshot(vec![project("app", 1)], vec![])
         };
         let listing = Listing::new(&map, &Arrangement::default(), now());
         assert_eq!(shown(&listing.rows), ["app", "elsewhere"]);
 
-        let mut filtered = Arrangement::default();
-        filtered.set_filter_text("build".to_string(), Some(&map), now());
-        let listing = Listing::new(&map, &filtered, now());
+        let filtered = |text: &str| {
+            let mut filtered = Arrangement::default();
+            filtered.set_filter_text(text.to_string(), Some(&map), now());
+            filtered
+        };
+        let listing = Listing::new(&map, &filtered("build"), now());
         let [Row::Elsewhere(working)] = listing.rows.as_slice() else {
             panic!("only the agents elsewhere match");
         };
         let subagents = working.subagents.iter();
-        let folders: Vec<&Path> = subagents.map(|one| one.subagent.cwd.as_path()).collect();
-        assert_eq!(folders, [Path::new("/tmp/build")]);
+        let folders: Vec<&Path> = subagents.map(|one| one.subagent.works_in()).collect();
+        assert_eq!(folders, [Path::new("/tmp/build")], "the folder it acted in");
+        let listing = Listing::new(&map, &filtered("scratch"), now());
+        assert_eq!(shown(&listing.rows), [""; 0], "not the one it runs in");
     }
 
     #[test]

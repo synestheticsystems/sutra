@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) use claude::is_subagent_transcript;
 #[cfg(test)]
-pub(crate) use claude::write_test_subagent_at_work;
+pub(crate) use claude::{TestCall, write_test_subagent_acting, write_test_subagent_at_work};
 pub use session::{
     AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };
@@ -58,12 +58,12 @@ pub fn load(home: &Path, boundary: &Boundary, last_read: &mut LastRead) -> Loade
     loaded
 }
 
-/// The canonical form of a recorded working directory, or the path as recorded when it may not or
-/// cannot be resolved. Resolving a folder inside a private folder Sutra stays out of would raise
-/// the privacy prompt, or wait for its answer; a session can outlive its folder (agents delete
-/// worktrees); and inside the sandbox a folder outside the grant cannot be resolved. The recorded
-/// path is then still the best join key.
-fn resolve_cwd(recorded: &str, boundary: &Boundary) -> PathBuf {
+/// The canonical form of a folder an agent's harness records, its working directory or one it
+/// acted in, or the path as recorded when it may not or cannot be resolved. Resolving a folder
+/// inside a private folder Sutra stays out of would raise the privacy prompt, or wait for its
+/// answer; a session can outlive its folder (agents delete worktrees); and inside the sandbox a
+/// folder outside the grant cannot be resolved. The recorded path is then still the best join key.
+fn resolve_folder(recorded: &str, boundary: &Boundary) -> PathBuf {
     let recorded = PathBuf::from(recorded);
     if !boundary.may_read(&recorded) {
         return recorded;
@@ -87,7 +87,7 @@ mod tests {
         let home = TempDir::new("agents-cwd-missing");
         let gone = "/nonexistent/sutra/worktree";
         assert_eq!(
-            resolve_cwd(gone, &home.boundary(&ScanOptions::default())),
+            resolve_folder(gone, &home.boundary(&ScanOptions::default())),
             PathBuf::from(gone)
         );
     }
@@ -97,7 +97,7 @@ mod tests {
         let home = TempDir::new("agents-cwd-canonical");
         let via_dot = home.root().join(".");
         assert_eq!(
-            resolve_cwd(
+            resolve_folder(
                 via_dot.to_str().unwrap(),
                 &home.boundary(&ScanOptions::default())
             ),
@@ -117,9 +117,9 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_cwd(recorded, &home.boundary(&ScanOptions::default())),
+            resolve_folder(recorded, &home.boundary(&ScanOptions::default())),
             PathBuf::from(recorded)
         );
-        assert_eq!(resolve_cwd(recorded, &home.boundary(&desktop)), app);
+        assert_eq!(resolve_folder(recorded, &home.boundary(&desktop)), app);
     }
 }

@@ -1,10 +1,14 @@
 //! Claude Code keeps a transcript of each session and of each subagent, which holds one JSON entry
 //! per line, appended as the agent works: the prompt and tool results handed to the model, each
 //! request sent to it, its replies, and the context recorded around them. Only its end is read: of
-//! a subagent's, what its turn is doing (see `Tail`), and of a session's, the model of its newest
-//! reply (see `newest_model`). The format is undocumented; what is read here was checked against
-//! 2,200 subagent transcripts written by Claude Code 2.1.18 to 2.1.317, and the model on each reply
-//! against the newest 400 subagent transcripts and all 325 session transcripts (2026-11-05).
+//! a subagent's, what its turn is doing and where it works (see `Tail`), and of a session's, the
+//! model of its newest reply (see `newest_model`). The format is undocumented; what is read here
+//! was checked against 2,200 subagent transcripts written by Claude Code 2.1.18 to 2.1.317, the
+//! model on each reply against the newest 400 subagent transcripts and all 325 session
+//! transcripts, and the tool calls that tell where a subagent acts against the 923 subagent
+//! transcripts of the last two weeks (2026-11-05).
+
+mod acted_in;
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -12,6 +16,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+
+use self::acted_in::{ActedIn, ToolInput};
 
 /// How much of a transcript's end is read. The newest entry that tells of a subagent's turn began
 /// within the last 80 KB of each of 2,200 transcripts, and the newest reply of 305 of 313 session
@@ -31,7 +37,8 @@ const TURN_KINDS: [&str; 3] = [
 ];
 
 /// What the end of a subagent's transcript says about it: the newest entry that tells of its turn,
-/// and while the turn goes on, the folder the subagent works in and the model it works with.
+/// and while the turn goes on, the folder Claude Code runs the subagent in, where it acted and the
+/// model it works with.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct Tail {
     pub(super) mid_turn: bool,
@@ -40,12 +47,23 @@ pub(super) struct Tail {
     /// times a week (2026-11-05).
     pub(super) written: Option<SystemTime>,
     /// The working folder the newest entry naming one records, as Claude Code wrote it. Each of
-    /// the subagent's replies and results names its own folder, which is its worktree when it has
-    /// one and follows it wherever it changes directory; a request to the model names none. Only
-    /// a subagent mid-turn is placed by its folder, so only then is it looked for. `None` when no
-    /// entry in the end read names one: in 1,594 of 73,826 moments mid-turn in the transcripts on
-    /// Daniel's Mac (2026-11-05), the newest that did began further back, behind a large result.
+    /// the subagent's prompts, replies and results names the folder Claude Code runs it in: its
+    /// worktree when it has one, and else its session's folder as its turn began. A `cd` in its
+    /// commands does not move it: 860 of the 923 subagent transcripts of the last two weeks on
+    /// Daniel's Mac name one folder throughout, and 633 of those `cd` out of it (2026-11-05), so
+    /// where the subagent acted tells more of where it works (see `acted_in`). A request to the
+    /// model names no folder. Only a subagent mid-turn is placed by its folder, so only then is it
+    /// looked for. `None` when no entry in the end read names one: in 1,594 of 73,826 moments
+    /// mid-turn in the transcripts on Daniel's Mac (2026-11-05), the newest that did began further
+    /// back, behind a large result.
     pub(super) cwd: Option<String>,
+    /// Where the subagent acted, as the newest tool calls in the end read that tell it say. The
+    /// end alone often holds none, as a subagent reads far more than it acts: of the 66,255
+    /// requests that subagents sent after a `cd` in the last two weeks on Daniel's Mac, 11,014
+    /// came more than the end read after the newest one, and of the 35,943 sent after an edit,
+    /// 21,514 did (2026-11-05). So what an earlier load read holds, behind any newer act (see
+    /// `after`). Like the folder, it is looked for only mid-turn.
+    pub(super) acted_in: ActedIn,
     /// The model the newest reply in the end read names, by the id Claude Code records, as
     /// `claude-opus-5-5` reads: the model that ran, where the subagent's meta file holds only the
     /// alias it was asked for. Like the folder, it is looked for only mid-turn. `None` before the
@@ -56,7 +74,7 @@ pub(super) struct Tail {
 impl Tail {
     /// This end of a transcript, read after `earlier`, its end before it grew. Claude Code only
     /// appends, so mid-turn the folder and the model `earlier` named still hold while this end
-    /// names none.
+    /// names none, and the acts it named hold behind those this end names.
     pub(super) fn after(mut self, earlier: &Tail) -> Tail {
         if self.mid_turn {
             if self.cwd.is_none() {
@@ -65,6 +83,7 @@ impl Tail {
             if self.model.is_none() {
                 self.model.clone_from(&earlier.model);
             }
+            self.acted_in = self.acted_in.after(&earlier.acted_in);
         }
         self
     }
@@ -81,37 +100,71 @@ pub(super) fn read_span(path: &Path, from: u64, len: u64) -> io::Result<Vec<u8>>
     Ok(bytes)
 }
 
-/// What the end of the transcript at `path`, `len` bytes long when listed, says.
-pub(super) fn read_tail(path: &Path, len: u64) -> io::Result<Tail> {
-    let bytes = read_span(path, len.saturating_sub(TAIL_BYTES), len)?;
-    Ok(tail_of(&bytes))
+/// What the end of the transcript at `path`, `len` bytes long when listed, says, given that it was
+/// last read when `read_before` bytes long, or never for `0`.
+pub(super) fn read_tail(path: &Path, len: u64, read_before: u64) -> io::Result<Tail> {
+    let from = len.saturating_sub(TAIL_BYTES);
+    let bytes = read_span(path, from, len)?;
+    // The earlier reading was no longer than this one, so it ended at most `TAIL_BYTES` into it.
+    Ok(tail_of(&bytes, read_before.saturating_sub(from) as usize))
 }
 
 /// What the newest entry in `bytes` that tells of the turn says, with, mid-turn, the folder the
-/// newest entry naming one records and the model the newest reply names. The window's first line
-/// may begin partway through an entry, and its last may be one Claude Code is still appending;
-/// neither parses, so neither counts.
-fn tail_of(bytes: &[u8]) -> Tail {
-    let lines = bytes.split(|&byte| byte == b'\n');
-    let mut entries = lines.rev().filter_map(turn_entry);
-    let Some(mut tail) = entries.next() else {
+/// newest entry naming one records, the model the newest reply names, and where the newest tool
+/// calls that tell it acted. The window's first line may begin partway through an entry, and its
+/// last may be one Claude Code is still appending; neither parses, so neither counts.
+///
+/// The calls are looked for only in the lines that a reading of the window's first `read_before`
+/// bytes did not see whole. Claude Code only appends, so that reading found the acts in the lines
+/// before already (see `Tail::after`), or, at rest, none, which a subagent resumed after its turn
+/// ended starts afresh without. A subagent's calls are so few among its entries that looking for
+/// them through the whole window made each read four times as long, on Daniel's Mac (2026-11-06).
+fn tail_of(bytes: &[u8], read_before: usize) -> Tail {
+    let (seen, appended) = bytes.split_at(appended_from(bytes, read_before));
+    let appended = newest_first(appended).map(|line| (line, true));
+    let mut lines = appended.chain(newest_first(seen).map(|line| (line, false)));
+    let newest = lines.find_map(|(line, appended)| Some((turn_entry(line)?, appended)));
+    let Some((mut tail, appended)) = newest else {
         return Tail::default();
     };
     if !tail.mid_turn {
         return Tail {
-            cwd: None,
-            model: None,
-            ..tail
+            mid_turn: false,
+            written: tail.written,
+            ..Tail::default()
         };
     }
-    while tail.cwd.is_none() || tail.model.is_none() {
-        let Some(older) = entries.next() else {
+    if !appended {
+        tail.acted_in = ActedIn::default();
+    }
+    for (line, appended) in lines {
+        let acts_to_find = appended && !tail.acted_in.is_whole();
+        if tail.cwd.is_some() && tail.model.is_some() && !acts_to_find {
             break;
+        }
+        let Some(older) = turn_entry(line) else {
+            continue;
         };
         tail.cwd = tail.cwd.or(older.cwd);
         tail.model = tail.model.or(older.model);
+        if appended {
+            tail.acted_in = tail.acted_in.after(&older.acted_in);
+        }
     }
     tail
+}
+
+/// Where the lines of `bytes` begin that a reading of its first `read_before` bytes did not see
+/// whole: after the last newline among those bytes.
+fn appended_from(bytes: &[u8], read_before: usize) -> usize {
+    let seen = &bytes[..read_before.min(bytes.len())];
+    let newline = seen.iter().rposition(|&byte| byte == b'\n');
+    newline.map_or(0, |newline| newline + 1)
+}
+
+/// The lines of `bytes`, newest first.
+fn newest_first(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    bytes.split(|&byte| byte == b'\n').rev()
 }
 
 /// The model the newest reply among the lines of `bytes` names (see `Tail::model`), or `None` when
@@ -131,12 +184,13 @@ fn turn_entry(line: &[u8]) -> Option<Tail> {
         return None;
     }
     let entry: Entry = serde_json::from_str(line).ok()?;
-    let model = entry.model();
+    let (model, acted_in) = (entry.model(), entry.acted_in());
     Some(Tail {
         mid_turn: entry.mid_turn()?,
         written: entry.timestamp.as_deref().and_then(parse_timestamp),
         cwd: entry.cwd,
         model,
+        acted_in,
     })
 }
 
@@ -179,6 +233,9 @@ struct Block {
     #[serde(rename = "type")]
     kind: String,
     text: Option<String>,
+    /// The tool a `tool_use` block calls, as `Bash` reads, and what the call hands it.
+    name: Option<String>,
+    input: Option<ToolInput>,
 }
 
 impl Entry {
@@ -203,6 +260,16 @@ impl Entry {
         }
         let model = self.message.as_ref()?.model.as_str()?;
         (model != MADE_UP).then(|| model.to_string())
+    }
+
+    /// Where the tool calls this entry makes act, when it is a reply that makes any, newest
+    /// first: a reply's blocks come in the order the model wrote them.
+    fn acted_in(&self) -> ActedIn {
+        let message = self.message.as_ref().filter(|_| self.kind == "assistant");
+        let blocks = message.into_iter().flat_map(Message::blocks).rev();
+        blocks.fold(ActedIn::default(), |newer, block| {
+            newer.after(&block.acted_in())
+        })
     }
 }
 
@@ -236,12 +303,22 @@ impl Message {
         }
     }
 
-    fn blocks(&self) -> impl Iterator<Item = &Block> {
+    fn blocks(&self) -> std::slice::Iter<'_, Block> {
         match &self.content {
             Some(Content::Blocks(blocks)) => blocks.as_slice(),
             Some(Content::Text(_)) | None => &[],
         }
         .iter()
+    }
+}
+
+impl Block {
+    /// Where the tool this block calls acts, when it calls one.
+    fn acted_in(&self) -> ActedIn {
+        match (self.kind.as_str(), &self.name, &self.input) {
+            ("tool_use", Some(tool), Some(input)) => ActedIn::by_call(tool, input),
+            _ => ActedIn::default(),
+        }
     }
 }
 
@@ -392,6 +469,44 @@ pub(super) fn test_reply(at: SystemTime, stop_reason: Option<&str>, block: &str)
     test_entry("assistant", at, serde_json::json!({"message": message}))
 }
 
+/// A reply by `TEST_MODEL` at `at` that calls the tool `tool` with `input`.
+#[cfg(test)]
+fn test_call(at: SystemTime, tool: &str, input: serde_json::Value) -> String {
+    let block =
+        serde_json::json!({"type": "tool_use", "id": "toolu_2", "name": tool, "input": input});
+    let message = serde_json::json!({
+        "role": "assistant", "model": TEST_MODEL, "stop_reason": "tool_use", "content": [block],
+    });
+    test_entry("assistant", at, serde_json::json!({"message": message}))
+}
+
+/// A tool call that tells where the subagent making it acts.
+#[cfg(test)]
+pub(crate) enum TestCall<'a> {
+    /// A shell command it runs, with Claude Code's Bash tool.
+    Command(&'a str),
+    /// A file it changes, with Claude Code's Edit tool.
+    Edit(&'a str),
+}
+
+#[cfg(test)]
+impl TestCall<'_> {
+    /// The reply by `TEST_MODEL` at `at` that makes this call.
+    pub(super) fn reply(&self, at: SystemTime) -> String {
+        let (tool, input) = match self {
+            TestCall::Command(command) => (
+                "Bash",
+                serde_json::json!({"command": command, "description": "Run the tests"}),
+            ),
+            TestCall::Edit(file) => (
+                "Edit",
+                serde_json::json!({"file_path": file, "old_string": "a", "new_string": "b"}),
+            ),
+        };
+        test_call(at, tool, input)
+    }
+}
+
 /// `reply` as Claude Code records it when `model` wrote it, which may be any JSON value.
 #[cfg(test)]
 pub(super) fn test_written_by(reply: String, model: serde_json::Value) -> String {
@@ -447,8 +562,9 @@ mod tests {
         test_entry("attachment", at, json!({"attachment": attachment}))
     }
 
+    /// What a first read of a transcript holding `lines` finds at its end.
     fn tail(lines: &[String]) -> Tail {
-        tail_of((lines.join("\n") + "\n").as_bytes())
+        tail_of((lines.join("\n") + "\n").as_bytes(), 0)
     }
 
     #[test]
@@ -491,12 +607,12 @@ mod tests {
 
         let ended = reply(t, Some("end_turn"), "text");
         let asking = unfinished(request(t));
-        assert!(!tail_of(format!("{ended}\n{asking}").as_bytes()).mid_turn);
+        assert!(!tail_of(format!("{ended}\n{asking}").as_bytes(), 0).mid_turn);
 
         let working = request(t);
         let handing_back = unfinished(result(t, true));
-        assert!(tail_of(format!("{working}\n{handing_back}").as_bytes()).mid_turn);
-        assert_eq!(tail_of(handing_back.as_bytes()), Tail::default());
+        assert!(tail_of(format!("{working}\n{handing_back}").as_bytes(), 0).mid_turn);
+        assert_eq!(tail_of(handing_back.as_bytes(), 0), Tail::default());
     }
 
     #[test]
@@ -511,7 +627,7 @@ mod tests {
         write_test_transcript(&path, &lines);
         let len = std::fs::metadata(&path).unwrap().len();
         assert_eq!(
-            read_tail(&path, len).unwrap(),
+            read_tail(&path, len, 0).unwrap(),
             Tail::default(),
             "the request lies before the window"
         );
@@ -520,18 +636,19 @@ mod tests {
         write_test_transcript(&path, &lines);
         let len = std::fs::metadata(&path).unwrap().len();
         assert_eq!(
-            read_tail(&path, len).unwrap(),
+            read_tail(&path, len, 0).unwrap(),
             Tail {
                 mid_turn: false,
                 written: Some(t),
                 cwd: None,
                 model: None,
+                acted_in: ActedIn::default(),
             }
         );
     }
 
     #[test]
-    fn mid_turn_a_subagent_works_in_the_folder_its_newest_entry_naming_one_records() {
+    fn mid_turn_a_subagent_runs_in_the_folder_its_newest_entry_naming_one_records() {
         let t = at(1_000);
         let worktree = "/code/app/.claude/worktrees/agent-a1";
         let asking = [
@@ -571,11 +688,21 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_and_model_of_a_subagent_whose_turn_has_ended_are_not_looked_for() {
+    fn the_folder_model_and_acts_of_a_subagent_whose_turn_has_ended_are_not_looked_for() {
         let t = at(1_000);
-        let ended = tail(&[prompt(t), reply(t, Some("end_turn"), "text")]);
+        let entered = TestCall::Command("cd /code/site && npm test").reply(t);
+        let mut lines = vec![prompt(t), entered, result(t, false)];
+        assert_ne!(
+            tail(&lines).acted_in,
+            ActedIn::default(),
+            "mid-turn they are"
+        );
+
+        lines.push(reply(t, Some("end_turn"), "text"));
+        let ended = tail(&lines);
         assert!(!ended.mid_turn);
-        assert_eq!((ended.cwd, ended.model), (None, None));
+        assert_eq!((&ended.cwd, &ended.model), (&None, &None));
+        assert_eq!(ended.acted_in, ActedIn::default());
     }
 
     /// The model `TEST_MODEL` names, as a tail holds it.
@@ -650,6 +777,118 @@ mod tests {
 
         let ended = tail(&[reply(t, Some("end_turn"), "text")]);
         assert_eq!(ended.after(&earlier).model, None, "only mid-turn");
+    }
+
+    /// The folders `tail` says its subagent acted in, the most telling first.
+    fn acted_in(tail: &Tail) -> Vec<&str> {
+        tail.acted_in.folders().collect()
+    }
+
+    #[test]
+    fn mid_turn_a_subagent_acted_where_its_newest_cds_and_edits_in_the_end_read_say() {
+        let t = at(1_000);
+        let lines = [
+            prompt(t),
+            TestCall::Command("cd /code/app-wt/fix && cargo build").reply(t),
+            result(t, false),
+            TestCall::Edit("/code/app-wt/fix/src/main.rs").reply(t),
+            result(t, false),
+            TestCall::Command("cd /tmp/scratch && ls").reply(t),
+            result(t, false),
+            TestCall::Edit("/code/notes/fix.md").reply(t),
+            result(t, false),
+            TestCall::Command("cd $WT/fix-2 && git log").reply(t),
+            result(t, false),
+            test_call(t, "Read", json!({"file_path": "/code/site/index.html"})),
+            result(t, false),
+            request(t),
+        ];
+        let working = tail(&lines);
+        assert_eq!(
+            acted_in(&working),
+            [
+                "/tmp/scratch",
+                "/code/app-wt/fix",
+                "/code/notes",
+                "/code/app-wt/fix/src"
+            ],
+            "back past a cd it cannot read and a read, newest first"
+        );
+        let unacted = tail(&[prompt(t), request(t)]);
+        assert_eq!(acted_in(&unacted), [""; 0], "no call yet");
+    }
+
+    #[test]
+    fn mid_turn_the_acts_an_earlier_end_named_hold_behind_those_a_later_end_names() {
+        let t = at(1_000);
+        let earlier = tail(&[
+            TestCall::Command("cd /code/app-wt/fix && cargo build").reply(t),
+            result(t, false),
+            TestCall::Edit("/code/notes/fix.md").reply(t),
+            request(t),
+        ]);
+
+        let behind_a_large_result = tail(&[request(t)]).after(&earlier);
+        let held = acted_in(&behind_a_large_result);
+        assert_eq!(held, ["/code/app-wt/fix", "/code/notes"]);
+
+        let edited = TestCall::Edit("/code/app-wt/fix/src/main.rs").reply(t);
+        let edited_since = tail(&[edited, request(t)]).after(&earlier);
+        let newer = acted_in(&edited_since);
+        assert_eq!(
+            newer,
+            ["/code/app-wt/fix", "/code/app-wt/fix/src", "/code/notes"]
+        );
+
+        let ended = tail(&[reply(t, Some("end_turn"), "text")]).after(&earlier);
+        assert_eq!(acted_in(&ended), [""; 0], "only mid-turn");
+    }
+
+    #[test]
+    fn of_a_transcript_read_before_only_the_calls_appended_since_are_looked_for() {
+        let t = at(1_000);
+        let entered = TestCall::Command("cd /code/app-wt/fix && cargo build").reply(t);
+        let seen = format!("{entered}\n{}\n", result(t, false));
+        let appended = [TestCall::Edit("/code/notes/fix.md").reply(t), request(t)];
+        let bytes = seen.clone() + &appended.join("\n") + "\n";
+        let read_on = |read_before: usize| tail_of(bytes.as_bytes(), read_before);
+
+        let both = ["/code/app-wt/fix", "/code/notes"];
+        assert_eq!(acted_in(&read_on(0)), both, "a first read");
+        assert_eq!(
+            acted_in(&read_on(seen.len())),
+            ["/code/notes"],
+            "the cd lay in what the earlier reading saw, which tells of it"
+        );
+        assert_eq!(
+            acted_in(&read_on(entered.len() - 10)),
+            both,
+            "the earlier reading saw the cd's line only in part"
+        );
+        let nothing_appended = read_on(bytes.len());
+        assert_eq!(acted_in(&nothing_appended), [""; 0]);
+        assert!(nothing_appended.mid_turn);
+        assert_eq!(
+            (nothing_appended.cwd.as_deref(), nothing_appended.model),
+            (Some(TEST_FOLDER), test_model()),
+            "the folder and the model are looked for through the whole end"
+        );
+    }
+
+    #[test]
+    fn a_tool_call_whose_input_is_shaped_oddly_tells_nothing_of_where_but_still_of_the_turn() {
+        let t = at(1_000);
+        let fields = json!({"command": ["cd", "/code/site"], "file_path": {"path": "/code/site"}});
+        for call in [
+            test_call(t, "mcp__docker__run", fields),
+            test_call(t, "Bash", json!({"command": 7})),
+        ] {
+            let tail = tail(std::slice::from_ref(&call));
+            assert!(tail.mid_turn, "{call}");
+            assert_eq!(tail.model, test_model(), "{call}");
+            assert_eq!(tail.cwd.as_deref(), Some(TEST_FOLDER), "{call}");
+            assert_eq!(tail.acted_in, ActedIn::default(), "{call}");
+        }
     }
 
     #[test]
