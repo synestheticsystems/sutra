@@ -38,7 +38,7 @@ struct CardHeader: View {
             .font(.title3.weight(.semibold))
             .lineLimit(1)
             .truncationMode(.middle)
-            .help(card.nameTooltip)
+            .hoverTip(card.nameTooltip)
     }
 
     @ViewBuilder
@@ -52,7 +52,7 @@ struct CardHeader: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
-                .help(branch.tooltip)
+                .hoverTip(branch.tooltip)
         }
     }
 }
@@ -91,7 +91,7 @@ private struct OpenButton: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Open in \(app.name)")
+        .hoverTip("Open in \(app.name)")
         .accessibilityLabel("Open in \(app.name)")
     }
 }

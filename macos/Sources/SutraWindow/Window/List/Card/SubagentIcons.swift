@@ -28,7 +28,7 @@ private struct SubagentIconView: View {
             .foregroundStyle(icon.look.ink)
             .accessibilityLabel(icon.tooltip)
             .opensLink(icon.link)
-            .help(icon.tooltip)
+            .hoverTip(icon.tooltip)
     }
 }
 

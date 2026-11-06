@@ -18,7 +18,7 @@ struct FooterView: View {
                             let problems = footer.problems.joined(separator: "\n")
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .symbolRenderingMode(.multicolor)
-                                .help(problems)
+                                .hoverTip(problems)
                                 .accessibilityLabel(problems)
                         }
                         if let refused = footer.refused {

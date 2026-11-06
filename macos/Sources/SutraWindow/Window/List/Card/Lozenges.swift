@@ -27,7 +27,7 @@ struct AgentLozengeView: View {
         .accessibilityElement(children: .combine)
         .opensLink(lozenge.link)
         .accessibilityValue(lozenge.tooltip)
-        .help(lozenge.tooltip)
+        .hoverTip(lozenge.tooltip)
     }
 }
 
@@ -65,7 +65,7 @@ struct UnitLozengeView: View {
         .accessibilityElement(children: .combine)
         .opensLink(lozenge.link)
         .accessibilityValue(lozenge.tooltip)
-        .help(lozenge.tooltip)
+        .hoverTip(lozenge.tooltip)
     }
 }
 

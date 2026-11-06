@@ -98,7 +98,7 @@ private struct RepositoryGroup: View {
             }
             .font(.callout)
             .foregroundStyle(.secondary)
-            .help(tooltip)
+            .hoverTip(tooltip)
             .padding(.horizontal, 4)
             // A little more room above the line than below, so it reads as its cards' heading.
             .padding(.top, 4)
@@ -163,7 +163,7 @@ private struct QuietProjectsRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(tooltip)
+        .hoverTip(tooltip)
         .accessibilityValue(tooltip)
         .padding(.horizontal, 4)
         .padding(.vertical, 2)

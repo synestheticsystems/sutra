@@ -59,33 +59,21 @@ private struct DiskUseLine: View {
             if let warning = disk.warning {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .symbolRenderingMode(.multicolor)
-                    .help(warning)
+                    .hoverTip(warning)
                     .accessibilityLabel(warning)
             }
             if let total = disk.total {
                 Text(total)
                     .font(.callout.weight(.medium))
-                    .tooltip(disk.totalTooltip)
+                    .hoverTip(disk.totalTooltip)
             }
             ForEach(Array(disk.folders.enumerated()), id: \.offset) { _, folder in
                 Text(folder.label)
                     .font(.callout)
                     // A folder a clean is at work on fades: what it holds is on its way out.
                     .foregroundStyle(folder.cleaning ? .tertiary : .secondary)
-                    .help(folder.tooltip)
+                    .hoverTip(folder.tooltip)
             }
-        }
-    }
-}
-
-extension View {
-    /// `text` as the tooltip, when there is one.
-    @ViewBuilder
-    fileprivate func tooltip(_ text: String?) -> some View {
-        if let text {
-            help(text)
-        } else {
-            self
         }
     }
 }

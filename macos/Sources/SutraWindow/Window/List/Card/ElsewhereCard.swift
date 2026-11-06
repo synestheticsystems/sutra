@@ -56,6 +56,6 @@ private struct Folder: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
-            .help(path)
+            .hoverTip(path)
     }
 }
