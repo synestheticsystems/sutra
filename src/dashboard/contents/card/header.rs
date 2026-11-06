@@ -18,7 +18,9 @@ pub(super) struct Identity {
 /// What `project`'s card goes by, as `naming` says, its last activity read at `last_activity`, the
 /// moment on the user's clock (see `format::timestamp`). Going by its branch, the card needs no
 /// chip, and the name's tooltip gives the branch in full, which the name may cut short, before the
-/// folder. A folder in no repository has no branch, and goes by its name whatever `naming` says.
+/// folder. A folder in no repository has no branch, and goes by its name whatever `naming` says;
+/// so does a worktree on no branch, as two detached at one commit would read the same, and its
+/// chip says where its head is.
 pub(super) fn identity(
     project: &Project,
     naming: Naming,
@@ -27,7 +29,7 @@ pub(super) fn identity(
 ) -> Identity {
     let folder = name_tooltip(project, home, last_activity);
     match (naming, &project.repo) {
-        (Naming::Branch, Some(repo)) => {
+        (Naming::Branch, Some(repo)) if repo.branch.is_some() => {
             let branch = branch(repo);
             Identity {
                 name_tooltip: format!("{branch}\n{folder}"),
@@ -147,6 +149,25 @@ mod tests {
         assert_eq!(
             branch_tooltip(&repo(Some("map-wt"), Some(long), None), home),
             format!("{long}\nLinked worktree map-wt of ~/code/app")
+        );
+    }
+
+    #[test]
+    fn a_nested_worktree_on_no_branch_goes_by_its_folder_with_its_head_on_the_chip() {
+        let home = Path::new(HOME);
+        let detached = |folder: &str| Project {
+            repo: Some(repo(Some(folder), None, Some("01fb326"))),
+            ..project_at(format!("/Users/dev/code/{folder}"))
+        };
+        let astra = identity(&detached("app-pr1-astra"), Naming::Branch, home, None);
+        let opus = identity(&detached("app-pr1-opus"), Naming::Branch, home, None);
+        assert_eq!(
+            (astra.name.as_str(), opus.name.as_str()),
+            ("app-pr1-astra", "app-pr1-opus")
+        );
+        assert_eq!(
+            astra.branch.map(|chip| chip.text).as_deref(),
+            Some("detached 01fb326")
         );
     }
 
