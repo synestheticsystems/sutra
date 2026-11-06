@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::{AgentSession, AwaySubagent, Measurement, PrivateFolder};
+use super::{AgentSession, Measurement, PrivateFolder, SubagentWithParent};
 use crate::model::Environment;
 
 /// One row of the map.
@@ -20,10 +20,9 @@ pub struct Project {
     pub last_activity: Option<SystemTime>,
     pub activity_source: Option<ActivitySource>,
     pub agents: Vec<AgentSession>,
-    /// The subagents at work here for sessions that work in another project or in none, by
-    /// session. A session's subagent at work in the session's own project counts only on the
-    /// session.
-    pub subagents: Vec<AwaySubagent>,
+    /// The subagents at work here, whichever session they work for, by session: those of its own
+    /// sessions, which count them too, and those of sessions that work elsewhere.
+    pub subagents: Vec<SubagentWithParent>,
     /// The merged dev-runner environment, if any.
     pub environment: Option<Environment>,
     pub artifacts: Vec<ArtifactDir>,

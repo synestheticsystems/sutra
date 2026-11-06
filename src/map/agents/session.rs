@@ -34,8 +34,7 @@ pub struct AgentSession {
     pub host: Option<SessionHost>,
     /// The session's subagents at work: Claude Code's subagents, or the threads a Codex thread
     /// spawned, by id. While one is, the session counts as busy unless it waits on the user (see
-    /// `with_subagent_work`). The map also shows each where it works, when that is away from the
-    /// session (see `AwaySubagent`).
+    /// `with_subagent_work`). The map also shows each where it works (see `SubagentWithParent`).
     pub subagents_at_work: Vec<Subagent>,
 }
 
@@ -57,11 +56,13 @@ pub struct Subagent {
     pub last_write: Option<SystemTime>,
 }
 
-/// A session's subagent at work away from the session: in another project than the session's, or,
-/// outside every project, in a folder the session's does not hold. The map shows it there, apart
-/// from the session, which still counts it (see `State::refresh_agents`).
+/// One of a session's subagents at work, with the session it works for, as the map shows it apart
+/// from that session: on the card of the project its folder lies in, or, outside every project,
+/// among the agents working elsewhere (see `State::refresh_agents`). One at work beside its session
+/// is shown there too, rather than counting on its session alone, so that a card's tray holds all
+/// that is at work in its folder, whichever session it works for. The session still counts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AwaySubagent {
+pub struct SubagentWithParent {
     pub subagent: Subagent,
     /// The session it works for.
     pub parent: ParentSession,
@@ -76,10 +77,10 @@ pub struct ParentSession {
     pub host: Option<SessionHost>,
 }
 
-impl AwaySubagent {
-    /// `subagent`, at work away from `session`, the session it works for.
-    pub(crate) fn new(subagent: Subagent, session: &AgentSession) -> AwaySubagent {
-        AwaySubagent {
+impl SubagentWithParent {
+    /// `subagent`, at work for `session`.
+    pub(crate) fn new(subagent: Subagent, session: &AgentSession) -> SubagentWithParent {
+        SubagentWithParent {
             subagent,
             parent: ParentSession {
                 harness: session.harness,
@@ -301,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subagent_away_from_its_session_carries_the_sessions_name_and_host() {
+    fn a_subagent_with_its_parent_carries_the_sessions_name_and_host() {
         let host = SessionHost::ClaudeApp {
             app_session_id: Some("local_2b5d".to_string()),
         };
@@ -311,11 +312,11 @@ mod tests {
             ..agent_session("0b1d", AgentStatus::Idle)
         };
 
-        let away = AwaySubagent::new(subagent_at_work("a1"), &session);
+        let working = SubagentWithParent::new(subagent_at_work("a1"), &session);
 
-        assert_eq!(away.subagent, subagent_at_work("a1"));
+        assert_eq!(working.subagent, subagent_at_work("a1"));
         assert_eq!(
-            away.parent,
+            working.parent,
             ParentSession {
                 harness: Harness::ClaudeCode,
                 session_id: "0b1d".to_string(),

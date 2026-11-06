@@ -20,8 +20,8 @@ use crate::map::devrunner::FolderEnvironments;
 use crate::map::grant::Roots;
 use crate::map::scan::Boundary;
 use crate::map::{
-    ActivitySource, AgentSession, AwaySubagent, FolderAccess, Measurement, Project, RepoInfo,
-    ScanOptions, ScanStats, Snapshot, Source, SourceProblem, agents, devrunner, scan,
+    ActivitySource, AgentSession, FolderAccess, Measurement, Project, RepoInfo, ScanOptions,
+    ScanStats, Snapshot, Source, SourceProblem, SubagentWithParent, agents, devrunner, scan,
 };
 use artifacts::artifact_dirs;
 use placement::{Place, Placed};
@@ -38,7 +38,7 @@ pub(super) struct State {
     boundary: Boundary,
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
-    unplaced_subagents: Vec<AwaySubagent>,
+    unplaced_subagents: Vec<SubagentWithParent>,
     /// What each source reported when it was last read, ordered by source.
     problems: Vec<SourceProblem>,
     /// The folders discovery found publishing state of their own.
@@ -244,7 +244,8 @@ impl State {
     }
 
     /// Reload every agent session and place each where it works (see `Place`), and each of its
-    /// subagents at work away from it where the subagent works. Returns whether anything changed.
+    /// subagents at work where the subagent works, even beside the session (see
+    /// `SubagentWithParent`). Returns whether anything changed.
     pub(super) fn refresh_agents(&mut self) -> bool {
         let loaded = agents::load(&self.home, &self.boundary, &mut self.agent_files);
         let mut changed = self.report_problems(
@@ -261,20 +262,17 @@ impl State {
         let mut sessions = loaded.sessions;
         sessions.extend(self.sessions_of(&loaded.being_rewritten));
         for session in sessions {
-            let place = Place::of(&self.projects, &session.cwd);
-            // A subagent at work in its session's place counts only on the session.
             for subagent in &session.subagents_at_work {
                 let there = match Place::of(&self.projects, &subagent.cwd) {
-                    there if there.lies_in(place) => continue,
                     Place::Project(project) => placed.entry(project.to_path_buf()).or_default(),
-                    Place::Elsewhere(_) => &mut unplaced,
+                    Place::Elsewhere => &mut unplaced,
                 };
-                let away = AwaySubagent::new(subagent.clone(), &session);
-                there.subagents.push(away);
+                let working = SubagentWithParent::new(subagent.clone(), &session);
+                there.subagents.push(working);
             }
-            match place {
+            match Place::of(&self.projects, &session.cwd) {
                 Place::Project(project) => placed.entry(project.to_path_buf()).or_default(),
-                Place::Elsewhere(_) => &mut unplaced,
+                Place::Elsewhere => &mut unplaced,
             }
             .sessions
             .push(session);
@@ -537,19 +535,21 @@ mod tests {
         }
     }
 
-    /// The subagents the map shows away from their session at `path`, or elsewhere for `None`, by
-    /// the folder each works in.
-    fn away_at(state: &State, path: Option<&str>) -> Vec<PathBuf> {
-        let away = match path {
+    /// The subagents the map shows at `path`, or elsewhere for `None`, by the folder each works in.
+    fn subagents_at(state: &State, path: Option<&str>) -> Vec<PathBuf> {
+        let subagents = match path {
             Some(path) => &state.projects[Path::new(path)].project.subagents,
             None => &state.unplaced_subagents,
         };
-        away.iter().map(|away| away.subagent.cwd.clone()).collect()
+        subagents
+            .iter()
+            .map(|one| one.subagent.cwd.clone())
+            .collect()
     }
 
     #[test]
-    fn a_subagent_at_work_away_from_its_sessions_project_shows_where_it_works_and_counts_on_it() {
-        let home = TempDir::new("state-subagents-away");
+    fn each_subagent_at_work_shows_where_it_works_beside_its_session_too_and_counts_on_it() {
+        let home = TempDir::new("state-subagents-where-they-work");
         let worktree = "/code/app/.claude/worktrees/agent-a1";
         let beside = "/code/app/src";
         let outside = "/nonexistent/scratch";
@@ -569,19 +569,22 @@ mod tests {
             "it still counts them all"
         );
         assert_eq!(
-            away_at(&state, Some("/code/app")),
-            Vec::<PathBuf>::new(),
-            "the subagent beside its session counts only on it"
+            subagents_at(&state, Some("/code/app")),
+            [PathBuf::from(beside)],
+            "the subagent beside its session shows there too"
         );
-        assert_eq!(away_at(&state, Some(worktree)), [PathBuf::from(worktree)]);
-        assert_eq!(away_at(&state, None), [PathBuf::from(outside)]);
-        let away = &state.projects[Path::new(worktree)].project.subagents[0];
-        assert_eq!(away.parent.session_id, "0b1d");
+        assert_eq!(
+            subagents_at(&state, Some(worktree)),
+            [PathBuf::from(worktree)]
+        );
+        assert_eq!(subagents_at(&state, None), [PathBuf::from(outside)]);
+        let in_worktree = &state.projects[Path::new(worktree)].project.subagents[0];
+        assert_eq!(in_worktree.parent.session_id, "0b1d");
         assert!(!state.refresh_agents(), "the same subagents read again");
     }
 
     #[test]
-    fn a_subagent_of_a_session_elsewhere_shows_away_from_it_unless_inside_its_sessions_folder() {
+    fn a_subagent_of_a_session_elsewhere_shows_where_it_works_inside_its_sessions_folder_or_not() {
         let home = TempDir::new("state-subagents-elsewhere");
         let session = "/nonexistent/scratch";
         let inside = "/nonexistent/scratch/deeper";
@@ -593,8 +596,14 @@ mod tests {
         state.refresh_agents();
 
         assert_eq!(state.unplaced_agents.len(), 1);
-        assert_eq!(away_at(&state, None), [PathBuf::from(other)]);
-        assert_eq!(away_at(&state, Some("/code/app")), [PathBuf::from(project)]);
+        assert_eq!(
+            subagents_at(&state, None),
+            [PathBuf::from(inside), PathBuf::from(other)]
+        );
+        assert_eq!(
+            subagents_at(&state, Some("/code/app")),
+            [PathBuf::from(project)]
+        );
     }
 
     #[test]

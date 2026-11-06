@@ -1,23 +1,35 @@
-//! A card's disk tray, all on one line, as `32 GB  target/  node_modules/` reads: the folder's whole
-//! size, then the build folders large enough to matter, largest first. Each folder's own size is in
-//! its tooltip, and the ones too small to name are in the total's. Cleaning is in the card's
+//! A card's tray, all on one line: the folder's disk use at its start, and at its end the subagents
+//! at work in the folder. The disk use, as `32 GB  target/  node_modules/` reads, is the folder's
+//! whole size, then the build folders large enough to matter, largest first. Each folder's own size
+//! is in its tooltip, and the ones too small to name are in the total's. Cleaning is in the card's
 //! right-click menu, and a bar along the top of the tray shows how far a clean has come.
 
 use std::cmp::Reverse;
 use std::path::Path;
 
 use crate::dashboard::cleaning::CleanState;
-use crate::dashboard::{Tray, TrayFolder, format};
+use crate::dashboard::{DiskUse, SubagentIcon, Tray, TrayFolder, format};
 use crate::map::{ArtifactDir, FolderAccess, FolderSize, Measurement, Project};
 
-/// What goes on the tray, `None` while nothing about the folder's size is known yet: the bar under
-/// the list shows that sizing is still running. `clean_state` says what a clean means for each
-/// build folder.
+/// The tray of `project`, with `subagents` at its end; `None` while it would hold nothing: no
+/// subagent at work, and nothing about the folder's size known yet, which the bar under the list
+/// shows is still being worked out. `clean_state` says what a clean means for each build folder.
 pub(super) fn tray(
     project: &Project,
+    subagents: Vec<SubagentIcon>,
     clean_state: impl Fn(&ArtifactDir) -> Option<CleanState>,
     home: &Path,
 ) -> Option<Tray> {
+    let disk = disk_use(project, clean_state, home);
+    (disk.is_some() || !subagents.is_empty()).then_some(Tray { disk, subagents })
+}
+
+/// The folder's disk use, `None` while nothing about its size is known yet.
+fn disk_use(
+    project: &Project,
+    clean_state: impl Fn(&ArtifactDir) -> Option<CleanState>,
+    home: &Path,
+) -> Option<DiskUse> {
     // The card already says why a folder that cannot be read has no size.
     if project.access != FolderAccess::Readable {
         return None;
@@ -28,7 +40,7 @@ pub(super) fn tray(
     if total.is_none() && entries.is_empty() && warning.is_none() {
         return None;
     }
-    Some(Tray {
+    Some(DiskUse {
         total: total.map(|total| format::size(total.bytes, total.partial)),
         // The total's tooltip names what it holds besides the folders shown, so it has nothing to
         // say without a total.
@@ -231,6 +243,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::dashboard::{AgentHarness, AgentLook};
     use crate::map::DirUsage;
     use crate::map::test_support::{cargo_target, measured, node_modules, project_at, usage};
 
@@ -244,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tray_shows_the_total_then_the_large_folders_and_marks_the_one_being_cleaned() {
+    fn the_disk_use_is_the_total_then_the_large_folders_and_marks_the_one_being_cleaned() {
         let mut app = project(vec![
             cargo_target("/Users/dev/app/target", measured(12_000_000_000)),
             node_modules("/Users/dev/app/node_modules", measured(2_000_000_000)),
@@ -261,34 +274,72 @@ mod tests {
                 })
         };
 
-        let tray = tray(&app, cleaning_target, Path::new(HOME)).unwrap();
+        let disk = disk_use(&app, cleaning_target, Path::new(HOME)).unwrap();
 
-        assert_eq!(tray.total.as_deref(), Some("12 GB"));
-        assert_eq!(tray.total_tooltip.as_deref(), Some("ui/node_modules/ 5 MB"));
-        assert_eq!(tray.warning, None);
-        let folders: Vec<(&str, bool)> = tray
+        assert_eq!(disk.total.as_deref(), Some("12 GB"));
+        assert_eq!(disk.total_tooltip.as_deref(), Some("ui/node_modules/ 5 MB"));
+        assert_eq!(disk.warning, None);
+        let folders: Vec<(&str, bool)> = disk
             .folders
             .iter()
             .map(|folder| (folder.label.as_str(), folder.cleaning))
             .collect();
         assert_eq!(folders, [("target/", true), ("node_modules/", false)]);
-        assert_eq!(tray.folders[0].tooltip, "9 GB\n~/app/target");
-        assert_eq!(tray.progress, Some(0.25));
+        assert_eq!(disk.folders[0].tooltip, "9 GB\n~/app/target");
+        assert_eq!(disk.progress, Some(0.25));
     }
 
-    #[test]
-    fn a_folder_that_cannot_be_read_or_has_nothing_sized_yet_has_no_tray() {
+    /// A folder whose size is not known yet, and one that cannot be read, though Sutra once
+    /// measured it.
+    fn unsized_and_unreadable() -> [Project; 2] {
         let not_sized = project(vec![cargo_target(
             "/code/app/target",
             Measurement::Measuring,
         )]);
-        assert_eq!(tray(&not_sized, |_| None, Path::new(HOME)), None);
         let denied = Project {
             access: FolderAccess::Denied,
             own_files: measured(1_000),
             ..project(Vec::new())
         };
-        assert_eq!(tray(&denied, |_| None, Path::new(HOME)), None);
+        [not_sized, denied]
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_or_has_nothing_sized_yet_has_no_tray_while_no_subagent_works() {
+        for project in unsized_and_unreadable() {
+            assert_eq!(tray(&project, Vec::new(), |_| None, Path::new(HOME)), None);
+        }
+    }
+
+    #[test]
+    fn a_subagent_at_work_gives_its_folder_a_tray_whatever_is_known_of_the_folders_size() {
+        let icon = SubagentIcon {
+            harness: AgentHarness::Codex,
+            look: AgentLook::Working,
+            tooltip: "Busy\nfor abc-123".to_string(),
+            link: None,
+        };
+        for project in unsized_and_unreadable() {
+            let tray = tray(&project, vec![icon.clone()], |_| None, Path::new(HOME));
+            assert_eq!(
+                tray,
+                Some(Tray {
+                    disk: None,
+                    subagents: vec![icon.clone()],
+                })
+            );
+        }
+
+        let sized = Project {
+            own_files: measured(5_000_000),
+            ..project(Vec::new())
+        };
+        let tray = tray(&sized, vec![icon.clone()], |_| None, Path::new(HOME)).unwrap();
+        assert_eq!(
+            tray.disk.and_then(|disk| disk.total).as_deref(),
+            Some("5 MB")
+        );
+        assert_eq!(tray.subagents, [icon], "beside the disk use");
     }
 
     #[test]

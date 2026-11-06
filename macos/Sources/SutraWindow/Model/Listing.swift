@@ -18,7 +18,7 @@ public enum Row: Identifiable, Equatable {
     case repository(
         commonDir: String, name: String, tooltip: String, total: String?, cards: [CardModel]
     )
-    case elsewhere(heading: String, agents: [ElsewhereAgent], waiting: Bool)
+    case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
 
     public enum ID: Hashable {
@@ -46,9 +46,9 @@ public enum Row: Identifiable, Equatable {
               .repository(let rhsDir, let rhsName, let rhsTooltip, let rhsTotal, let rhsCards)):
             lhsDir == rhsDir && lhsName == rhsName && lhsTooltip == rhsTooltip
                 && lhsTotal == rhsTotal && lhsCards.elementsEqual(rhsCards, by: ===)
-        case (.elsewhere(let lhsHeading, let lhsAgents, let lhsWaiting),
-              .elsewhere(let rhsHeading, let rhsAgents, let rhsWaiting)):
-            lhsHeading == rhsHeading && lhsAgents == rhsAgents && lhsWaiting == rhsWaiting
+        case (.elsewhere(let lhsHeading, let lhsLines, let lhsWaiting),
+              .elsewhere(let rhsHeading, let rhsLines, let rhsWaiting)):
+            lhsHeading == rhsHeading && lhsLines == rhsLines && lhsWaiting == rhsWaiting
         case (.quietProjects(let lhsOpen, let lhsLabel, let lhsTooltip),
               .quietProjects(let rhsOpen, let rhsLabel, let rhsTooltip)):
             lhsOpen == rhsOpen && lhsLabel == rhsLabel && lhsTooltip == rhsTooltip
@@ -114,8 +114,8 @@ struct CardModels {
                         commonDir: commonDir, name: name, tooltip: tooltip, total: total,
                         cards: cards.map(model(of:))
                     )
-                case .elsewhere(let heading, let agents, let waiting):
-                    return .elsewhere(heading: heading, agents: agents, waiting: waiting)
+                case .elsewhere(let heading, let lines, let waiting):
+                    return .elsewhere(heading: heading, lines: lines, waiting: waiting)
                 case .quietProjects(_, let open, let label, let tooltip):
                     return .quietProjects(open: open, label: label, tooltip: tooltip)
                 }

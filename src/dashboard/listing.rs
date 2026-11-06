@@ -20,7 +20,7 @@ use std::time::SystemTime;
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
 use self::repository::Group;
-use crate::map::{AgentSession, AwaySubagent, Project, Snapshot};
+use crate::map::{AgentSession, Project, Snapshot, SubagentWithParent};
 
 /// One row of the list.
 pub(super) enum Row<'a> {
@@ -59,10 +59,10 @@ impl<'a> Cards<'a> {
 }
 
 /// The agents working outside every project that have something to show: the sessions, but for
-/// jobs that have finished, and the subagents at work away from theirs.
+/// jobs that have finished, and the subagents at work there.
 pub(super) struct Elsewhere<'a> {
     pub(super) sessions: Vec<&'a AgentSession>,
-    pub(super) subagents: Vec<&'a AwaySubagent>,
+    pub(super) subagents: Vec<&'a SubagentWithParent>,
 }
 
 impl<'a> Elsewhere<'a> {
@@ -71,7 +71,7 @@ impl<'a> Elsewhere<'a> {
         let sessions = snapshot.unplaced_agents.iter();
         let sessions = sessions.filter(|agent| !agent.is_finished_job() && admits(&agent.cwd));
         let subagents = snapshot.unplaced_subagents.iter();
-        let subagents = subagents.filter(|away| admits(&away.subagent.cwd));
+        let subagents = subagents.filter(|working| admits(&working.subagent.cwd));
         let row = Elsewhere {
             sessions: sessions.collect(),
             subagents: subagents.collect(),
@@ -177,7 +177,7 @@ pub(super) mod fixtures {
 
     use crate::map::test_support::{agent_session, at, project_at, snapshot_of, subagent_at_work};
     use crate::map::{
-        AgentSession, AgentStatus, AwaySubagent, Project, RepoInfo, Snapshot, Subagent,
+        AgentSession, AgentStatus, Project, RepoInfo, Snapshot, Subagent, SubagentWithParent,
     };
 
     pub(in crate::dashboard) fn now() -> SystemTime {
@@ -245,12 +245,12 @@ pub(super) mod fixtures {
     }
 
     /// A subagent at work in `cwd` for an idle session in `/code/app`.
-    pub(in crate::dashboard) fn away_subagent(cwd: &str) -> AwaySubagent {
+    pub(in crate::dashboard) fn subagent_in(cwd: &str) -> SubagentWithParent {
         let subagent = Subagent {
             cwd: PathBuf::from(cwd),
             ..subagent_at_work(cwd)
         };
-        AwaySubagent::new(subagent, &agent("/code/app", AgentStatus::Idle))
+        SubagentWithParent::new(subagent, &agent("/code/app", AgentStatus::Idle))
     }
 
     /// A map of `projects`, in the order given, which the engine delivers newest activity first.
@@ -285,7 +285,7 @@ pub(super) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        agent, away_subagent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+        agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot, subagent_in,
     };
     use super::*;
     use crate::dashboard::SortOrder;
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn a_subagent_at_work_in_no_project_makes_the_elsewhere_row_and_a_filter_finds_its_folder() {
         let map = Snapshot {
-            unplaced_subagents: vec![away_subagent("/tmp/build"), away_subagent("/tmp/other")],
+            unplaced_subagents: vec![subagent_in("/tmp/build"), subagent_in("/tmp/other")],
             ..snapshot(vec![project("app", 1)], vec![])
         };
         let listing = Listing::new(&map, &Arrangement::default(), now());
@@ -405,7 +405,7 @@ mod tests {
             panic!("only the agents elsewhere match");
         };
         let subagents = working.subagents.iter();
-        let folders: Vec<&Path> = subagents.map(|away| away.subagent.cwd.as_path()).collect();
+        let folders: Vec<&Path> = subagents.map(|one| one.subagent.cwd.as_path()).collect();
         assert_eq!(folders, [Path::new("/tmp/build")]);
     }
 

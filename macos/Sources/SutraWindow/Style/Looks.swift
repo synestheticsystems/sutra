@@ -42,8 +42,6 @@ struct Hue {
 enum Still {
     static let ink = Color(nsColor: .secondaryLabelColor)
     static let fill = Color(nsColor: .quaternaryLabelColor)
-    /// An outline at rest: a step darker than the fill, as a line covers less than a fill does.
-    static let edge = Color(nsColor: .tertiaryLabelColor)
 }
 
 extension AgentLook {
@@ -61,16 +59,6 @@ extension AgentLook {
         switch self {
         case .waiting: Swell(rhythm: .throb, color: Hue.amber.base, rest: 0.18, peak: 0.38)
         case .working: Swell(rhythm: .pulse, color: Hue.green.base, rest: 0.12, peak: 0.26)
-        case .still: nil
-        }
-    }
-
-    /// How an outlined capsule's edge swells, in the fill's rhythms but stronger, as a line covers
-    /// less than a fill does. `nil` for an agent at rest, whose edge is `Still.edge`.
-    var edgeSwell: Swell? {
-        switch self {
-        case .waiting: Swell(rhythm: .throb, color: Hue.amber.base, rest: 0.5, peak: 1)
-        case .working: Swell(rhythm: .pulse, color: Hue.green.base, rest: 0.45, peak: 0.9)
         case .still: nil
         }
     }

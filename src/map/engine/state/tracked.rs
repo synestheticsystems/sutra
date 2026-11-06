@@ -174,7 +174,7 @@ fn environment_started(env: &Environment) -> Option<SystemTime> {
 mod tests {
     use super::*;
     use crate::map::test_support::{agent_session, at, environment_at, subagent_at_work};
-    use crate::map::{AgentSession, AgentStatus, AwaySubagent, ScanOptions, Subagent};
+    use crate::map::{AgentSession, AgentStatus, ScanOptions, Subagent, SubagentWithParent};
 
     fn tracked() -> Tracked {
         let boundary = Boundary::new(&[], std::path::Path::new("/"), &ScanOptions::default());
@@ -235,7 +235,7 @@ mod tests {
             ..subagent_at_work("a1")
         };
         let session = agent_session("elsewhere", AgentStatus::Idle);
-        project.project.subagents = vec![AwaySubagent::new(subagent, &session)];
+        project.project.subagents = vec![SubagentWithParent::new(subagent, &session)];
 
         project.recompute_activity();
 

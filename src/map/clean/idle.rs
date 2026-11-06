@@ -22,8 +22,7 @@ pub struct IdleFolder<'a> {
 }
 
 /// Whether something is at work in `project` now: an agent, other than a job that has finished, a
-/// subagent at work there for a session elsewhere, as in a worktree of its own, or an environment
-/// whose process lives.
+/// subagent at work there, as in a worktree of its own, or an environment whose process lives.
 fn in_use(project: &Project) -> bool {
     project.agents.iter().any(|agent| !agent.is_finished_job())
         || !project.subagents.is_empty()
@@ -200,7 +199,7 @@ mod tests {
         node_modules, project_at, snapshot_of, subagent_at_work,
     };
     use crate::map::{
-        AgentStatus, AwaySubagent, Harness, Measurement, PrivateFolder, Source, SourceProblem,
+        AgentStatus, Harness, Measurement, PrivateFolder, Source, SourceProblem, SubagentWithParent,
     };
     use std::io;
 
@@ -302,7 +301,7 @@ mod tests {
     fn a_subagent_at_work_for_a_session_elsewhere_keeps_its_worktree_out() {
         let session = agent_session("/code/app", AgentStatus::Idle);
         let map = snapshot_of(vec![Project {
-            subagents: vec![AwaySubagent::new(subagent_at_work("a1"), &session)],
+            subagents: vec![SubagentWithParent::new(subagent_at_work("a1"), &session)],
             ..quiet_project("agent-a1", 9, LARGE)
         }]);
         assert_eq!(names(&map), [""; 0]);

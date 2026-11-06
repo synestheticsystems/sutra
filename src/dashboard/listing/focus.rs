@@ -14,7 +14,7 @@ pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 
 pub(in crate::dashboard) const FOCUS_LARGE_BYTES: u64 = 1 << 30;
 
 /// Whether the project belongs in the focused view. A project is in focus when any of these holds:
-///   - a coding agent has a session in it, or a subagent at work for a session elsewhere;
+///   - a coding agent has a session or a subagent at work in it;
 ///   - a dev-runner environment describes it, from `~/.dev-runner/` or its own `.dev-runner/`;
 ///   - its last activity lies within `FOCUS_RECENT` of `now`;
 ///   - its folder holds at least `FOCUS_LARGE_BYTES` (see `disk_bytes`), so a forgotten folder
@@ -50,7 +50,7 @@ mod tests {
         agent_session, at, cargo_target, environment_at, measured, node_modules, project_at,
         subagent_at_work,
     };
-    use crate::map::{AgentStatus, ArtifactDir, AwaySubagent, Measurement};
+    use crate::map::{AgentStatus, ArtifactDir, Measurement, SubagentWithParent};
 
     fn now() -> SystemTime {
         at(1_000_000_000)
@@ -112,7 +112,7 @@ mod tests {
     fn a_subagent_at_work_for_a_session_elsewhere_brings_a_project_into_focus() {
         let session = agent_session("elsewhere", AgentStatus::Idle);
         let working = Project {
-            subagents: vec![AwaySubagent::new(subagent_at_work("a1"), &session)],
+            subagents: vec![SubagentWithParent::new(subagent_at_work("a1"), &session)],
             ..out_of_focus()
         };
         assert!(in_focus(&working, now()));

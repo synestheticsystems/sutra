@@ -39,7 +39,7 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
     let contents = state.contents(now());
     let tray = card_at(&contents, &fixture.path("app")).tray.clone();
     assert_eq!(
-        tray.and_then(|tray| tray.progress),
+        tray.and_then(|tray| tray.disk?.progress),
         Some(0.0),
         "the card shows it at once"
     );
@@ -66,7 +66,7 @@ fn a_clean_chosen_on_a_folder_whose_name_is_not_text_starts_on_it_and_not_on_one
     let contents = state.contents(now());
     let progress = |project: &Path| {
         let tray = card_at(&contents, project).tray.as_ref();
-        tray.and_then(|tray| tray.progress)
+        tray.and_then(|tray| tray.disk.as_ref()?.progress)
     };
     assert_eq!(progress(&odd), Some(0.0), "the folder the card named");
     assert_eq!(
@@ -117,7 +117,7 @@ fn a_clean_reaching_other_projects_asks_once_and_the_answer_decides_it() {
     let progress = card_at(&contents, &project)
         .tray
         .as_ref()
-        .and_then(|tray| tray.progress);
+        .and_then(|tray| tray.disk.as_ref()?.progress);
     assert_eq!(
         progress,
         Some(0.0),

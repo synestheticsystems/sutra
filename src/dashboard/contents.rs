@@ -150,11 +150,12 @@ pub enum ListRow {
         total: Option<String>,
         cards: Vec<Card>,
     },
-    /// The agents working outside every project, under `heading`, each beside the folder it works
-    /// in: the sessions in the map's order, then the subagents at work away from theirs.
+    /// The agents working outside every project, under `heading`: a line for each session, in the
+    /// map's order, then one for each other folder subagents work in, in the order of the first
+    /// subagent there. No folder has two lines of subagents, and none moves when a status changes.
     Elsewhere {
         heading: String,
-        agents: Vec<ElsewhereAgent>,
+        lines: Vec<ElsewhereLine>,
         /// One of them waits on the user, so the row throbs as a card does.
         waiting: bool,
     },
@@ -188,9 +189,10 @@ pub struct Card {
     /// Why the folder cannot be read, above the agents and units that sources outside it still
     /// show.
     pub unreadable: Option<Unreadable>,
-    /// Its sessions in the map's order, then the subagents at work in it for sessions elsewhere.
+    /// Its sessions, in the map's order.
     pub agents: Vec<AgentLozenge>,
     pub units: Vec<UnitLozenge>,
+    /// The card's tray along its bottom: the folder's disk use, then the subagents at work in it.
     pub tray: Option<Tray>,
     /// An agent in it waits on the user, so the card throbs.
     pub waiting: bool,
@@ -204,30 +206,57 @@ pub struct Chip {
     pub tooltip: String,
 }
 
-/// One agent session, or a subagent at work away from its session, as `(Claude) 4m` reads: the
-/// colour says what it is doing.
+/// One agent session, as `(Claude) 4m` reads: the colour says what it is doing.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct AgentLozenge {
     pub harness: String,
     pub look: AgentLook,
-    /// A subagent's: drawn as an outline in the look's colour, where a session's is filled.
-    pub outlined: bool,
     /// How long it has waited or been quiet, from its first whole minute.
     pub beside: Option<String>,
-    /// Its status in words, and the session's name or id, or the subagent's names and the
-    /// session it works for.
+    /// Its status in words, and the session's name or id.
     pub tooltip: String,
-    /// Opens the session in the app it runs in, on a click; a subagent's opens the session it
-    /// works for.
+    /// Opens the session in the app it runs in, on a click.
     pub link: Option<String>,
 }
 
-/// An agent working outside every project, on the row of those.
+/// A subagent at work, as a small sign of its harness in its look's colour. Where it stands says it
+/// is a subagent, and its tooltip who it is.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct ElsewhereAgent {
-    pub lozenge: AgentLozenge,
-    /// The folder it works in, with `~` for the home folder.
-    pub folder: String,
+pub struct SubagentIcon {
+    pub harness: AgentHarness,
+    pub look: AgentLook,
+    /// Its status in words, which the icon says only in its colour, then on a line of their own its
+    /// name and task, when its harness records them, and the session it works for, as
+    /// `dashboard-fixes · Fix dashboard review findings · for Sutra launch` reads.
+    pub tooltip: String,
+    /// Opens the session it works for in the app that session runs in, on a click.
+    pub link: Option<String>,
+}
+
+/// The harness an agent runs in, which its icon shows by a symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AgentHarness {
+    ClaudeCode,
+    Codex,
+}
+
+/// One line of the agents working outside every project, each with the folder it is about, with
+/// `~` for the home folder.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ElsewhereLine {
+    /// A session beside the folder it works in, as `(Claude) ~/scratch` reads, and at the line's
+    /// end, as on a card's tray, the subagents at work in that same folder.
+    Session {
+        lozenge: AgentLozenge,
+        folder: String,
+        subagents: Vec<SubagentIcon>,
+    },
+    /// The subagents at work in a folder that no session on the row works in: their icons, then
+    /// the folder.
+    Subagents {
+        subagents: Vec<SubagentIcon>,
+        folder: String,
+    },
 }
 
 /// Why a card shows nothing from inside its folder, as `in Desktop, not watched` reads.
@@ -248,9 +277,9 @@ pub enum UnreadableLook {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentLook {
-    /// Waiting on the user: amber, throbbing with its card.
+    /// Waiting on the user: amber, a session's lozenge throbbing with its card.
     Waiting,
-    /// At work: green, pulsing slowly.
+    /// At work: green, a session's lozenge pulsing slowly.
     Working,
     /// Quiet mid-turn, idle, or with no status: grey and still.
     Still,
@@ -284,9 +313,21 @@ pub enum UnitLook {
     Still,
 }
 
-/// The card's disk tray, all on one line, as `32 GB  target/  node_modules/` reads.
+/// The card's tray, all on one line: the folder's disk use at its start, and the subagents at work
+/// in the folder at its end.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Tray {
+    /// The folder's disk use, at the tray's start: `None` for a folder that cannot be read, which
+    /// the card says why of, and while nothing about its size is known yet.
+    pub disk: Option<DiskUse>,
+    /// The subagents at work in the folder, whichever session they work for: by session, each
+    /// session's in its own order, so none moves when its status changes.
+    pub subagents: Vec<SubagentIcon>,
+}
+
+/// The folder's disk use, as `32 GB  target/  node_modules/` reads.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DiskUse {
     /// The folder's whole size, with what a clean has left of the folders it is at work on.
     pub total: Option<String>,
     /// The build folders too small to name, for the total's tooltip.

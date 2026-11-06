@@ -2,8 +2,9 @@ import SutraCore
 import SwiftUI
 
 /// One project's card: its identity, then what is happening in it (why its folder cannot be read,
-/// its agents, its units), and its tray along the bottom. It throbs amber while an agent in it
-/// waits on the user. A right click offers what can be done to the project.
+/// its agents, its units), and its tray along the bottom, with its disk use and the subagents at
+/// work in it. It throbs amber while an agent in it waits on the user. A right click offers what
+/// can be done to the project.
 public struct CardView: View {
     private let model: CardModel
     private let dashboard: DashboardModel

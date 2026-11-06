@@ -4,11 +4,13 @@
 //! disk, then the agents working outside every project, and the row standing for the quiet
 //! projects.
 
+mod elsewhere;
+
 use std::path::PathBuf;
 
 use super::card::{self, CardContext, Naming, agents};
-use crate::dashboard::listing::{Elsewhere, FOCUS_LARGE_BYTES, FOCUS_RECENT, Listing, Row};
-use crate::dashboard::{ElsewhereAgent, List, ListRow, format};
+use crate::dashboard::listing::{FOCUS_LARGE_BYTES, FOCUS_RECENT, Listing, Row};
+use crate::dashboard::{List, ListRow, format};
 use crate::map::grant::GrantError;
 use crate::map::{FolderSize, Project, Snapshot};
 
@@ -63,7 +65,7 @@ fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
         },
         Row::Elsewhere(working) => ListRow::Elsewhere {
             heading: "Elsewhere".to_string(),
-            agents: elsewhere(working, cards),
+            lines: elsewhere::lines(working, cards),
             waiting: agents::any_waiting(working.sessions.iter().copied()),
         },
         Row::QuietProjects { count, shown } => ListRow::QuietProjects {
@@ -87,21 +89,6 @@ fn total_of(worktrees: &[&Project], cards: &CardContext) -> Option<String> {
             partial: total.partial || size.partial,
         })?;
     Some(format::size(total.bytes, total.partial))
-}
-
-/// Agents whose working folder lies in no project, each with that folder: the sessions, then the
-/// subagents at work away from theirs, each in the order the map lists them, which holds whatever
-/// their status.
-fn elsewhere(working: &Elsewhere, cards: &CardContext) -> Vec<ElsewhereAgent> {
-    let sessions = working.sessions.iter().map(|agent| ElsewhereAgent {
-        lozenge: agents::lozenge(agent, cards.now),
-        folder: format::tilde(&agent.cwd, cards.home),
-    });
-    let subagents = working.subagents.iter().map(|away| ElsewhereAgent {
-        lozenge: agents::subagent_lozenge(away, cards.now),
-        folder: format::tilde(&away.subagent.cwd, cards.home),
-    });
-    sessions.chain(subagents).collect()
 }
 
 /// Why the list is empty: the filter admits no project, or the scan found nothing.
@@ -154,9 +141,9 @@ mod tests {
     use crate::dashboard::cleaning::tests::{cleaning, deleted};
     use crate::dashboard::listing::Arrangement;
     use crate::dashboard::listing::fixtures::{
-        agent, away_subagent, linked_worktree, main_worktree, now, project, quiet, snapshot,
+        agent, linked_worktree, main_worktree, now, project, quiet, snapshot, subagent_in,
     };
-    use crate::dashboard::{AgentLook, SortOrder};
+    use crate::dashboard::{AgentLook, ElsewhereLine, SortOrder};
     use crate::map::test_support::{cargo_target, measured, project_at, usage};
     use crate::map::{AgentStatus, DirUsage, Measurement};
     use crate::notifications::Notifier;
@@ -197,7 +184,7 @@ mod tests {
     #[test]
     fn the_rows_are_the_cards_the_agents_elsewhere_with_their_folders_and_the_quiet_row() {
         let map = Snapshot {
-            unplaced_subagents: vec![away_subagent("/Users/dev/build")],
+            unplaced_subagents: vec![subagent_in("/Users/dev/build")],
             ..snapshot(
                 vec![project("recent", 1), quiet("old")],
                 vec![
@@ -213,7 +200,7 @@ mod tests {
             ListRow::Card { card },
             ListRow::Elsewhere {
                 heading,
-                agents,
+                lines,
                 waiting,
             },
             ListRow::QuietProjects {
@@ -225,15 +212,24 @@ mod tests {
         };
         assert_eq!(card.name, "recent");
         assert_eq!(heading, "Elsewhere");
-        let folders: Vec<&str> = agents.iter().map(|agent| agent.folder.as_str()).collect();
+        let looks: Vec<(Option<AgentLook>, &str)> = lines
+            .iter()
+            .map(|line| match line {
+                ElsewhereLine::Session {
+                    lozenge, folder, ..
+                } => (Some(lozenge.look), folder.as_str()),
+                ElsewhereLine::Subagents { folder, .. } => (None, folder.as_str()),
+            })
+            .collect();
         assert_eq!(
-            folders,
-            ["/tmp/idle", "~/scratch", "~/build"],
-            "the sessions in the map's order, whatever their status, then the subagent"
+            looks,
+            [
+                (Some(AgentLook::Still), "/tmp/idle"),
+                (Some(AgentLook::Waiting), "~/scratch"),
+                (None, "~/build"),
+            ],
+            "the sessions in the map's order, whatever their status, then the subagent's folder"
         );
-        assert_eq!(agents[1].lozenge.look, AgentLook::Waiting);
-        let outlined: Vec<bool> = agents.iter().map(|agent| agent.lozenge.outlined).collect();
-        assert_eq!(outlined, [false, false, true]);
         assert!(*waiting, "the row throbs while one waits");
         assert_eq!((*count, *open, label.as_str()), (1, false, "1 quiet"));
     }

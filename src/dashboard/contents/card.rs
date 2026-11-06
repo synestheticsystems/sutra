@@ -1,10 +1,11 @@
 //! One project's card: its identity (name, branch, age), what is happening in it (why its folder
 //! cannot be read, its agents, its environment's units), and, on a tray along the bottom, its disk
-//! use. A right click offers what can be done to it.
+//! use and the subagents at work in it. A right click offers what can be done to it.
 
 pub(super) mod agents;
 mod header;
 mod menu;
+pub(super) mod subagents;
 mod tray;
 mod units;
 
@@ -41,6 +42,7 @@ pub(super) enum Naming {
 pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &CardContext) -> Card {
     let last_activity = project.last_activity.and_then(format::timestamp);
     let identity = header::identity(project, naming, ctx.home, last_activity.as_deref());
+    let icons = subagents::icons(&project.subagents, ctx.now);
     Card {
         path: format::path_text(&project.path),
         location: format::tilde(&project.path, ctx.home),
@@ -49,12 +51,12 @@ pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &Card
         branch: identity.branch,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
-        agents: agents::lozenges(&project.agents, &project.subagents, ctx.now),
+        agents: agents::lozenges(&project.agents, ctx.now),
         units: project
             .environment
             .as_ref()
             .map_or_else(Vec::new, |env| units::lozenges(env, ctx.notifier)),
-        tray: tray::tray(project, |dir| ctx.cleaning.state_of(dir), ctx.home),
+        tray: tray::tray(project, icons, |dir| ctx.cleaning.state_of(dir), ctx.home),
         // Only an agent makes a card throb: a failed unit can stand for a long time without
         // needing the user now.
         waiting: agents::any_waiting(&project.agents),
@@ -96,7 +98,7 @@ fn unreadable(project: &Project, roots: &[PathBuf], sandboxed: bool) -> Option<U
 mod tests {
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
-    use crate::dashboard::listing::fixtures::{agent, now, project, snapshot};
+    use crate::dashboard::listing::fixtures::{agent, now, project, snapshot, subagent_in};
     use crate::map::PrivateFolder;
     use crate::map::test_support::{environment_at, project_at};
     use crate::model::{Environment, UnitStatus};
@@ -178,6 +180,31 @@ mod tests {
             .map(|project| card(project, Naming::Folder, &map, &ctx).waiting)
             .collect();
         assert_eq!(waiting, [true, false, false]);
+    }
+
+    #[test]
+    fn a_cards_sessions_are_its_lozenges_and_every_subagent_at_work_in_it_is_on_its_tray() {
+        let mut app = project("app", 1);
+        app.agents
+            .push(agent("/code/app", crate::map::AgentStatus::Busy));
+        app.subagents = vec![subagent_in("/code/app"), subagent_in("/code/app/src")];
+        let map = snapshot(vec![app], vec![]);
+        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
+        let ctx = CardContext {
+            notifier: &notifier,
+            cleaning: &cleaning,
+            home: Path::new(HOME),
+            now: now(),
+        };
+
+        let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
+
+        let lozenges = card.agents.iter();
+        let harnesses: Vec<&str> = lozenges.map(|lozenge| lozenge.harness.as_str()).collect();
+        assert_eq!(harnesses, ["Claude"], "the session alone");
+        let tray = card.tray.expect("a tray for the subagents at work");
+        assert_eq!(tray.disk, None, "nothing is sized yet");
+        assert_eq!(tray.subagents.len(), 2);
     }
 
     #[test]

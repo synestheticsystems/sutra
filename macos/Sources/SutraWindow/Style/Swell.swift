@@ -36,9 +36,6 @@ struct SwellLayer: NSViewRepresentable {
 enum SwellShape: Equatable {
     /// A lozenge's capsule, its ends as round as its height allows.
     case capsule
-    /// The edge of a lozenge's capsule alone: a line `width` wide just inside the frame, as a
-    /// subagent's lozenge is drawn.
-    case capsuleEdge(width: CGFloat)
     case rectangle(cornerRadius: CGFloat)
     /// A line `width` wide just inside the frame's edge, as a card's edge is drawn.
     case edge(cornerRadius: CGFloat, width: CGFloat)
@@ -110,7 +107,7 @@ final class SwellView: NSView {
 
     private var cornerRadius: CGFloat {
         switch shape {
-        case .capsule, .capsuleEdge: min(bounds.width, bounds.height) / 2
+        case .capsule: min(bounds.width, bounds.height) / 2
         case .rectangle(let radius), .edge(let radius, _): radius
         }
     }
@@ -126,7 +123,7 @@ final class SwellView: NSView {
             case .capsule, .rectangle:
                 swellLayer.backgroundColor = color
                 swellLayer.borderWidth = 0
-            case .capsuleEdge(let width), .edge(_, let width):
+            case .edge(_, let width):
                 swellLayer.backgroundColor = nil
                 swellLayer.borderColor = color
                 swellLayer.borderWidth = width

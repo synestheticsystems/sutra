@@ -61,8 +61,8 @@ private struct Rows: View {
                             name: name, tooltip: tooltip, total: total, cards: cards,
                             dashboard: dashboard
                         )
-                    case .elsewhere(let heading, let agents, let waiting):
-                        ElsewhereCard(heading: heading, agents: agents, waiting: waiting)
+                    case .elsewhere(let heading, let lines, let waiting):
+                        ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
                     case .quietProjects(let open, let label, let tooltip):
                         QuietProjectsRow(open: open, label: label, tooltip: tooltip, dashboard: dashboard)
                     }

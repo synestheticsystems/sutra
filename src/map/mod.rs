@@ -6,7 +6,7 @@
 //!     without ever writing to it (a write would show up in our own file watcher);
 //!   - dev-runner environments, from `~/.dev-runner/` and from the project's own `.dev-runner/`;
 //!   - coding-agent sessions (Claude Code, Codex) whose working directory lies inside the project,
-//!     and the subagents at work inside it for sessions that work elsewhere;
+//!     and the subagents at work inside it, whichever session they work for;
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
@@ -34,7 +34,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 pub use agents::{
-    AgentSession, AgentStatus, AwaySubagent, Harness, ParentSession, SessionHost, Subagent,
+    AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };
 pub use disk::{DirUsage, Measurement};
 pub use project::{
@@ -96,9 +96,9 @@ pub struct Snapshot {
     pub projects: Vec<Project>,
     /// Agent sessions whose working directory lies in no known project.
     pub unplaced_agents: Vec<AgentSession>,
-    /// Subagents at work in a folder that lies in no known project, away from the session they
-    /// work for, by session.
-    pub unplaced_subagents: Vec<AwaySubagent>,
+    /// Subagents at work in a folder that lies in no known project, whichever session they work
+    /// for, by session.
+    pub unplaced_subagents: Vec<SubagentWithParent>,
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.
     pub problems: Vec<SourceProblem>,

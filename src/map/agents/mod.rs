@@ -12,7 +12,7 @@ pub(crate) use claude::is_subagent_transcript;
 #[cfg(test)]
 pub(crate) use claude::write_test_subagent_at_work;
 pub use session::{
-    AgentSession, AgentStatus, AwaySubagent, Harness, ParentSession, SessionHost, Subagent,
+    AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };
 
 use super::SourceProblem;

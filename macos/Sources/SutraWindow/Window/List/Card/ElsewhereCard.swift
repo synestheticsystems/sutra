@@ -1,12 +1,14 @@
 import SutraCore
 import SwiftUI
 
-/// The agents working outside every project, on a card of their own under its heading: a line
-/// each, the agent's lozenge and then the folder it works in, cut in the middle when long and whole
-/// in its tooltip. The card throbs as a project's does while one of them waits on the user.
+/// The agents working outside every project, on a card of their own under its heading, a line for
+/// each: a session's lozenge, then the folder it works in, with the subagents at work in that same
+/// folder at the line's end, as on a card's tray; or the icons of subagents working in a folder no
+/// session there works in, then that folder. A folder is cut in the middle when long, and whole in
+/// its tooltip. The card throbs as a project's does while one of them waits on the user.
 struct ElsewhereCard: View {
     let heading: String
-    let agents: [ElsewhereAgent]
+    let lines: [ElsewhereLine]
     let waiting: Bool
 
     var body: some View {
@@ -14,17 +16,24 @@ struct ElsewhereCard: View {
             Text(heading)
                 .font(.title3.weight(.semibold))
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(agents.enumerated()), id: \.offset) { _, agent in
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    // The folder gives way to the lozenge and the icons, which it never cuts short.
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        // The folder gives way to the lozenge, which it never cuts short.
-                        AgentLozengeView(lozenge: agent.lozenge)
-                            .fixedSize()
-                        Text(agent.folder)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .help(agent.folder)
+                        switch line {
+                        case .session(let lozenge, let folder, let subagents):
+                            AgentLozengeView(lozenge: lozenge)
+                                .fixedSize()
+                            Folder(path: folder)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if !subagents.isEmpty {
+                                SubagentIcons(icons: subagents)
+                                    .fixedSize()
+                            }
+                        case .subagents(let subagents, let folder):
+                            SubagentIcons(icons: subagents)
+                                .fixedSize()
+                            Folder(path: folder)
+                        }
                     }
                 }
             }
@@ -34,5 +43,19 @@ struct ElsewhereCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(1)
         .background { CardSurface(waiting: waiting) }
+    }
+}
+
+/// The folder an agent works in, cut in the middle when long and whole in its tooltip.
+private struct Folder: View {
+    let path: String
+
+    var body: some View {
+        Text(path)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(path)
     }
 }
