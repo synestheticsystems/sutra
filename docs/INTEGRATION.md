@@ -275,7 +275,7 @@ fi
 ```
 
 For a watcher (cargo-watch, esbuild …) put `update_status` calls in
-the watcher's pre/post-build hooks so the unit's lozenge flips amber ↔
+the watcher's pre/post-build hooks so the unit's lozenge flips blue ↔
 green on every rebuild.
 
 #### b. Poll readiness from the side (when it isn't)

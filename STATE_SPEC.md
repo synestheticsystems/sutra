@@ -106,8 +106,8 @@ The state is a lowercase keyword. The optional detail (after `:`) is freeform te
 
 | State      | Meaning | Lozenge | Sound     |
 |------------|---------|---------|-----------|
-| `starting` | Unit is initializing | amber | Submarine |
-| `building` | Unit is compiling/bundling | amber | Submarine |
+| `starting` | Unit is initializing | blue | Submarine |
+| `building` | Unit is compiling/bundling | blue | Submarine |
 | `running`  | Unit process is active | green | Ping      |
 | `ready`    | Unit is serving/accepting connections | green | Ping      |
 | `failed`   | Unit crashed or build failed | red | Basso     |
