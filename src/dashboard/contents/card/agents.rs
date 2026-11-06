@@ -8,7 +8,9 @@ use std::time::SystemTime;
 use crate::dashboard::{AgentLook, AgentLozenge, format};
 use crate::map::{AgentSession, AgentStatus, SessionHost};
 
-/// The lozenges of the sessions that earn one, in `in_order`'s order.
+/// The lozenges of the sessions that earn one, in the order the map lists the sessions. A
+/// session keeps its place for as long as it lasts, so a lozenge never moves when its status
+/// changes: the look already tells which one waits.
 pub(super) fn lozenges(agents: &[AgentSession], now: SystemTime) -> Vec<AgentLozenge> {
     shown(agents)
         .into_iter()
@@ -28,22 +30,10 @@ pub(in crate::dashboard::contents) fn any_waiting<'a>(
 /// The sessions that earn a lozenge. A job that has finished earns none: it still counts as the
 /// project's activity, and nothing comes back to it.
 fn shown(agents: &[AgentSession]) -> Vec<&AgentSession> {
-    in_order(agents.iter().filter(|agent| !agent.is_finished_job()))
-}
-
-/// The sessions as a line lists them: those waiting on the user, then those at work, then those
-/// quiet mid-turn, then those at rest (idle, or with no status); each group in the order given.
-pub(in crate::dashboard::contents) fn in_order<'a>(
-    agents: impl IntoIterator<Item = &'a AgentSession>,
-) -> Vec<&'a AgentSession> {
-    let mut ordered: Vec<&AgentSession> = agents.into_iter().collect();
-    ordered.sort_by_key(|agent| match agent.status {
-        AgentStatus::Waiting => 0,
-        AgentStatus::Busy => 1,
-        AgentStatus::Quiet => 2,
-        AgentStatus::Idle | AgentStatus::Unknown => 3,
-    });
-    ordered
+    agents
+        .iter()
+        .filter(|agent| !agent.is_finished_job())
+        .collect()
 }
 
 /// One session's lozenge at `now`.
@@ -144,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn waiting_sessions_come_first_then_those_at_work_then_those_at_rest() {
+    fn each_session_keeps_its_place_whatever_its_status() {
         let agents = [
             agent_session("idle", AgentStatus::Idle),
             agent_session("busy", AgentStatus::Busy),
@@ -152,11 +142,11 @@ mod tests {
             agent_session("waiting", AgentStatus::Waiting),
             agent_session("quiet", AgentStatus::Quiet),
         ];
-        let ids: Vec<&str> = in_order(&agents)
+        let ids: Vec<&str> = shown(&agents)
             .iter()
             .map(|agent| agent.session_id.as_str())
             .collect();
-        assert_eq!(ids, ["waiting", "busy", "quiet", "idle", "unknown"]);
+        assert_eq!(ids, ["idle", "busy", "unknown", "waiting", "quiet"]);
     }
 
     #[test]

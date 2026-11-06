@@ -63,10 +63,11 @@ fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
     }
 }
 
-/// Agents whose working folder lies in no project, each with that folder, in `in_order`'s order.
+/// Agents whose working folder lies in no project, each with that folder, in the order the map
+/// lists them, which holds whatever their status.
 fn elsewhere(working: &[&AgentSession], cards: &CardContext) -> Vec<ElsewhereAgent> {
-    agents::in_order(working.iter().copied())
-        .into_iter()
+    working
+        .iter()
         .map(|agent| ElsewhereAgent {
             lozenge: agents::lozenge(agent, cards.now),
             folder: format::tilde(&agent.cwd, cards.home),
@@ -179,8 +180,12 @@ mod tests {
         assert_eq!(card.name, "recent");
         assert_eq!(heading, "Elsewhere");
         let folders: Vec<&str> = agents.iter().map(|agent| agent.folder.as_str()).collect();
-        assert_eq!(folders, ["~/scratch", "/tmp/idle"], "the one waiting first");
-        assert_eq!(agents[0].lozenge.look, AgentLook::Waiting);
+        assert_eq!(
+            folders,
+            ["/tmp/idle", "~/scratch"],
+            "in the map's order, whatever their status"
+        );
+        assert_eq!(agents[1].lozenge.look, AgentLook::Waiting);
         assert!(*waiting, "the row throbs while one waits");
         assert_eq!((*count, *open, label.as_str()), (1, false, "1 quiet"));
     }
