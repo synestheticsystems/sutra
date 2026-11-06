@@ -8,6 +8,7 @@ mod tracked;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::mem;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
@@ -392,10 +393,26 @@ fn new_project(
     }
 }
 
-/// The deepest project holding `path`.
-fn owner<'a>(projects: &BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option<&'a Path> {
-    path.ancestors()
+/// The project an agent working in `path` works on: the deepest project holding `path`, or, when
+/// none does, the one project `path` holds. Codex Desktop records a task's folder as the thread's
+/// working directory, one level above the worktree the task checks out in it
+/// (`<task>/work/<repo>`). A folder holding several projects is no one project's.
+fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option<&'a Path> {
+    if let Some(holder) = path
+        .ancestors()
         .find(|folder| projects.contains_key(*folder))
+    {
+        return Some(holder);
+    }
+    // Paths order by component, so the projects inside `path` follow it in a run.
+    let mut held = projects
+        .range::<Path, _>((Bound::Excluded(path), Bound::Unbounded))
+        .map(|(project, _)| project.as_path())
+        .take_while(|project| project.starts_with(path));
+    match (held.next(), held.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
 }
 
 /// A stable order, so a reload that finds the same sessions compares equal.
@@ -443,6 +460,31 @@ mod tests {
             Some(Path::new("/code/app"))
         );
         assert_eq!(owner(&projects, Path::new("/code/other")), None);
+    }
+
+    #[test]
+    fn a_folder_in_no_project_is_the_one_project_s_it_holds_and_none_s_when_it_holds_more() {
+        let projects: BTreeMap<PathBuf, Tracked> = [
+            "/tasks/fix/work/app",
+            "/tasks/pair/work/api",
+            "/tasks/pair/work/web",
+            "/tasks/pair-2/work/app",
+        ]
+        .into_iter()
+        .map(|path| (PathBuf::from(path), tracked(path)))
+        .collect();
+        assert_eq!(
+            owner(&projects, Path::new("/tasks/fix")),
+            Some(Path::new("/tasks/fix/work/app")),
+            "the task folder Codex Desktop records holds one worktree"
+        );
+        assert_eq!(owner(&projects, Path::new("/tasks/pair")), None);
+        assert_eq!(owner(&projects, Path::new("/tasks")), None);
+        assert_eq!(
+            owner(&projects, Path::new("/tasks/pair-2")),
+            Some(Path::new("/tasks/pair-2/work/app")),
+            "a folder whose name begins like another's holds only its own"
+        );
     }
 
     #[test]
