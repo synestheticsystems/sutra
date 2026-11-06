@@ -11,6 +11,17 @@ use std::collections::{HashMap, HashSet};
 
 use super::Thread;
 
+/// What a sub-agent's `source` records of it as Codex spawned it, under `thread_spawn`, read
+/// loosely, so that a field missing or of another type costs only itself.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct ThreadSpawn {
+    /// The name Codex gave it, as `Boyle` reads.
+    pub(super) nickname: Option<String>,
+    /// The role it was spawned in, as `explorer` reads. Codex recorded one for 143 of the 640
+    /// sub-agents on Daniel's Mac, and for none spawned since July (2026-11-05).
+    pub(super) role: Option<String>,
+}
+
 /// Where a thread came from, as its `source` says.
 #[derive(Debug, PartialEq, Eq)]
 enum Origin {
@@ -36,11 +47,17 @@ impl Thread {
         }
     }
 
-    /// The name Codex gave a sub-agent it spawned, as `Boyle` reads, when its source records one.
-    pub(super) fn nickname(&self) -> Option<String> {
-        let source: serde_json::Value = serde_json::from_str(&self.source).ok()?;
-        let nickname = source.pointer("/subagent/thread_spawn/agent_nickname")?;
-        nickname.as_str().map(str::to_string)
+    /// What this thread's source records of how Codex spawned it, which is nothing for a thread
+    /// Codex did not spawn as a sub-agent.
+    pub(super) fn thread_spawn(&self) -> ThreadSpawn {
+        // A source that is not JSON, as a user-facing thread's is, records no spawn.
+        let source: serde_json::Value = serde_json::from_str(&self.source).unwrap_or_default();
+        let spawn = source.pointer("/subagent/thread_spawn");
+        let text = |field: &str| spawn?.get(field)?.as_str().map(str::to_string);
+        ThreadSpawn {
+            nickname: text("agent_nickname"),
+            role: text("agent_role"),
+        }
     }
 }
 
@@ -131,6 +148,7 @@ mod tests {
             cwd: "/code/app".to_string(),
             source: source.to_string(),
             updated_at_ms: 0,
+            model: None,
         }
     }
 
@@ -167,15 +185,39 @@ mod tests {
     }
 
     #[test]
-    fn a_sub_agent_is_named_by_the_nickname_codex_gave_it_and_another_thread_by_none() {
-        let named = thread("t", &spawned_by("app")).nickname();
-        assert_eq!(named.as_deref(), Some("Boyle"));
+    fn a_sub_agent_has_the_nickname_and_role_codex_spawned_it_with_and_another_thread_none() {
+        assert_eq!(
+            thread("t", &spawned_by("app")).thread_spawn(),
+            ThreadSpawn {
+                nickname: Some("Boyle".to_string()),
+                role: Some("explorer".to_string()),
+            }
+        );
+        let unnamed = r#"{"subagent":{"thread_spawn":{"agent_nickname":7,"agent_role":"worker"}}}"#;
+        assert_eq!(
+            thread("t", unnamed).thread_spawn(),
+            ThreadSpawn {
+                nickname: None,
+                role: Some("worker".to_string()),
+            },
+            "a field of another type costs only itself"
+        );
+        let no_role =
+            r#"{"subagent":{"thread_spawn":{"agent_nickname":"Erdos","agent_role":null}}}"#;
+        assert_eq!(
+            thread("t", no_role).thread_spawn(),
+            ThreadSpawn {
+                nickname: Some("Erdos".to_string()),
+                role: None,
+            }
+        );
         for source in [
             "cli",
-            r#"{"subagent":{"thread_spawn":{"parent_thread_id":"app","agent_nickname":7}}}"#,
+            r#"{"subagent":{"other":"guardian"}}"#,
             r#"{"subagent":{"thread_spawn":"#,
         ] {
-            assert_eq!(thread("t", source).nickname(), None, "{source}");
+            let spawn = thread("t", source).thread_spawn();
+            assert_eq!(spawn, ThreadSpawn::default(), "{source}");
         }
     }
 

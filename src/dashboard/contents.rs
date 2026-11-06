@@ -219,7 +219,8 @@ pub struct AgentLozenge {
     pub look: AgentLook,
     /// How long it has waited or been quiet, from its first whole minute.
     pub beside: Option<String>,
-    /// Its status in words, and the session's name or id.
+    /// Its status in words, then on lines of their own the session's name or id and the model it
+    /// works with, when its harness records it, as `claude-opus-5-5` reads.
     pub tooltip: String,
     /// Opens the session in the app it runs in, on a click.
     pub link: Option<String>,
@@ -231,9 +232,11 @@ pub struct AgentLozenge {
 pub struct SubagentIcon {
     pub harness: AgentHarness,
     pub look: AgentLook,
-    /// Its status in words, which the icon says only in its colour, then on a line of their own its
-    /// name and task, when its harness records them, and the session it works for, as
-    /// `dashboard-fixes · Fix dashboard review findings · for Sutra launch` reads.
+    /// Its status in words, which the icon says only in its colour; then on a line of their own its
+    /// name and task, when its harness records them, as `dashboard-fixes · Fix dashboard review
+    /// findings` reads; then what kind of agent it is and the model it works with, when recorded,
+    /// and the session it works for, as `general-purpose · claude-opus-5-5 · for Sutra launch`
+    /// reads.
     pub tooltip: String,
     /// Opens the session it works for in the app that session runs in, on a click.
     pub link: Option<String>,

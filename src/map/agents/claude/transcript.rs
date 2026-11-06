@@ -1,8 +1,10 @@
-//! A subagent's transcript holds one JSON entry per line, appended as the subagent works: the
-//! prompt and tool results handed to the model, each request sent to it, its replies, and the
-//! context recorded around them. Only its end is read. The format is undocumented; what is read
-//! here was checked against 2,200 transcripts written by Claude Code 2.1.18 to 2.1.317
-//! (2026-11-05).
+//! Claude Code keeps a transcript of each session and of each subagent, which holds one JSON entry
+//! per line, appended as the agent works: the prompt and tool results handed to the model, each
+//! request sent to it, its replies, and the context recorded around them. Only its end is read: of
+//! a subagent's, what its turn is doing (see `Tail`), and of a session's, the model of its newest
+//! reply (see `newest_model`). The format is undocumented; what is read here was checked against
+//! 2,200 subagent transcripts written by Claude Code 2.1.18 to 2.1.317, and the model on each reply
+//! against the newest 400 subagent transcripts and all 325 session transcripts (2026-11-05).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -11,10 +13,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-/// How much of a transcript's end is read. The newest entry that tells of the subagent's turn
-/// began within the last 80 KB of each of 2,200 transcripts (2026-11-05); only a tool's result is
-/// likely to be larger.
-const TAIL_BYTES: u64 = 128 * 1024;
+/// How much of a transcript's end is read. The newest entry that tells of a subagent's turn began
+/// within the last 80 KB of each of 2,200 transcripts, and the newest reply of 305 of 313 session
+/// transcripts lay within it (2026-11-05); only a tool's result is likely to be larger.
+pub(super) const TAIL_BYTES: u64 = 128 * 1024;
+
+/// The model Claude Code records on a reply it made up itself, such as the note of an API error,
+/// which no model wrote: on 427 replies in 118 of the 325 session transcripts, and on 17 in the
+/// newest 400 subagent transcripts (2026-11-05).
+const MADE_UP: &str = "<synthetic>";
 
 /// The entry kinds that tell whether the turn goes on, as they appear in a line.
 const TURN_KINDS: [&str; 3] = [
@@ -23,8 +30,8 @@ const TURN_KINDS: [&str; 3] = [
     r#""type":"api-request""#,
 ];
 
-/// What the end of a transcript says about its subagent: the newest entry that tells of its turn,
-/// and while the turn goes on, the folder the subagent works in.
+/// What the end of a subagent's transcript says about it: the newest entry that tells of its turn,
+/// and while the turn goes on, the folder the subagent works in and the model it works with.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct Tail {
     pub(super) mid_turn: bool,
@@ -39,44 +46,80 @@ pub(super) struct Tail {
     /// entry in the end read names one: in 1,594 of 73,826 moments mid-turn in the transcripts on
     /// Daniel's Mac (2026-11-05), the newest that did began further back, behind a large result.
     pub(super) cwd: Option<String>,
+    /// The model the newest reply in the end read names, by the id Claude Code records, as
+    /// `claude-opus-5-5` reads: the model that ran, where the subagent's meta file holds only the
+    /// alias it was asked for. Like the folder, it is looked for only mid-turn. `None` before the
+    /// subagent first replies, and when no reply in the end read names one.
+    pub(super) model: Option<String>,
 }
 
 impl Tail {
     /// This end of a transcript, read after `earlier`, its end before it grew. Claude Code only
-    /// appends, so mid-turn the folder `earlier` named still holds while this end names none.
+    /// appends, so mid-turn the folder and the model `earlier` named still hold while this end
+    /// names none.
     pub(super) fn after(mut self, earlier: &Tail) -> Tail {
-        if self.mid_turn && self.cwd.is_none() {
-            self.cwd.clone_from(&earlier.cwd);
+        if self.mid_turn {
+            if self.cwd.is_none() {
+                self.cwd.clone_from(&earlier.cwd);
+            }
+            if self.model.is_none() {
+                self.model.clone_from(&earlier.model);
+            }
         }
         self
     }
 }
 
+/// The bytes of the transcript at `path` from `from` to `len`, its length when listed.
+pub(super) fn read_span(path: &Path, from: u64, len: u64) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    // Claude Code may append while this reads; the limit keeps the read to the span measured.
+    let span = len.saturating_sub(from);
+    file.take(span).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 /// What the end of the transcript at `path`, `len` bytes long when listed, says.
 pub(super) fn read_tail(path: &Path, len: u64) -> io::Result<Tail> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))?;
-    let mut bytes = Vec::new();
-    // Claude Code may append while this reads; the limit keeps the read to the window measured.
-    file.take(TAIL_BYTES).read_to_end(&mut bytes)?;
+    let bytes = read_span(path, len.saturating_sub(TAIL_BYTES), len)?;
     Ok(tail_of(&bytes))
 }
 
 /// What the newest entry in `bytes` that tells of the turn says, with, mid-turn, the folder the
-/// newest entry naming one records. The window's first line may begin partway through an entry,
-/// and its last may be one Claude Code is still appending; neither parses, so neither counts.
+/// newest entry naming one records and the model the newest reply names. The window's first line
+/// may begin partway through an entry, and its last may be one Claude Code is still appending;
+/// neither parses, so neither counts.
 fn tail_of(bytes: &[u8]) -> Tail {
     let lines = bytes.split(|&byte| byte == b'\n');
     let mut entries = lines.rev().filter_map(turn_entry);
     let Some(mut tail) = entries.next() else {
         return Tail::default();
     };
-    tail.cwd = if tail.mid_turn {
-        tail.cwd.or_else(|| entries.find_map(|older| older.cwd))
-    } else {
-        None
-    };
+    if !tail.mid_turn {
+        return Tail {
+            cwd: None,
+            model: None,
+            ..tail
+        };
+    }
+    while tail.cwd.is_none() || tail.model.is_none() {
+        let Some(older) = entries.next() else {
+            break;
+        };
+        tail.cwd = tail.cwd.or(older.cwd);
+        tail.model = tail.model.or(older.model);
+    }
     tail
+}
+
+/// The model the newest reply among the lines of `bytes` names (see `Tail::model`), or `None` when
+/// no reply there names one.
+pub(super) fn newest_model(bytes: &[u8]) -> Option<String> {
+    let lines = bytes.split(|&byte| byte == b'\n');
+    let mut entries = lines.rev().filter_map(turn_entry);
+    entries.find_map(|entry| entry.model)
 }
 
 /// What `line` says, when it is an entry that tells of the turn.
@@ -88,15 +131,17 @@ fn turn_entry(line: &[u8]) -> Option<Tail> {
         return None;
     }
     let entry: Entry = serde_json::from_str(line).ok()?;
+    let model = entry.model();
     Some(Tail {
         mid_turn: entry.mid_turn()?,
         written: entry.timestamp.as_deref().and_then(parse_timestamp),
         cwd: entry.cwd,
+        model,
     })
 }
 
-/// One transcript entry, reduced to what tells whether the subagent's turn goes on, and where it
-/// works.
+/// One transcript entry, reduced to what tells whether the agent's turn goes on, where it works,
+/// and the model that wrote a reply.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Entry {
@@ -115,6 +160,10 @@ struct Entry {
 struct Message {
     stop_reason: Option<String>,
     content: Option<Content>,
+    /// Read loosely, as any JSON value, so that one that is not a string costs only the model, not
+    /// what the entry tells of the turn.
+    #[serde(default)]
+    model: serde_json::Value,
 }
 
 /// A message's content: plain text, or a list of blocks.
@@ -145,6 +194,15 @@ impl Entry {
             "user" => Some(!self.message.as_ref()?.is_interruption()),
             _ => None,
         }
+    }
+
+    /// The model that wrote this entry, when it is a reply a model wrote.
+    fn model(&self) -> Option<String> {
+        if self.kind != "assistant" {
+            return None;
+        }
+        let model = self.message.as_ref()?.model.as_str()?;
+        (model != MADE_UP).then(|| model.to_string())
     }
 }
 
@@ -261,12 +319,16 @@ pub(super) fn timestamp(at: SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z")
 }
 
-/// The folder the subagents of the tests' transcripts work in, unless an entry names another.
+/// The folder the agents of the tests' transcripts work in, unless an entry names another.
 #[cfg(test)]
 pub(super) const TEST_FOLDER: &str = "/code/app";
 
+/// The model that writes the replies of the tests' transcripts, unless a test names another.
+#[cfg(test)]
+pub(super) const TEST_MODEL: &str = "claude-opus-5-5";
+
 /// An entry of the kind `kind`, dated `at`, with `fields` beside, shaped as Claude Code writes one:
-/// a prompt, a result or a reply names the folder its subagent works in, `TEST_FOLDER` unless
+/// a prompt, a result or a reply names the folder its agent works in, `TEST_FOLDER` unless
 /// `fields` name another, and a request to the model names none.
 #[cfg(test)]
 fn test_entry(kind: &str, at: SystemTime, fields: serde_json::Value) -> String {
@@ -313,7 +375,8 @@ pub(super) fn test_prompt(at: SystemTime, cwd: &str) -> String {
     )
 }
 
-/// A reply at `at` that stopped for `stop_reason` with one block of the kind `block`.
+/// A reply by `TEST_MODEL` at `at` that stopped for `stop_reason` with one block of the kind
+/// `block`.
 #[cfg(test)]
 pub(super) fn test_reply(at: SystemTime, stop_reason: Option<&str>, block: &str) -> String {
     let block = match block {
@@ -324,9 +387,17 @@ pub(super) fn test_reply(at: SystemTime, stop_reason: Option<&str>, block: &str)
         _ => serde_json::json!({"type": "text", "text": "Done: the report follows."}),
     };
     let message = serde_json::json!({
-        "role": "assistant", "stop_reason": stop_reason, "content": [block],
+        "role": "assistant", "model": TEST_MODEL, "stop_reason": stop_reason, "content": [block],
     });
     test_entry("assistant", at, serde_json::json!({"message": message}))
+}
+
+/// `reply` as Claude Code records it when `model` wrote it, which may be any JSON value.
+#[cfg(test)]
+pub(super) fn test_written_by(reply: String, model: serde_json::Value) -> String {
+    let mut reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    reply["message"]["model"] = model;
+    reply.to_string()
 }
 
 /// Writes a transcript holding `lines`.
@@ -454,6 +525,7 @@ mod tests {
                 mid_turn: false,
                 written: Some(t),
                 cwd: None,
+                model: None,
             }
         );
     }
@@ -499,11 +571,107 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_of_a_subagent_whose_turn_has_ended_is_not_looked_for() {
+    fn the_folder_and_model_of_a_subagent_whose_turn_has_ended_are_not_looked_for() {
         let t = at(1_000);
         let ended = tail(&[prompt(t), reply(t, Some("end_turn"), "text")]);
         assert!(!ended.mid_turn);
-        assert_eq!(ended.cwd, None);
+        assert_eq!((ended.cwd, ended.model), (None, None));
+    }
+
+    /// The model `TEST_MODEL` names, as a tail holds it.
+    fn test_model() -> Option<String> {
+        Some(TEST_MODEL.to_string())
+    }
+
+    /// `reply` with no model recorded on it.
+    fn unattributed(reply: String) -> String {
+        let mut reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        reply["message"].as_object_mut().unwrap().remove("model");
+        reply.to_string()
+    }
+
+    #[test]
+    fn mid_turn_a_subagent_works_with_the_model_its_newest_reply_a_model_wrote_names() {
+        let t = at(1_000);
+        let calling = || reply(t, Some("tool_use"), "tool_use");
+        let asking = [calling(), result(t, false), request(t)];
+        assert_eq!(
+            tail(&asking).model,
+            test_model(),
+            "a request and a result name no model, so the reply before them tells"
+        );
+        let switched = [
+            test_written_by(calling(), json!("claude-sonnet-5-5")),
+            result(t, false),
+            calling(),
+        ];
+        assert_eq!(tail(&switched).model, test_model(), "the newest reply");
+        // An API error ends the turn with a reply Claude Code made up, and a new prompt resumes it.
+        let failed = test_written_by(reply(t, Some("stop_sequence"), "text"), json!(MADE_UP));
+        let resumed = [calling(), result(t, false), failed, prompt(t), request(t)];
+        assert_eq!(
+            tail(&resumed).model,
+            test_model(),
+            "no model wrote the error"
+        );
+        assert_eq!(tail(&[prompt(t), request(t)]).model, None, "no reply yet");
+    }
+
+    #[test]
+    fn a_reply_whose_model_is_missing_or_not_a_string_names_none_and_still_tells_of_the_turn() {
+        let t = at(1_000);
+        let calling = || reply(t, Some("tool_use"), "tool_use");
+        for line in [
+            unattributed(calling()),
+            test_written_by(calling(), json!(null)),
+            test_written_by(calling(), json!(7)),
+            test_written_by(calling(), json!({"id": TEST_MODEL})),
+        ] {
+            let tail = tail(std::slice::from_ref(&line));
+            assert!(tail.mid_turn, "{line}");
+            assert_eq!(tail.model, None, "{line}");
+            assert_eq!(tail.cwd.as_deref(), Some(TEST_FOLDER), "{line}");
+        }
+    }
+
+    #[test]
+    fn mid_turn_the_model_an_earlier_end_named_holds_until_a_later_reply_names_another() {
+        let t = at(1_000);
+        let earlier = tail(&[reply(t, Some("tool_use"), "tool_use"), request(t)]);
+        assert_eq!(earlier.model, test_model());
+
+        let behind_a_large_result = tail(&[request(t)]);
+        assert_eq!(behind_a_large_result.after(&earlier).model, test_model());
+
+        let calling = reply(t, Some("tool_use"), "tool_use");
+        let by_fable = test_written_by(calling, json!("claude-fable-5-1"));
+        let switched = tail(&[by_fable, request(t)]).after(&earlier).model;
+        assert_eq!(switched.as_deref(), Some("claude-fable-5-1"));
+
+        let ended = tail(&[reply(t, Some("end_turn"), "text")]);
+        assert_eq!(ended.after(&earlier).model, None, "only mid-turn");
+    }
+
+    #[test]
+    fn a_sessions_model_is_the_one_its_newest_reply_a_model_wrote_names_whatever_its_turn() {
+        let t = at(1_000);
+        let model = |lines: &[String]| newest_model((lines.join("\n") + "\n").as_bytes());
+        let at_rest = [prompt(t), request(t), reply(t, Some("end_turn"), "text")];
+        assert_eq!(model(&at_rest), test_model());
+        let asking = [reply(t, Some("end_turn"), "text"), prompt(t), request(t)];
+        assert_eq!(model(&asking), test_model(), "the reply before the prompt");
+        let earlier = test_written_by(reply(t, Some("end_turn"), "text"), json!("claude-fable-5"));
+        assert_eq!(model(&[earlier, reply(t, None, "text")]), test_model());
+        let failed = test_written_by(reply(t, Some("stop_sequence"), "text"), json!(MADE_UP));
+        assert_eq!(
+            model(&[reply(t, None, "text"), failed.clone()]),
+            test_model(),
+            "the reply before the error"
+        );
+        assert_eq!(model(&[failed]), None, "no model wrote the error");
+        let unnamed = test_written_by(reply(t, None, "text"), json!(7));
+        assert_eq!(model(&[unnamed, prompt(t)]), None);
+        assert_eq!(model(&[prompt(t), request(t)]), None, "no reply yet");
     }
 
     #[test]

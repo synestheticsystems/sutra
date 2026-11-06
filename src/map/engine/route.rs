@@ -158,8 +158,9 @@ impl HomePaths {
         if path.starts_with(&self.claude_sessions) {
             return Some(Route::ClaudeSessions);
         }
-        // Of Claude Code's transcripts only its subagents' tell the map anything: a session's own
-        // adds nothing to its registry file, so it routes like any other path.
+        // Of Claude Code's transcripts only its subagents' tell the map what is at work. A session's
+        // own adds to its registry file only the model the session works with, which seldom
+        // changes and which the tick reads soon enough, so it routes like any other path.
         let below_projects = path.strip_prefix(&self.claude_projects);
         if below_projects.is_ok_and(agents::is_subagent_transcript) {
             return Some(Route::ClaudeSessions);

@@ -27,6 +27,10 @@ pub struct AgentSession {
     pub kind: Option<String>,
     /// The session's name or title, if it has one.
     pub label: Option<String>,
+    /// The model the session works with, by the id its harness records, as `claude-opus-5-5` or
+    /// `gpt-6-astra` reads: for Claude Code, the model of its newest reply; for Codex, the one its
+    /// thread runs on.
+    pub model: Option<String>,
     /// When the current status was set; for a quiet agent, when it last wrote.
     pub since: Option<SystemTime>,
     pub last_activity: Option<SystemTime>,
@@ -48,6 +52,11 @@ pub struct Subagent {
     /// Its name, and the task it was given in a few words, when its harness records them.
     pub name: Option<String>,
     pub description: Option<String>,
+    /// The kind of agent it is, when its harness records it: Claude Code's agent type, as
+    /// `general-purpose` or `Explore` reads, or the role Codex spawned it in, as `explorer` reads.
+    pub agent_type: Option<String>,
+    /// The model it works with, recorded as a session's is (see `AgentSession::model`).
+    pub model: Option<String>,
     /// Busy, or for a Codex thread silent past a minute, quiet: no harness writes down that a
     /// subagent waits on the user, and one at rest is not at work.
     pub status: AgentStatus,

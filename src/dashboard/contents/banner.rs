@@ -56,6 +56,7 @@ pub(super) fn problem_line(problem: &SourceProblem, home: &Path) -> String {
         | Source::ClaudeSessions
         | Source::ClaudeSessionFile
         | Source::ClaudeSubagentMeta
+        | Source::ClaudeSessionTranscript
         | Source::CodexDatabase => "read",
     };
     let more = match problem.count {

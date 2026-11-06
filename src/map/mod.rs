@@ -219,6 +219,10 @@ pub enum Source {
     /// The meta file beside a subagent's transcript, which names the subagent and its task. The
     /// subagent still shows, its transcript telling all that it is doing, but unnamed.
     ClaudeSubagentMeta,
+    /// A session's own transcript under `~/.claude/projects/`, which names the model the session
+    /// works with. The session still shows, its registry file telling all that it is doing, but
+    /// without its model.
+    ClaudeSessionTranscript,
     /// Codex's thread database, `~/.codex/state_5.sqlite`.
     CodexDatabase,
     /// A file watcher could not start, or could not watch a root or a folder outside the roots that
@@ -230,7 +234,7 @@ pub enum Source {
 impl Source {
     /// Whether the source tells what is at work in a project: failing to read it may hide an agent,
     /// a running environment or a project's latest activity. Discovery failing only loses folders,
-    /// and a subagent's meta file only its name.
+    /// a subagent's meta file only its name, and a session's transcript only its model.
     pub fn tells_what_is_at_work(self) -> bool {
         match self {
             Source::Registry
@@ -239,7 +243,7 @@ impl Source {
             | Source::ClaudeSessionFile
             | Source::CodexDatabase
             | Source::Watcher => true,
-            Source::Scan | Source::ClaudeSubagentMeta => false,
+            Source::Scan | Source::ClaudeSubagentMeta | Source::ClaudeSessionTranscript => false,
         }
     }
 
@@ -254,6 +258,7 @@ impl Source {
             | Source::EnvironmentState
             | Source::ClaudeSessionFile
             | Source::ClaudeSubagentMeta
+            | Source::ClaudeSessionTranscript
             | Source::Watcher => false,
         }
     }
@@ -302,5 +307,11 @@ mod tests {
     fn a_subagents_meta_file_hides_neither_its_subagent_nor_what_is_at_work() {
         assert!(!Source::ClaudeSubagentMeta.is_sole_source());
         assert!(!Source::ClaudeSubagentMeta.tells_what_is_at_work());
+    }
+
+    #[test]
+    fn a_sessions_transcript_hides_neither_its_session_nor_what_is_at_work() {
+        assert!(!Source::ClaudeSessionTranscript.is_sole_source());
+        assert!(!Source::ClaudeSessionTranscript.tells_what_is_at_work());
     }
 }

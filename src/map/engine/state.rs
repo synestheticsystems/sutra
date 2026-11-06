@@ -277,6 +277,7 @@ impl State {
                 Source::ClaudeSessions,
                 Source::ClaudeSessionFile,
                 Source::ClaudeSubagentMeta,
+                Source::ClaudeSessionTranscript,
                 Source::CodexDatabase,
             ],
             loaded.problems,

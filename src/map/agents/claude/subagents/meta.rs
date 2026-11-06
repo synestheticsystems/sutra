@@ -2,8 +2,11 @@
 //! the subagent and replaced by a new file as the subagent finishes: 561 of the 568 marked finished
 //! were born after their transcript. The format is undocumented; what is read here was checked
 //! against 2,311 files written by Claude Code 2.1.142 to 2.1.317 (2026-11-05). Only the subagent's
-//! name and the task it was given are read, loosely, so that a file or a field that is missing
-//! costs only those words: what the subagent does, its transcript tells.
+//! name, the task it was given and its agent type are read, loosely, so that a file or a field
+//! that is missing costs only those words: what the subagent does, its transcript tells.
+//!
+//! The file's `model` is no more than the alias the session asked for (`opus`, `inherit`), when
+//! it asked; the model that ran, the transcript names (see `Tail::model`).
 //!
 //! The file also holds `finished`, which says no more than the transcript's end. Claude Code wrote
 //! it from 2.1.303 on, always `true`, and only once the transcript said the turn was over: of the
@@ -28,15 +31,21 @@ pub(super) struct Meta {
     pub(super) name: Option<String>,
     /// The task in a few words, as `Fix dashboard review findings` reads.
     pub(super) description: Option<String>,
+    /// The kind of agent the session started, as `general-purpose`, `Explore` or a plugin's
+    /// `codex:codex-rescue` reads: in each of the newest 400 files (2026-11-05).
+    pub(super) agent_type: Option<String>,
 }
 
 /// The fields read, each as any JSON value, so that one of another type costs only itself.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Fields {
     #[serde(default)]
     name: serde_json::Value,
     #[serde(default)]
     description: serde_json::Value,
+    #[serde(default)]
+    agent_type: serde_json::Value,
 }
 
 /// The meta file of the subagent whose transcript is `transcript`: `agent-<id>.meta.json` beside
@@ -75,6 +84,7 @@ pub(super) fn read_meta(path: &Path) -> io::Result<Option<Meta>> {
     Ok(Some(Meta {
         name: text(fields.name),
         description: text(fields.description),
+        agent_type: text(fields.agent_type),
     }))
 }
 
@@ -110,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn a_meta_file_names_the_subagent_and_its_task() {
+    fn a_meta_file_names_the_subagent_its_task_and_its_agent_type() {
         let home = TempDir::new("subagent-meta-named");
         let transcript = home.path("agent-a1.jsonl");
         write_test_meta(
@@ -124,6 +134,7 @@ mod tests {
             Some(Meta {
                 name: Some("dashboard-fixes".to_string()),
                 description: Some("Fix dashboard review findings".to_string()),
+                agent_type: Some("general-purpose".to_string()),
             })
         );
     }
@@ -135,16 +146,25 @@ mod tests {
         assert_eq!(read_meta(&home.path("agent-gone.meta.json")).unwrap(), None);
         let odd = home.write(
             "agent-odd.meta.json",
-            r#"{"name": 7, "description": "Map the engine", "finished": true}"#,
+            r#"{"name": 7, "description": "Map the engine", "agentType": ["Explore"],
+                "finished": true}"#,
         );
         assert_eq!(
             read_meta(&odd).unwrap(),
             Some(Meta {
-                name: None,
                 description: Some("Map the engine".to_string()),
+                ..Meta::default()
             })
         );
-        let bare = home.write("agent-bare.meta.json", r#"{"agentType": "Explore"}"#);
+        let typed = home.write("agent-typed.meta.json", r#"{"agentType": "Explore"}"#);
+        assert_eq!(
+            read_meta(&typed).unwrap(),
+            Some(Meta {
+                agent_type: Some("Explore".to_string()),
+                ..Meta::default()
+            })
+        );
+        let bare = home.write("agent-bare.meta.json", r#"{"model": "opus"}"#);
         assert_eq!(read_meta(&bare).unwrap(), Some(Meta::default()));
     }
 

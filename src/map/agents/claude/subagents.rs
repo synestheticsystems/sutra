@@ -2,11 +2,10 @@
 //! `<home>/.claude/projects/<folder>/<session id>/subagents/agent-<agent id>.jsonl`, and those of a
 //! workflow's subagents one folder down, in `subagents/workflows/<workflow id>/`. What a
 //! transcript says is read from its end (see `transcript`), and only from the transcripts of
-//! sessions still running. A subagent at work is named by the meta file beside its transcript
-//! (see `meta`).
+//! sessions still running. A subagent at work is named by the meta file beside its transcript,
+//! which also says what kind of agent it is (see `meta`).
 
 mod meta;
-mod transcript;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -17,16 +16,12 @@ use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use self::meta::{Meta, meta_path, read_meta};
-use self::transcript::{Tail, read_tail};
+use super::transcript::{Tail, read_tail};
 use crate::map::AgentStatus;
 use crate::map::agents::resolve_cwd;
 use crate::map::agents::session::{Subagent, SubagentWork};
 use crate::map::scan::Boundary;
 use crate::model::{ReadFailure, note_failure};
-
-/// The longest folder name Claude Code derives from a working directory. It cuts a longer one to
-/// this length and appends `-` and a hash of the whole path.
-const MAX_FOLDER_NAME: usize = 200;
 
 /// What each subagent transcript said when last read, so that a load reads again only the
 /// transcripts written since, and what the meta files of the subagents at work said. It holds only
@@ -50,8 +45,6 @@ struct Reading {
 
 /// One load's reading of the subagent transcripts of the live sessions.
 pub(super) struct Reader<'a> {
-    /// Claude Code's `~/.claude/projects`.
-    projects: PathBuf,
     /// Where a subagent's working folder may be resolved.
     boundary: &'a Boundary,
     now: SystemTime,
@@ -64,16 +57,11 @@ pub(super) struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// A reading of the transcripts under `home`, going by what `transcripts` says the last load
-    /// read, and leaving there what this one reads. Working folders are resolved only where
-    /// `boundary` allows.
-    pub(super) fn new(
-        home: &Path,
-        boundary: &'a Boundary,
-        transcripts: &'a mut Transcripts,
-    ) -> Self {
+    /// A reading of the subagent transcripts, going by what `transcripts` says the last load read,
+    /// and leaving there what this one reads. Working folders are resolved only where `boundary`
+    /// allows.
+    pub(super) fn new(boundary: &'a Boundary, transcripts: &'a mut Transcripts) -> Self {
         Reader {
-            projects: home.join(".claude").join("projects"),
             boundary,
             now: SystemTime::now(),
             earlier: mem::take(transcripts),
@@ -82,25 +70,18 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// The work of the subagents of the session `session_id`, which Claude Code started in `cwd`
-    /// (as it recorded it) in a process that started at `started`. A folder or transcript that
-    /// cannot be read goes in `failures`, and the rest still count.
+    /// The work of the subagents of the session whose files Claude Code keeps in `folder` (see
+    /// `session_files`), which it started in `cwd` (as it recorded it) in a process that started
+    /// at `started`. A folder or transcript that cannot be read goes in `failures`, and the rest
+    /// still count.
     pub(super) fn session_work(
         &mut self,
+        folder: &Path,
         cwd: &str,
-        session_id: &str,
         started: Option<SystemTime>,
         failures: &mut Vec<ReadFailure>,
     ) -> SubagentWork {
         let mut work = SubagentWork::default();
-        let folder = match session_folder(&self.projects, cwd, session_id) {
-            Ok(Some(folder)) => folder,
-            Ok(None) => return work,
-            Err(err) => {
-                note_failure(&self.projects, &err, failures);
-                return work;
-            }
-        };
         // A session's subagents run in its process and end with it, so one last written before
         // this process started is not at work. A transcript not modified since then is not read.
         let before_start =
@@ -158,6 +139,8 @@ impl<'a> Reader<'a> {
             cwd: resolve_cwd(cwd, self.boundary),
             name: meta.name,
             description: meta.description,
+            agent_type: meta.agent_type,
+            model: tail.model,
             // Its transcript says only that its turn goes on.
             status: AgentStatus::Busy,
             since: None,
@@ -197,45 +180,6 @@ fn agent_id(transcript: &Path) -> String {
 pub fn is_subagent_transcript(path: &Path) -> bool {
     path.components().nth(2) == Some(Component::Normal(OsStr::new("subagents")))
         && path.extension() == Some(OsStr::new("jsonl"))
-}
-
-/// Claude Code's folder for the files of the session `session_id` started in `cwd`, under
-/// `projects`. `None` when the folder of a long name is not there.
-fn session_folder(projects: &Path, cwd: &str, session_id: &str) -> io::Result<Option<PathBuf>> {
-    let name = folder_name(cwd);
-    if name.len() <= MAX_FOLDER_NAME {
-        return Ok(Some(projects.join(name).join(session_id)));
-    }
-    // Claude Code 2.1.310 looks such a folder up by the part of its name it kept rather than by
-    // the hash, and so does this.
-    let kept = format!("{}-", &name[..MAX_FOLDER_NAME]);
-    let dir = match fs::read_dir(projects) {
-        Ok(dir) => dir,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
-    for entry in dir {
-        let folder = entry?.path();
-        let named_so = folder
-            .file_name()
-            .and_then(OsStr::to_str)
-            .is_some_and(|name| name.starts_with(&kept));
-        if named_so && folder.join(session_id).is_dir() {
-            return Ok(Some(folder.join(session_id)));
-        }
-    }
-    Ok(None)
-}
-
-/// The folder name Claude Code derives from a working directory: each UTF-16 unit that is not an
-/// ASCII letter or digit becomes `-`, as its `replace(/[^a-zA-Z0-9]/g, "-")` does.
-fn folder_name(cwd: &str) -> String {
-    cwd.encode_utf16()
-        .map(|unit| match u8::try_from(unit) {
-            Ok(byte) if byte.is_ascii_alphanumeric() => char::from(byte),
-            _ => '-',
-        })
-        .collect()
 }
 
 /// The transcripts in a session's `subagents` folder, its workflows' included, each with its
@@ -307,14 +251,15 @@ pub(crate) fn write_test_subagent_at_work(
     works_in: &str,
     at: SystemTime,
 ) -> PathBuf {
-    let folder = home.join(".claude").join("projects").join(folder_name(cwd));
+    let projects = home.join(".claude").join("projects");
+    let folder = projects.join(super::session_files::folder_name(cwd));
     let subagents = folder.join(session_id).join("subagents");
     let path = subagents.join(format!("agent-{agent}.jsonl"));
     let lines = [
-        transcript::test_prompt(at, works_in),
-        transcript::test_request(at),
+        super::transcript::test_prompt(at, works_in),
+        super::transcript::test_request(at),
     ];
-    transcript::write_test_transcript(&path, &lines);
+    super::transcript::write_test_transcript(&path, &lines);
     path
 }
 
@@ -322,60 +267,16 @@ pub(crate) fn write_test_subagent_at_work(
 mod tests {
     use std::time::Duration;
 
-    use super::meta::write_test_meta;
-    use super::transcript::{
-        TEST_FOLDER, test_prompt as prompt, test_reply as reply, test_request as request,
-        timestamp, write_test_transcript,
+    use super::super::transcript::{
+        self, TEST_FOLDER, TEST_MODEL, test_prompt as prompt, test_reply as reply,
+        test_request as request, timestamp, write_test_transcript,
     };
+    use super::meta::write_test_meta;
     use super::*;
     use crate::map::ScanOptions;
     use crate::map::test_support::{TempDir, set_mtime};
 
     const MINUTE: Duration = Duration::from_secs(60);
-
-    #[test]
-    fn a_folder_name_is_the_working_directory_with_a_dash_for_each_other_character() {
-        let cases = [
-            (
-                "/Users/daniel/ak/ankurah/.claude/worktrees/optimistic-ptolemy-8868fb",
-                "-Users-daniel-ak-ankurah--claude-worktrees-optimistic-ptolemy-8868fb",
-            ),
-            (
-                "/Users/daniel/Library/Application Support/Claude",
-                "-Users-daniel-Library-Application-Support-Claude",
-            ),
-            ("/Users/me/café", "-Users-me-caf-"),
-            // JavaScript counts a character outside the BMP as two units.
-            ("/Users/me/🚀", "-Users-me---"),
-        ];
-        for (cwd, name) in cases {
-            assert_eq!(folder_name(cwd), name, "{cwd}");
-        }
-    }
-
-    #[test]
-    fn a_session_whose_folder_name_was_cut_short_is_found_by_the_part_kept() {
-        let home = TempDir::new("subagents-long-folder");
-        let projects = home.dir("projects");
-        let cwd = format!("/private/tmp/{}", "deep/".repeat(50));
-        let kept = &folder_name(&cwd)[..MAX_FOLDER_NAME];
-        fs::create_dir_all(
-            projects
-                .join(format!("{kept}-u0ko8l"))
-                .join("other-session"),
-        )
-        .unwrap();
-        let session = projects.join(format!("{kept}-x9k2pq")).join("session");
-        fs::create_dir_all(&session).unwrap();
-
-        assert_eq!(
-            session_folder(&projects, &cwd, "session").unwrap(),
-            Some(session)
-        );
-        assert_eq!(session_folder(&projects, &cwd, "gone").unwrap(), None);
-        let short = session_folder(&projects, "/code/app", "session").unwrap();
-        assert_eq!(short, Some(projects.join("-code-app").join("session")));
-    }
 
     #[test]
     fn subagent_transcripts_lie_in_a_sessions_subagents_folder_or_a_workflows() {
@@ -415,16 +316,22 @@ mod tests {
         transcripts: &mut Transcripts,
     ) -> (SubagentWork, Vec<ReadFailure>, Vec<ReadFailure>) {
         let boundary = home.boundary(&ScanOptions::default());
-        let mut reader = Reader::new(home.root(), &boundary, transcripts);
+        let mut reader = Reader::new(&boundary, transcripts);
         reader.now = now;
         let mut failures = Vec::new();
-        let work = reader.session_work(TEST_FOLDER, "0b1d", Some(started), &mut failures);
+        let folder = session_files(home);
+        let work = reader.session_work(&folder, TEST_FOLDER, Some(started), &mut failures);
         (work, failures, reader.unread_metas())
+    }
+
+    /// Where Claude Code keeps the files of that session.
+    fn session_files(home: &TempDir) -> PathBuf {
+        home.path(".claude/projects/-code-app/0b1d")
     }
 
     /// Where the transcript of the subagent `agent` of that session lies.
     fn transcript_path(home: &TempDir, agent: &str) -> PathBuf {
-        let subagents = home.path(".claude/projects/-code-app/0b1d/subagents");
+        let subagents = session_files(home).join("subagents");
         subagents.join(format!("agent-{agent}.jsonl"))
     }
 
@@ -577,6 +484,8 @@ mod tests {
         assert_eq!(subagent.name.as_deref(), Some("dashboard-fixes"));
         let task = subagent.description.as_deref();
         assert_eq!(task, Some("Fix dashboard review findings"));
+        assert_eq!(subagent.agent_type.as_deref(), Some("general-purpose"));
+        assert_eq!(subagent.model, None, "it has not replied yet");
         assert_eq!(subagent.status, AgentStatus::Busy);
         assert_eq!(subagent.since, None);
         assert_eq!(subagent.last_write.map(timestamp), Some(timestamp(now)));
@@ -597,6 +506,7 @@ mod tests {
         };
         assert_eq!(subagent.cwd, Path::new(TEST_FOLDER), "its session's folder");
         assert_eq!((&subagent.name, &subagent.description), (&None, &None));
+        assert_eq!(subagent.agent_type, None);
         assert_eq!(unread_metas, [], "a meta file not there is no failure");
     }
 
@@ -623,6 +533,34 @@ mod tests {
             folder(&mut Transcripts::default()),
             Path::new(TEST_FOLDER),
             "without the earlier load's reading, only its session's folder is known"
+        );
+    }
+
+    #[test]
+    fn the_model_a_subagent_works_with_holds_across_loads_while_its_transcripts_end_names_none() {
+        let home = TempDir::new("subagents-model-held");
+        let now = SystemTime::now();
+        let path = transcript_path(&home, "a1");
+        let calling = reply(now - MINUTE, Some("tool_use"), "tool_use");
+        let mut lines = vec![request(now - MINUTE), calling];
+        write_test_transcript(&path, &lines);
+        let model = |transcripts: &mut Transcripts| {
+            let (work, ..) = described_work(&home, now - 60 * MINUTE, now, transcripts);
+            work.at_work[0].model.clone()
+        };
+        let mut transcripts = Transcripts::default();
+        let opus = Some(TEST_MODEL.to_string());
+        assert_eq!(model(&mut transcripts), opus);
+
+        // The reply now lies further back than the end read.
+        lines.extend([transcript::test_context_past_the_end_read(), request(now)]);
+        write_test_transcript(&path, &lines);
+
+        assert_eq!(model(&mut transcripts), opus);
+        assert_eq!(
+            model(&mut Transcripts::default()),
+            None,
+            "without the earlier load's reading, no model is known"
         );
     }
 
@@ -671,13 +609,13 @@ mod tests {
 
         // On a thread, so a read that blocks on the FIFO fails the test instead of hanging it.
         let (sender, receiver) = std::sync::mpsc::channel();
-        let root = home.root().to_path_buf();
+        let (root, folder) = (home.root().to_path_buf(), session_files(&home));
         std::thread::spawn(move || {
             let mut transcripts = Transcripts::default();
             let boundary = Boundary::new(&[], &root, &ScanOptions::default());
-            let mut reader = Reader::new(&root, &boundary, &mut transcripts);
+            let mut reader = Reader::new(&boundary, &mut transcripts);
             let mut failures = Vec::new();
-            let work = reader.session_work(TEST_FOLDER, "0b1d", Some(now), &mut failures);
+            let work = reader.session_work(&folder, TEST_FOLDER, Some(now), &mut failures);
             let _ = sender.send((work, failures));
         });
         let read = receiver

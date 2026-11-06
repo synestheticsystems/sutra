@@ -2,21 +2,30 @@
 //! and rewrites it whenever the session's status changes. The format is undocumented; the fields
 //! read here were checked against Claude Code 2.1.310, and `entrypoint` and `hostSessionId`
 //! against 2.1.317. The registry says nothing of a session's subagents, whose transcripts
-//! `subagents` reads.
+//! `subagents` reads, nor of the model the session works with, which its own transcript names
+//! (see `session_model`). Both lie where Claude Code keeps the session's files (see
+//! `session_files`).
 
 mod app_link;
+mod session_files;
+mod session_model;
 mod subagents;
+mod transcript;
 
 use std::fs::{self, File};
 use std::io::{self, Read};
+use std::mem;
 use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
 
+use self::session_files::{session_folder, session_transcript};
+pub use self::session_model::SessionModels;
 #[cfg(test)]
 pub(crate) use self::subagents::write_test_subagent_at_work;
 pub use self::subagents::{Transcripts, is_subagent_transcript};
+use super::session::SubagentWork;
 use super::{
     AgentSession, AgentStatus, Harness, Loaded, SessionHost, resolve_cwd, time_from_unix_ms,
 };
@@ -64,13 +73,19 @@ struct RegistryEntry {
     host_session_id: serde_json::Value,
 }
 
-/// The sessions of every Claude Code process still running, each with the work of its subagents.
-/// No registry folder means Claude Code never ran here, and yields no sessions; a registry folder
-/// that cannot be listed is a problem. So is a file in it, or a subagent's transcript or folder,
-/// that cannot be read, which costs only its own session, and a subagent's meta file, which costs
-/// only the subagent's name. `transcripts` holds the last load's readings of subagent files, and
-/// this load's afterwards.
-pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcripts) -> Loaded {
+/// The sessions of every Claude Code process still running, each with the model it works with and
+/// the work of its subagents. No registry folder means Claude Code never ran here, and yields no
+/// sessions; a registry folder that cannot be listed is a problem. So is a file in it, or a
+/// subagent's transcript or folder, that cannot be read, which costs only its own session; a
+/// subagent's meta file, which costs only the subagent's name; and a session's own transcript,
+/// which costs only its model. `models` and `transcripts` hold the last load's readings of the
+/// sessions' transcripts and of their subagents' files, and this load's afterwards.
+pub(super) fn load(
+    home: &Path,
+    boundary: &Boundary,
+    models: &mut SessionModels,
+    transcripts: &mut Transcripts,
+) -> Loaded {
     let registry = home.join(".claude").join("sessions");
     let dir = match fs::read_dir(&registry) {
         Ok(dir) => dir,
@@ -89,7 +104,10 @@ pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcrip
     let mut sessions = Vec::new();
     let mut being_rewritten = Vec::new();
     let mut failures = Vec::new();
-    let mut subagents = subagents::Reader::new(home, boundary, transcripts);
+    let projects = home.join(".claude").join("projects");
+    let earlier_models = mem::take(models);
+    let mut unread_transcripts = Vec::new();
+    let mut subagents = subagents::Reader::new(boundary, transcripts);
     for file in dir {
         let file = match file {
             Ok(file) => file,
@@ -117,9 +135,27 @@ pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcrip
             Ok(Reading::Entry(entry)) if !process_exists(entry.pid) => {}
             Ok(Reading::Entry(entry)) => {
                 let started = entry.started_at.and_then(time_from_unix_ms);
-                let work =
-                    subagents.session_work(&entry.cwd, &entry.session_id, started, &mut failures);
-                sessions.push((*entry).into_session(boundary).with_subagent_work(work));
+                let folder = session_folder(&projects, &entry.cwd, &entry.session_id);
+                let (work, model) = match folder {
+                    Ok(Some(folder)) => {
+                        let work =
+                            subagents.session_work(&folder, &entry.cwd, started, &mut failures);
+                        let transcript = session_transcript(&folder);
+                        let model = models.read(&transcript, &earlier_models);
+                        let model = model.unwrap_or_else(|err| {
+                            note_failure(&transcript, &err, &mut unread_transcripts);
+                            None
+                        });
+                        (work, model)
+                    }
+                    Ok(None) => (SubagentWork::default(), None),
+                    Err(err) => {
+                        note_failure(&projects, &err, &mut failures);
+                        (SubagentWork::default(), None)
+                    }
+                };
+                let session = (*entry).into_session(boundary, model);
+                sessions.push(session.with_subagent_work(work));
             }
             Ok(Reading::Gone) => {}
             Ok(Reading::Rewriting) => {
@@ -133,6 +169,10 @@ pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcrip
     problems.extend(SourceProblem::per_kind(
         Source::ClaudeSubagentMeta,
         unread_metas,
+    ));
+    problems.extend(SourceProblem::per_kind(
+        Source::ClaudeSessionTranscript,
+        unread_transcripts,
     ));
     Loaded {
         sessions,
@@ -185,7 +225,8 @@ fn read_entry(path: &Path) -> io::Result<Reading> {
 }
 
 impl RegistryEntry {
-    fn into_session(self, boundary: &Boundary) -> AgentSession {
+    /// The session this entry registers, working with `model`, which its transcript names.
+    fn into_session(self, boundary: &Boundary, model: Option<String>) -> AgentSession {
         let status = match self.status.as_str() {
             "busy" => AgentStatus::Busy,
             "waiting" => AgentStatus::Waiting,
@@ -204,6 +245,7 @@ impl RegistryEntry {
             waiting_for,
             kind: self.kind,
             label: self.name,
+            model,
             since: self.status_updated_at.and_then(time_from_unix_ms),
             last_activity: self
                 .updated_at
@@ -263,6 +305,7 @@ mod tests {
         load(
             home.root(),
             &home.boundary(&ScanOptions::default()),
+            &mut SessionModels::default(),
             &mut Transcripts::default(),
         )
     }
@@ -277,7 +320,8 @@ mod tests {
     /// The session one registry file describes, read with no folder off limits.
     fn session(json: &str) -> AgentSession {
         let entry: RegistryEntry = serde_json::from_str(json).unwrap();
-        entry.into_session(&Boundary::new(&[], Path::new("/"), &ScanOptions::default()))
+        let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
+        entry.into_session(&boundary, None)
     }
 
     #[test]
@@ -490,7 +534,8 @@ mod tests {
         let path = home.root().to_path_buf();
         std::thread::spawn(move || {
             let boundary = Boundary::new(&[], &path, &ScanOptions::default());
-            let _ = sender.send(load(&path, &boundary, &mut Transcripts::default()));
+            let (mut models, mut transcripts) = Default::default();
+            let _ = sender.send(load(&path, &boundary, &mut models, &mut transcripts));
         });
         let loaded = receiver
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -608,6 +653,74 @@ mod tests {
             [SourceProblem::new(
                 Source::ClaudeSubagentMeta,
                 meta,
+                io::ErrorKind::PermissionDenied
+            )]
+        );
+    }
+
+    /// Writes the transcript of the session `0b1d` that `idle_session` registers in `cwd`, holding
+    /// `lines`. Returns its path.
+    fn write_session_transcript(home: &TempDir, cwd: &Path, lines: &[String]) -> PathBuf {
+        let projects = home.path(".claude/projects");
+        let folder = projects.join(session_files::folder_name(cwd.to_str().unwrap()));
+        let path = session_transcript(&folder.join("0b1d"));
+        transcript::write_test_transcript(&path, lines);
+        path
+    }
+
+    #[test]
+    fn a_live_session_works_with_the_model_its_transcript_names_as_read_on_from_the_last_load() {
+        let home = TempDir::new("agents-claude-model");
+        let now = SystemTime::now();
+        let cwd = home.dir("app");
+        idle_session(&home, &cwd, now);
+        let reply = transcript::test_reply(now, Some("end_turn"), "text");
+        let path = write_session_transcript(&home, &cwd, std::slice::from_ref(&reply));
+        let boundary = home.boundary(&ScanOptions::default());
+        let (mut models, mut transcripts) = Default::default();
+        let mut model = || {
+            let loaded = load(home.root(), &boundary, &mut models, &mut transcripts);
+            loaded.sessions[0].model.clone()
+        };
+        let opus = Some(transcript::TEST_MODEL.to_string());
+        assert_eq!(model(), opus);
+
+        // Another model's reply of the same length takes the first one's place, where only a read
+        // from the start would find it, and the session writes on.
+        let other = transcript::test_written_by(reply, serde_json::json!("claude-test-5-5"));
+        let prompt = transcript::test_prompt(now, cwd.to_str().unwrap());
+        transcript::write_test_transcript(&path, &[other, prompt]);
+
+        assert_eq!(
+            model(),
+            opus,
+            "this load reads on from where the last stopped"
+        );
+        let afresh = load_home(&home).sessions[0].model.clone();
+        assert_eq!(afresh.as_deref(), Some("claude-test-5-5"));
+    }
+
+    #[test]
+    fn a_sessions_transcript_that_cannot_be_read_is_a_problem_of_its_own_and_costs_only_its_model()
+    {
+        let home = TempDir::new("agents-claude-transcript-sealed");
+        let now = SystemTime::now();
+        let cwd = home.dir("app");
+        idle_session(&home, &cwd, now);
+        let reply = transcript::test_reply(now, Some("end_turn"), "text");
+        let path = write_session_transcript(&home, &cwd, &[reply]);
+        home.restrict(&path, 0o000);
+
+        let loaded = load_home(&home);
+
+        assert_eq!(ids(&loaded), ["0b1d"]);
+        let session = &loaded.sessions[0];
+        assert_eq!((session.status, &session.model), (AgentStatus::Idle, &None));
+        assert_eq!(
+            loaded.problems,
+            [SourceProblem::new(
+                Source::ClaudeSessionTranscript,
+                path,
                 io::ErrorKind::PermissionDenied
             )]
         );

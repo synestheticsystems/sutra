@@ -14,6 +14,7 @@ use std::mem;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, Row};
 
 pub use self::rollout::Rollouts;
@@ -39,9 +40,10 @@ const QUIET_AFTER_MS: i64 = 60 * 1000;
 /// thread without a working directory cannot be placed on the map. The `+` keeps SQLite off the
 /// index on `archived`, which holds nearly every thread ever run, so that it visits only the recent
 /// rows, by the index on `updated_at_ms`: on 2,700 threads, 0.03 ms where the other way took 3 ms
-/// (2026-11-04), and this runs on every tick.
+/// (2026-11-04), and this runs on every tick. Codex added `model` to the table before it added
+/// `updated_at_ms`, which the query needs anyway.
 const RECENT_THREADS: &str = "
-    SELECT id, rollout_path, cwd, source, updated_at_ms
+    SELECT id, rollout_path, cwd, source, updated_at_ms, model
     FROM threads
     WHERE +archived = 0
       AND updated_at_ms >= ?1
@@ -50,7 +52,7 @@ const RECENT_THREADS: &str = "
 
 /// One thread, by id, unless it is off the map.
 const THREAD_BY_ID: &str = "
-    SELECT id, rollout_path, cwd, source, updated_at_ms
+    SELECT id, rollout_path, cwd, source, updated_at_ms, model
     FROM threads
     WHERE id = ?1
       AND +archived = 0
@@ -126,6 +128,12 @@ struct Thread {
     /// cli, vscode (the Desktop app) or exec for a user-facing thread; JSON for the others.
     source: String,
     updated_at_ms: i64,
+    /// The model the thread runs on, as `gpt-6-astra` reads. It was the model of the newest turn
+    /// in each of 374 rollouts on Daniel's Mac, the five whose model changed included
+    /// (2026-11-05), where a rollout names a turn's model only where the turn began, which for a
+    /// thread at rest can lie megabytes back. Read loosely, so that a value that is not text costs
+    /// only the model, not every thread.
+    model: Option<String>,
 }
 
 impl Thread {
@@ -136,6 +144,10 @@ impl Thread {
             cwd: row.get(2)?,
             source: row.get(3)?,
             updated_at_ms: row.get(4)?,
+            model: match row.get_ref(5)? {
+                ValueRef::Text(text) => std::str::from_utf8(text).ok().map(str::to_string),
+                _ => None,
+            },
         })
     }
 
@@ -177,6 +189,7 @@ impl Thread {
             waiting_for: None,
             kind: Some(self.source),
             label: None,
+            model: self.model,
             since: quiet_since(status, silent_since_ms),
             last_activity: time_from_codex_ms(last_write_ms),
             host: None,
@@ -195,12 +208,15 @@ impl Thread {
         boundary: &Boundary,
     ) -> Subagent {
         let status = status(newest_turn, now_ms - silent_since_ms);
+        let spawn = self.thread_spawn();
         Subagent {
-            name: self.nickname(),
             id: self.id,
             cwd: resolve_cwd(&self.cwd, boundary),
+            name: spawn.nickname,
             // Codex records no task in a few words for a sub-agent, as Claude Code does.
             description: None,
+            agent_type: spawn.role,
+            model: self.model,
             status,
             since: quiet_since(status, silent_since_ms),
             last_write: time_from_codex_ms(silent_since_ms),
@@ -316,12 +332,15 @@ mod tests {
              CREATE TABLE threads (
                  id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, created_at_ms INTEGER,
                  updated_at_ms INTEGER, source TEXT NOT NULL, cwd TEXT NOT NULL, title TEXT,
-                 archived INTEGER NOT NULL DEFAULT 0, git_branch TEXT
+                 archived INTEGER NOT NULL DEFAULT 0, git_branch TEXT, model TEXT
              );",
         )
         .unwrap();
         conn
     }
+
+    /// The model the tests' threads run on, unless a test names another.
+    const MODEL: &str = "gpt-6-astra";
 
     struct Row<'a> {
         id: &'a str,
@@ -330,9 +349,10 @@ mod tests {
         source: &'a str,
         age_ms: i64,
         archived: bool,
+        model: Option<&'a str>,
     }
 
-    /// A user-facing, unarchived thread that last wrote `age_ms` ago.
+    /// A user-facing, unarchived thread on `MODEL` that last wrote `age_ms` ago.
     fn recent<'a>(id: &'a str, rollout: &'a Path, cwd: &'a Path, age_ms: i64) -> Row<'a> {
         Row {
             id,
@@ -341,13 +361,14 @@ mod tests {
             source: "cli",
             age_ms,
             archived: false,
+            model: Some(MODEL),
         }
     }
 
     fn insert(conn: &Connection, row: Row) {
         conn.execute(
-            "INSERT INTO threads (id, rollout_path, updated_at_ms, source, cwd, archived)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO threads (id, rollout_path, updated_at_ms, source, cwd, archived, model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             (
                 row.id,
                 row.rollout.to_str().unwrap(),
@@ -355,6 +376,7 @@ mod tests {
                 row.source,
                 row.cwd.to_str().unwrap(),
                 row.archived,
+                row.model,
             ),
         )
         .unwrap();
@@ -444,6 +466,7 @@ mod tests {
         assert_eq!(busy.pid, None);
         assert_eq!(busy.waiting_for, None);
         assert_eq!(busy.label, None);
+        assert_eq!(busy.model.as_deref(), Some(MODEL));
         assert_eq!(busy.since, None);
         assert_eq!(busy.host, None);
         // The rollout, written 10 s ago, is newer than the row.
@@ -534,6 +557,31 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_whose_model_is_missing_or_not_text_loads_without_one() {
+        let home = TempDir::new("agents-codex-model");
+        let h = home.root();
+        let started = rollout(h, "started", "task_started", 10 * SECOND_MS);
+        let conn = create_db(h);
+        let unrecorded = recent("unrecorded", &started, h, MINUTE_MS);
+        insert(
+            &conn,
+            Row {
+                model: None,
+                ..unrecorded
+            },
+        );
+        insert(&conn, recent("blob", &started, h, 2 * MINUTE_MS));
+        let blob = "UPDATE threads SET model = x'6770742d36' WHERE id = 'blob'";
+        conn.execute(blob, []).unwrap();
+
+        let sessions = load_home(&home).unwrap();
+
+        assert_eq!(ids(&sessions), ["unrecorded", "blob"]);
+        let models: Vec<Option<&str>> = sessions.iter().map(|s| s.model.as_deref()).collect();
+        assert_eq!(models, [None, None]);
+    }
+
+    #[test]
     fn a_thread_keeps_its_status_across_loads_without_its_rollout_being_read_again() {
         let home = TempDir::new("agents-codex-unchanged");
         let h = home.root();
@@ -616,6 +664,7 @@ mod tests {
             &conn,
             Row {
                 source: &source,
+                model: Some("gpt-5.5"),
                 ..explorer
             },
         );
@@ -639,6 +688,12 @@ mod tests {
         assert_eq!(explorer.cwd, fs::canonicalize(&web).unwrap());
         assert_eq!(explorer.name.as_deref(), Some("Boyle"));
         assert_eq!(explorer.description, None);
+        assert_eq!(explorer.agent_type.as_deref(), Some("explorer"));
+        assert_eq!(
+            explorer.model.as_deref(),
+            Some("gpt-5.5"),
+            "its own thread's"
+        );
         assert_eq!((explorer.status, explorer.since), (AgentStatus::Busy, None));
         assert_eq!(reviewer.status, AgentStatus::Quiet);
         let silent_for = SystemTime::now()

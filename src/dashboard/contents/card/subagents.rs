@@ -1,8 +1,8 @@
 //! The subagents at work in a folder, a small icon each: at the end of the card's tray, or of a
 //! line of the agents working elsewhere. The icon says the subagent's harness and its colour what
 //! the subagent is doing, as a session's lozenge does; standing apart from the sessions' lozenges
-//! says it is a subagent. Its tooltip names it, its task and the session it works for, and a click
-//! opens that session.
+//! says it is a subagent. Its tooltip names it, its task, what kind of agent it is, the model it
+//! works with and the session it works for, and a click opens that session.
 
 use std::time::SystemTime;
 
@@ -34,19 +34,32 @@ fn icon(working: &SubagentWithParent, now: SystemTime) -> SubagentIcon {
     }
 }
 
-/// The icon's tooltip: the subagent's status in words, as every agent's tooltip begins, then a line
-/// with its name and its task, when its harness records them, and the session it works for, by
-/// name or else by id.
+/// The icon's tooltip: the subagent's status in words, as every agent's tooltip begins; a line with
+/// its name and its task, when its harness records either; and a line with what kind of agent it
+/// is and the model it works with, when recorded, and the session it works for, by name or else by
+/// id.
 fn tooltip(working: &SubagentWithParent, now: SystemTime) -> String {
     let SubagentWithParent { subagent, parent } = working;
-    let status = status_words(subagent.status, subagent.since, now);
     let works_for = format!(
         "for {}",
         parent.label.as_deref().unwrap_or(&parent.session_id)
     );
-    let names = [subagent.name.as_deref(), subagent.description.as_deref()];
-    let names = names.into_iter().flatten().chain([works_for.as_str()]);
-    format!("{status}\n{}", names.collect::<Vec<_>>().join(" \u{b7} "))
+    let lines = [
+        Some(status_words(subagent.status, subagent.since, now)),
+        line([subagent.name.as_deref(), subagent.description.as_deref()]),
+        line([
+            subagent.agent_type.as_deref(),
+            subagent.model.as_deref(),
+            Some(&works_for),
+        ]),
+    ];
+    lines.into_iter().flatten().collect::<Vec<_>>().join("\n")
+}
+
+/// A line of a tooltip: the parts of it that are known, between dots, or `None` when none is.
+fn line<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    let known: Vec<&str> = parts.into_iter().flatten().collect();
+    (!known.is_empty()).then(|| known.join(" \u{b7} "))
 }
 
 #[cfg(test)]
@@ -104,7 +117,8 @@ mod tests {
     }
 
     #[test]
-    fn a_subagents_tooltip_says_its_status_then_names_it_its_task_and_the_session_it_works_for() {
+    fn a_subagents_tooltip_says_its_status_names_it_and_its_task_then_says_what_it_is_and_for_whom()
+    {
         let now = at(10_000);
         let launch = AgentSession {
             label: Some("Sutra launch".to_string()),
@@ -116,21 +130,36 @@ mod tests {
         let fixes = Subagent {
             name: Some("dashboard-fixes".to_string()),
             description: Some("Fix dashboard review findings".to_string()),
+            agent_type: Some("general-purpose".to_string()),
+            model: Some("claude-opus-5-5".to_string()),
             ..subagent_at_work("a1")
         };
         assert_eq!(
             tooltip(fixes, &launch),
-            "Busy\ndashboard-fixes \u{b7} Fix dashboard review findings \u{b7} for Sutra launch"
+            "Busy\n\
+             dashboard-fixes \u{b7} Fix dashboard review findings\n\
+             general-purpose \u{b7} claude-opus-5-5 \u{b7} for Sutra launch"
         );
         let nicknamed = Subagent {
             name: Some("Boyle".to_string()),
+            model: Some("gpt-5.5".to_string()),
             status: AgentStatus::Quiet,
             since: Some(now - Duration::from_secs(4 * 60 + 10)),
             ..subagent_at_work("t1")
         };
         assert_eq!(
             tooltip(nicknamed, &launch),
-            "Mid-turn, silent for 4m\nBoyle \u{b7} for Sutra launch"
+            "Mid-turn, silent for 4m\nBoyle\ngpt-5.5 \u{b7} for Sutra launch",
+            "a sub-agent spawned in no role, whose task Codex does not record"
+        );
+        let unnamed = Subagent {
+            agent_type: Some("Explore".to_string()),
+            ..subagent_at_work("a2")
+        };
+        assert_eq!(
+            tooltip(unnamed, &launch),
+            "Busy\nExplore \u{b7} for Sutra launch",
+            "with neither name nor task, no line for them"
         );
         assert_eq!(
             tooltip(subagent_at_work("a3"), &parent()),

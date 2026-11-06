@@ -99,8 +99,9 @@ pub(super) fn status_words(
 }
 
 /// An agent's tooltip: its status in words, what it waits for when it says, with how many of its
-/// subagents are at work, and the session's name, or its id when it has none. The count explains a
-/// session busy here that its own app shows at rest, having handed its work to subagents.
+/// subagents are at work; the session's name, or its id when it has none; and the model it works
+/// with, when its harness records it. The count explains a session busy here that its own app
+/// shows at rest, having handed its work to subagents.
 fn agent_tooltip(agent: &AgentSession, now: SystemTime) -> String {
     let waits_for = waiting_for(agent).filter(|_| agent.status == AgentStatus::Waiting);
     let status = waits_for.unwrap_or_else(|| status_words(agent.status, agent.since, now));
@@ -108,10 +109,11 @@ fn agent_tooltip(agent: &AgentSession, now: SystemTime) -> String {
         0 => status,
         n => format!("{status}, {} at work", format::plural(n as u64, "subagent")),
     };
-    format!(
-        "{status}\n{}",
-        agent.label.as_deref().unwrap_or(&agent.session_id)
-    )
+    let name = agent.label.as_deref().unwrap_or(&agent.session_id);
+    match &agent.model {
+        Some(model) => format!("{status}\n{name}\n{model}"),
+        None => format!("{status}\n{name}"),
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +266,25 @@ mod tests {
         assert_eq!(agent_tooltip(&named, now), "Busy\nabc-123");
         named.label = Some("fix the parser".to_string());
         assert_eq!(agent_tooltip(&named, now), "Busy\nfix the parser");
+    }
+
+    #[test]
+    fn an_agents_tooltip_ends_with_the_model_it_works_with_when_its_harness_records_it() {
+        let now = at(0);
+        let mut busy = AgentSession {
+            label: Some("Sutra launch".to_string()),
+            model: Some("claude-opus-5-5".to_string()),
+            subagents_at_work: vec![subagent_at_work("a1")],
+            ..session(AgentStatus::Busy)
+        };
+        assert_eq!(
+            agent_tooltip(&busy, now),
+            "Busy, 1 subagent at work\nSutra launch\nclaude-opus-5-5"
+        );
+        busy.model = None;
+        assert_eq!(
+            agent_tooltip(&busy, now),
+            "Busy, 1 subagent at work\nSutra launch"
+        );
     }
 }

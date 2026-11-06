@@ -18,12 +18,13 @@ pub use session::{
 use super::SourceProblem;
 use super::scan::Boundary;
 
-/// What the harness files that grow as an agent works said when last read: Codex's rollouts and
-/// the transcripts of Claude Code's subagents. It is kept from one load to the next, so that a load
-/// reads again only the files written since.
+/// What the harness files that grow as an agent works said when last read: Codex's rollouts, and
+/// the transcripts of Claude Code's sessions and of their subagents. It is kept from one load to
+/// the next, so that a load reads again only the files written since.
 #[derive(Debug, Default)]
 pub struct LastRead {
     rollouts: codex::Rollouts,
+    session_models: claude::SessionModels,
     transcripts: claude::Transcripts,
 }
 
@@ -44,7 +45,12 @@ pub struct Loaded {
 /// harnesses record them under the real home directory, each counting the work of its subagents.
 /// Working directories are resolved only where `boundary` allows.
 pub fn load(home: &Path, boundary: &Boundary, last_read: &mut LastRead) -> Loaded {
-    let mut loaded = claude::load(home, boundary, &mut last_read.transcripts);
+    let mut loaded = claude::load(
+        home,
+        boundary,
+        &mut last_read.session_models,
+        &mut last_read.transcripts,
+    );
     match codex::load(home, boundary, &mut last_read.rollouts) {
         Ok(sessions) => loaded.sessions.extend(sessions),
         Err(problem) => loaded.problems.push(problem),
