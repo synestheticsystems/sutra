@@ -74,18 +74,16 @@ pub struct SortChoice {
 /// The orders the project list can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
 pub enum SortOrder {
-    /// Newest activity first, in five-minute slices of the clock, each slice in name order.
+    /// Newest activity first, in five-minute slices of the clock, each slice in name order. The
+    /// worktrees of a git repository with two or more cards above the quiet row stand together
+    /// under a header naming it, the main worktree first, and the group takes the place its newest
+    /// card would.
     #[default]
     Activity,
     /// By folder name, ignoring case.
     Name,
     /// Largest folders first.
     Disk,
-    /// Each git repository's worktrees together under a header naming it, the main worktree first
-    /// and the linked ones as the Activity sort orders them; the repositories by their newest
-    /// five-minute slice, then by name; the folders in no repository after them, as the Activity
-    /// sort orders them.
-    Repository,
 }
 
 /// The toolbar's clean: a click cleans every idle build folder, a right click sets what Sutra keeps
@@ -140,9 +138,11 @@ pub enum ListRow {
         // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
         card: Box<Card>,
     },
-    /// One repository's worktrees, in the Repository sort: a header with the repository's name and
-    /// the disk its worktrees take, then their cards, nested under it, the main worktree first.
-    /// The header names the repository, so each card goes by its branch.
+    /// One repository's worktrees, in the Activity sort, where two or more of them are listed
+    /// together: a header with the repository's name and the disk its worktrees take, then their
+    /// cards, nested under it, unless the user keeps the group folded shut. The header names the
+    /// repository, so each card goes by its branch, or on no branch by its folder. A click on the
+    /// header folds the group shut, and another opens it (`Action::ToggleRepositoryFold`).
     Repository {
         /// The git folder the worktrees share, which the window knows the group by.
         common_dir: String,
@@ -154,7 +154,8 @@ pub enum ListRow {
         /// The disk its worktrees on the map take between them, listed or not, as their trays
         /// write it: the sizes measured so far, added up, and `None` before the first.
         total: Option<String>,
-        cards: Vec<Card>,
+        /// The cards under the header, or, folded, what the header shows of them.
+        fold: RepositoryFold,
     },
     /// The agents working outside every project, under `heading`: a line for each session, in the
     /// map's order, then one for each other folder subagents work in, in the order of the first
@@ -172,6 +173,22 @@ pub enum ListRow {
         open: bool,
         label: String,
         tooltip: String,
+    },
+}
+
+/// What stands under a repository's header: its group's cards, or, while the user keeps the group
+/// folded shut, none, the header itself showing the agents in those worktrees.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum RepositoryFold {
+    /// The cards, nested under the header, the main worktree first.
+    Open { cards: Vec<Card> },
+    /// Folded shut: at the header's end, a robot for each agent in the worktrees it holds, every
+    /// session before every subagent, each in its card's order.
+    Folded {
+        sessions: Vec<AgentBadge>,
+        subagents: Vec<AgentBadge>,
+        /// One of those sessions waits on the user, so the header throbs as its card would.
+        waiting: bool,
     },
 }
 
@@ -407,6 +424,11 @@ pub enum Action {
     },
     HideFilter,
     ToggleQuietProjects,
+    /// Fold shut the group of the repository whose git folder is `common_dir`, as its row names
+    /// it, or open it again. The fold is kept for the next run.
+    ToggleRepositoryFold {
+        common_dir: String,
+    },
     /// The pointer entered or left the list, which holds the cards in place while it is there.
     PointerEnteredList,
     PointerLeftList,

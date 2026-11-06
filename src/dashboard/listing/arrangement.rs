@@ -180,33 +180,35 @@ mod tests {
     #[test]
     fn while_the_pointer_is_over_the_list_no_group_moves_and_a_newcomer_joins_its_own() {
         let (a, b) = ("/code/a/.git", "/code/b/.git");
-        let before = snapshot(
+        let worktrees = || {
             vec![
                 main_worktree(a, "main", project("a", 10)),
+                linked_worktree(a, "fix", project("a-fix", 10)),
                 main_worktree(b, "main", project("b", 20)),
-            ],
-            vec![],
-        );
+                linked_worktree(b, "fix", project("b-fix", 20)),
+            ]
+        };
+        let before = snapshot(worktrees(), vec![]);
         let mut arrangement = pointed_at(&before);
-        arrangement.set_sort(SortOrder::Repository, &before, now());
-        assert_eq!(listed(&before, &arrangement), ["a: a", "b: b"]);
-
-        // A worktree of b's at work now, which puts b's group first in the sort.
-        let b_active = snapshot(
-            vec![
-                linked_worktree(b, "fix", project("b-fix", 0)),
-                main_worktree(a, "main", project("a", 10)),
-                main_worktree(b, "main", project("b", 20)),
-            ],
-            vec![],
+        assert_eq!(
+            listed(&before, &arrangement),
+            ["a: a, a-fix", "b: b, b-fix"]
         );
+
+        // A new worktree of b's at work now, which puts b's group first in the sort.
+        let mut b_active = worktrees();
+        b_active.insert(0, linked_worktree(b, "new", project("b-new", 0)));
+        let b_active = snapshot(b_active, vec![]);
         arrangement.observe(&b_active, now());
-        assert_eq!(listed(&b_active, &arrangement), ["a: a", "b: b, b-fix"]);
+        assert_eq!(
+            listed(&b_active, &arrangement),
+            ["a: a, a-fix", "b: b, b-new, b-fix"]
+        );
 
         arrangement.pointer_left();
         assert_eq!(
             listed(&b_active, &arrangement),
-            ["b: b, b-fix", "a: a"],
+            ["b: b, b-new, b-fix", "a: a, a-fix"],
             "re-sorted"
         );
     }

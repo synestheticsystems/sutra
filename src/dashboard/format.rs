@@ -26,6 +26,14 @@ pub(super) fn path_text(path: &Path) -> String {
     text
 }
 
+/// Whether `text` is what `path_text` writes for `path`, told without writing it out where it need
+/// not be, as a path is matched against many: a path that is text reads as itself, so only a text
+/// holding a NUL can read as a path that is not.
+pub(super) fn is_path_text(path: &Path, text: &str) -> bool {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    bytes == text.as_bytes() || (text.contains('\0') && path_text(path) == text)
+}
+
 /// `path` with a leading home folder written `~`.
 pub(super) fn tilde(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {
@@ -211,6 +219,24 @@ mod tests {
         assert_eq!(path_text(odd), "/code/\0ffapp");
         let shown_alike = Path::new("/code/\u{fffd}app");
         assert_eq!(path_text(shown_alike), "/code/\u{fffd}app");
+    }
+
+    #[test]
+    fn a_path_matches_the_text_path_text_writes_for_it_and_no_other() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let app = Path::new("/code/app");
+        assert!(is_path_text(app, "/code/app"));
+        assert!(!is_path_text(app, "/code/app-fix"));
+        let odd = Path::new(OsStr::from_bytes(b"/code/\xffapp"));
+        assert!(is_path_text(odd, "/code/\0ffapp"));
+        assert!(!is_path_text(odd, "/code/\0feapp"));
+        assert!(
+            !is_path_text(odd, "/code/\u{fffd}app"),
+            "nor the one shown alike"
+        );
+        assert!(!is_path_text(app, "/code/\0ffapp"));
     }
 
     #[test]

@@ -1,31 +1,33 @@
 //! What the list shows, in order: the projects in focus in the user's sort, the agents working
 //! outside every project, and one row standing for the quiet projects, which opens to list them.
-//! A typed filter lists every project it admits instead. The Repository sort gathers the cards
-//! above the quiet row into their repositories' groups. Judged at one instant, so the cards and
-//! the counts always agree.
+//! A typed filter lists every project it admits instead. In the Activity sort, the worktrees of a
+//! repository with two or more cards above the quiet row stand together in its group, under the
+//! header that names it. Judged at one instant, so the cards and the counts always agree.
 
 mod arrangement;
 mod filter;
 mod focus;
+mod folds;
 mod hold;
 mod repository;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
 pub(super) use focus::{FOCUS_LARGE_BYTES, FOCUS_RECENT};
+pub(super) use folds::Folds;
+pub(super) use repository::Group;
 
 use std::path::Path;
 use std::time::SystemTime;
 
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
-use self::repository::Group;
 use crate::map::{AgentSession, Project, Snapshot, SubagentWithParent};
 
 /// One row of the list.
 pub(super) enum Row<'a> {
     Project(&'a Project),
-    /// One repository's worktrees, under the header that names it: the Repository sort's group.
+    /// One repository's worktrees, under the header that names it: the Activity sort's group.
     Repository(Group<'a>),
     /// The agents working outside every project: all of them, or those the filter admits.
     Elsewhere(Elsewhere<'a>),
@@ -36,25 +38,19 @@ pub(super) enum Row<'a> {
     },
 }
 
-/// One section's cards as the list lays them out: the Repository sort's groups, then the cards in
-/// no group, which in the other sorts are all of them.
-struct Cards<'a> {
-    groups: Vec<Group<'a>>,
-    ungrouped: Vec<&'a Project>,
+/// One row of a section of the list, as the sort lays the section out: a card standing alone, or
+/// one repository's group of cards.
+pub(super) enum SectionRow<'a> {
+    Project(&'a Project),
+    Repository(Group<'a>),
 }
 
-impl<'a> Cards<'a> {
-    /// `projects`, in the order given, in no group.
-    fn ungrouped(projects: Vec<&'a Project>) -> Cards<'a> {
-        Cards {
-            groups: Vec::new(),
-            ungrouped: projects,
+impl<'a> From<SectionRow<'a>> for Row<'a> {
+    fn from(row: SectionRow<'a>) -> Row<'a> {
+        match row {
+            SectionRow::Project(project) => Row::Project(project),
+            SectionRow::Repository(group) => Row::Repository(group),
         }
-    }
-
-    fn into_rows(self) -> impl Iterator<Item = Row<'a>> {
-        let groups = self.groups.into_iter().map(Row::Repository);
-        groups.chain(self.ungrouped.into_iter().map(Row::Project))
     }
 }
 
@@ -110,11 +106,15 @@ impl<'a> Listing<'a> {
         let cards = |section, projects: Vec<&'a Project>| {
             let sorted = match section {
                 Section::Main => sort.lay_out(projects, snapshot),
-                // No header stands below the quiet row: a repository whose worktrees are all quiet
-                // shows none, and one with a worktree in focus has its header above the row.
-                Section::Quiet => Cards::ungrouped(sort.arrange(projects)),
+                // No header stands below the quiet row, so no repository has two headers, nor two
+                // groups that one click on a header would fold: one with worktrees on both sides
+                // of the row has its group above it, or none.
+                Section::Quiet => {
+                    let arranged = sort.arrange(projects).into_iter();
+                    arranged.map(SectionRow::Project).collect()
+                }
             };
-            hold.arrange(section, sorted).into_rows()
+            hold.arrange(section, sorted).into_iter().map(Row::from)
         };
         let mut rows = Vec::new();
         match arrangement.query() {
@@ -146,7 +146,9 @@ impl<'a> Listing<'a> {
         Listing { snapshot, rows }
     }
 
-    /// The cards of each section, in the order on screen.
+    /// The cards of each section, in the order on screen, with the cards of each group folded shut
+    /// where its header stands: the listing lays a group out whether the window shows its cards or
+    /// not, so a folded group holds its place as an open one does.
     fn order(&self) -> Order {
         let mut order = Order::default();
         let mut past_quiet_row = false;
@@ -288,47 +290,42 @@ mod tests {
         agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot, subagent_in,
     };
     use super::*;
-    use crate::dashboard::SortOrder;
     use crate::map::{AgentStatus, Harness};
 
-    /// The user's arrangement once they chose the Repository sort for `map`.
-    fn by_repository(map: &Snapshot) -> Arrangement {
-        let mut arrangement = Arrangement::default();
-        arrangement.set_sort(SortOrder::Repository, map, now());
-        arrangement
-    }
-
     #[test]
-    fn the_repository_sort_groups_the_focus_and_leaves_the_quiet_projects_in_no_group() {
-        let app = "/code/app/.git";
+    fn the_activity_sort_groups_two_or_more_worktrees_above_the_quiet_row_and_none_below_it() {
+        let (app, site, old) = ("/code/app/.git", "/code/site/.git", "/code/old/.git");
         let map = snapshot(
             vec![
                 linked_worktree(app, "fix", project("app-fix", 1)),
-                project("notes", 1),
-                main_worktree(app, "main", quiet("app")),
-                main_worktree("/code/old/.git", "main", quiet("old")),
+                main_worktree(site, "main", project("site", 1)),
+                main_worktree(app, "main", project("app", 30)),
+                linked_worktree(site, "wip", quiet("site-wip")),
+                main_worktree(old, "main", quiet("old")),
+                linked_worktree(old, "wip", quiet("old-wip")),
             ],
             vec![agent("/tmp/scratch", AgentStatus::Busy)],
         );
-        let mut arrangement = by_repository(&map);
+        let mut arrangement = Arrangement::default();
         arrangement.toggle_quiet(Some(&map), now());
         let listing = Listing::new(&map, &arrangement, now());
         assert_eq!(
             shown(&listing.rows),
             [
-                "app: app-fix",
-                "notes",
+                "app: app, app-fix",
+                "site",
                 "elsewhere",
-                "quiet:2",
-                "app",
-                "old"
+                "quiet:3",
+                "old",
+                "old-wip",
+                "site-wip"
             ],
-            "no header for old, whose only worktree is quiet"
+            "site has one card on each side of the row, and old's two stand alone below it"
         );
     }
 
     #[test]
-    fn under_a_filter_the_repository_sort_groups_every_worktree_it_admits() {
+    fn under_a_filter_the_activity_sort_groups_every_worktree_it_admits() {
         let app = "/code/app/.git";
         let map = snapshot(
             vec![
@@ -338,7 +335,7 @@ mod tests {
             ],
             vec![],
         );
-        let mut arrangement = by_repository(&map);
+        let mut arrangement = Arrangement::default();
         arrangement.set_filter_text("app".to_string(), Some(&map), now());
         let listing = Listing::new(&map, &arrangement, now());
         assert_eq!(shown(&listing.rows), ["app: app, app-fix"]);

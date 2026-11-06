@@ -1,13 +1,13 @@
 //! Holding the list still. While the pointer is over the list, or while the Disk sort waits for
-//! the first sizing to finish, the cards that stay listed keep their places, and the Repository
-//! sort's groups keep theirs. Holding only pauses re-sorting: a card that arrives appears at once,
-//! in the place the sort gives it, within its group if it has one, and a card that leaves is gone
-//! at once, its group with it when it was the group's last.
+//! the first sizing to finish, the cards that stay listed keep their places, and the Activity
+//! sort's groups keep theirs, folded shut or open. Holding only pauses re-sorting: a card that
+//! arrives appears at once, in the place the sort gives it, within its group if it has one, and a
+//! card that leaves is gone at once, a group it leaves with one card giving way to that card.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::Cards;
+use super::SectionRow;
 use super::repository::Group;
 use crate::map::Project;
 
@@ -28,8 +28,9 @@ pub(super) struct Hold {
     order: Option<Order>,
 }
 
-/// The cards of each section of the list, in the order on screen. A group's cards stand together,
-/// so the order of the groups is the order of their cards.
+/// The cards of each section of the list, in the order on screen, a folded group's where its
+/// header stands. A group's cards stand together, so the order of the groups and the cards
+/// standing alone is the order of their cards.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Order {
     /// The cards above the quiet row, or every card while a filter is typed.
@@ -99,12 +100,16 @@ impl Hold {
         }
     }
 
-    /// `sorted`, one section's cards as the sort lays them out, with the cards the held order
-    /// lists put back in that order: each group in the place among the groups that its first held
-    /// card gives it, then the cards within each group, and those in no group. Each card or group
-    /// new to the section keeps the place the sort gives it, and one gone from it leaves no gap.
-    /// Unheld, `sorted` as it is.
-    pub(super) fn arrange<'a>(&self, section: Section, sorted: Cards<'a>) -> Cards<'a> {
+    /// `sorted`, one section's rows as the sort lays them out, with the cards the held order lists
+    /// put back in that order: each card alone in its held place, each group in the place its first
+    /// held card gives it, then the cards within each group. Each card or group new to the section
+    /// keeps the place the sort gives it, and one gone from it leaves no gap. Unheld, `sorted` as
+    /// it is.
+    pub(super) fn arrange<'a>(
+        &self,
+        section: Section,
+        sorted: Vec<SectionRow<'a>>,
+    ) -> Vec<SectionRow<'a>> {
         let Some(order) = &self.order else {
             return sorted;
         };
@@ -118,18 +123,20 @@ impl Hold {
             .map(|(place, path)| (path.as_path(), place))
             .collect();
         let card_place = |card: &&Project| place.get(card.path.as_path()).copied();
-        let group_place = |group: &Group| group.cards.iter().filter_map(card_place).min();
-        let groups = keep_places(sorted.groups, group_place)
+        let row_place = |row: &SectionRow| match row {
+            SectionRow::Project(card) => card_place(card),
+            SectionRow::Repository(group) => group.cards.iter().filter_map(card_place).min(),
+        };
+        keep_places(sorted, row_place)
             .into_iter()
-            .map(|group| Group {
-                cards: keep_places(group.cards, card_place),
-                ..group
+            .map(|row| match row {
+                SectionRow::Repository(group) => SectionRow::Repository(Group {
+                    cards: keep_places(group.cards, card_place),
+                    ..group
+                }),
+                SectionRow::Project(card) => SectionRow::Project(card),
             })
-            .collect();
-        Cards {
-            groups,
-            ungrouped: keep_places(sorted.ungrouped, card_place),
-        }
+            .collect()
     }
 }
 
@@ -162,6 +169,8 @@ fn keep_places<T>(sorted: Vec<T>, held_place: impl Fn(&T) -> Option<usize>) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::super::Row;
+    use super::super::fixtures::shown;
     use super::*;
     use crate::map::test_support::project_at;
 
@@ -176,13 +185,6 @@ mod tests {
             .collect()
     }
 
-    fn names<'a>(projects: &[&'a Project]) -> Vec<&'a str> {
-        projects
-            .iter()
-            .map(|project| project.name.as_str())
-            .collect()
-    }
-
     /// A list held by the pointer, the main section's cards on screen being `on_screen`.
     fn holding(on_screen: &[&str]) -> Hold {
         let mut hold = Hold::default();
@@ -194,37 +196,27 @@ mod tests {
         hold
     }
 
-    /// The main section's `sorted` cards, in no group, as `hold` arranges them.
-    fn arranged<'a>(hold: &Hold, sorted: Vec<&'a Project>) -> Vec<&'a str> {
-        let arranged = hold.arrange(Section::Main, Cards::ungrouped(sorted));
-        names(&arranged.ungrouped)
+    /// The main section's `sorted` rows as `hold` arranges them, as the rows show them.
+    fn arranged_rows(hold: &Hold, sorted: Vec<SectionRow>) -> Vec<String> {
+        let arranged = hold.arrange(Section::Main, sorted).into_iter();
+        shown(&arranged.map(Row::from).collect::<Vec<_>>())
+    }
+
+    /// The main section's `sorted` cards, each alone, as `hold` arranges them.
+    fn arranged(hold: &Hold, sorted: Vec<&Project>) -> Vec<String> {
+        arranged_rows(hold, sorted.into_iter().map(SectionRow::Project).collect())
     }
 
     /// The group of the repository `name`, listing `cards`, known by its name in place of a git
     /// dir.
-    fn group<'a>(name: &'static str, cards: Vec<&'a Project>) -> Group<'a> {
-        Group {
+    fn group<'a>(name: &'static str, cards: Vec<&'a Project>) -> SectionRow<'a> {
+        SectionRow::Repository(Group {
             common_dir: Path::new(name),
             name: name.to_string(),
             folder: Path::new(name),
             cards,
             worktrees: Vec::new(),
-        }
-    }
-
-    /// Each group of the main section's `sorted` cards as `hold` arranges them, as `name: card,
-    /// card`.
-    fn arranged_groups(hold: &Hold, sorted: Vec<Group>) -> Vec<String> {
-        let sorted = Cards {
-            groups: sorted,
-            ungrouped: Vec::new(),
-        };
-        let arranged = hold.arrange(Section::Main, sorted);
-        arranged
-            .groups
-            .iter()
-            .map(|group| format!("{}: {}", group.name, names(&group.cards).join(", ")))
-            .collect()
+        })
     }
 
     #[test]
@@ -256,22 +248,61 @@ mod tests {
         // The sort now puts b's group first, its new card second, where a flat hold would have
         // put it between a's cards.
         let sorted = vec![group("b", vec![&b, &b_new]), group("a", vec![&a_fix, &a])];
+        assert_eq!(arranged_rows(&hold, sorted), ["a: a, a-fix", "b: b, b-new"]);
+    }
+
+    #[test]
+    fn held_groups_and_cards_alone_keep_their_order_among_each_other() {
+        let [a, a_fix, notes, b, b_fix] = ["a", "a-fix", "notes", "b", "b-fix"].map(project);
+        let hold = holding(&["a", "a-fix", "notes", "b", "b-fix"]);
+        let sorted = vec![
+            group("b", vec![&b, &b_fix]),
+            SectionRow::Project(&notes),
+            group("a", vec![&a_fix, &a]),
+        ];
         assert_eq!(
-            arranged_groups(&hold, sorted),
-            ["a: a, a-fix", "b: b, b-new"]
+            arranged_rows(&hold, sorted),
+            ["a: a, a-fix", "notes", "b: b, b-fix"]
         );
     }
 
     #[test]
     fn a_new_group_takes_the_place_the_sort_gives_it_among_held_ones() {
-        let [a, b, c] = ["a", "b", "c"].map(project);
-        let hold = holding(&["a", "b"]);
+        let [a, a_fix, b, c, c_fix] = ["a", "a-fix", "b", "c", "c-fix"].map(project);
+        let hold = holding(&["a", "a-fix", "b"]);
         let sorted = vec![
-            group("c", vec![&c]),
-            group("b", vec![&b]),
-            group("a", vec![&a]),
+            group("c", vec![&c, &c_fix]),
+            SectionRow::Project(&b),
+            group("a", vec![&a, &a_fix]),
         ];
-        assert_eq!(arranged_groups(&hold, sorted), ["c: c", "a: a", "b: b"]);
+        assert_eq!(
+            arranged_rows(&hold, sorted),
+            ["c: c, c-fix", "a: a, a-fix", "b"]
+        );
+    }
+
+    #[test]
+    fn a_group_made_or_unmade_under_the_pointer_stays_where_its_cards_stood() {
+        let [notes, a, a_fix, site] = ["notes", "a", "a-fix", "site"].map(project);
+        // a stood alone until a worktree of its repository joined the section.
+        let alone = holding(&["notes", "a", "site"]);
+        let sorted = vec![
+            group("a", vec![&a, &a_fix]),
+            SectionRow::Project(&notes),
+            SectionRow::Project(&site),
+        ];
+        assert_eq!(
+            arranged_rows(&alone, sorted),
+            ["notes", "a: a, a-fix", "site"]
+        );
+        // a-fix left the section, which leaves a alone where its group stood.
+        let grouped = holding(&["notes", "a", "a-fix", "site"]);
+        let sorted = vec![
+            SectionRow::Project(&site),
+            SectionRow::Project(&a),
+            SectionRow::Project(&notes),
+        ];
+        assert_eq!(arranged_rows(&grouped, sorted), ["notes", "a", "site"]);
     }
 
     #[test]

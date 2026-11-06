@@ -1,10 +1,11 @@
 //! The orders the project list can take, as the toolbar names them.
 
 use std::cmp::Reverse;
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::focus::disk_bytes;
-use super::{Cards, repository};
+use super::{SectionRow, repository};
 use crate::dashboard::SortOrder;
 use crate::map::{Project, Snapshot};
 
@@ -16,19 +17,14 @@ use crate::map::{Project, Snapshot};
 const ACTIVITY_SLICE: Duration = Duration::from_secs(5 * 60);
 
 impl SortOrder {
-    pub(in crate::dashboard) const ALL: [SortOrder; 4] = [
-        SortOrder::Activity,
-        SortOrder::Name,
-        SortOrder::Disk,
-        SortOrder::Repository,
-    ];
+    pub(in crate::dashboard) const ALL: [SortOrder; 3] =
+        [SortOrder::Activity, SortOrder::Name, SortOrder::Disk];
 
     pub(in crate::dashboard) fn label(self) -> &'static str {
         match self {
             SortOrder::Activity => "Activity",
             SortOrder::Name => "Name",
             SortOrder::Disk => "Disk",
-            SortOrder::Repository => "Repository",
         }
     }
 
@@ -37,38 +33,38 @@ impl SortOrder {
             SortOrder::Activity => "Newest activity first",
             SortOrder::Name => "By name",
             SortOrder::Disk => "Largest folders first",
-            SortOrder::Repository => "Grouped by repository",
         }
     }
 
-    /// One section's `projects` as this sort lays them out: the Repository sort gathers them into
-    /// their repositories' groups, and the others leave them in no group. `map` gives each group
-    /// every worktree of its repository.
-    pub(super) fn lay_out<'a>(self, projects: Vec<&'a Project>, map: &'a Snapshot) -> Cards<'a> {
+    /// `projects`, the cards above the quiet row or every card a typed filter admits, as this sort
+    /// lays them out: the Activity sort gathers the cards of each repository with two or more of
+    /// them into its group (see `repository`), and the others list every card alone. `map` gives
+    /// each group every worktree of its repository.
+    pub(super) fn lay_out<'a>(
+        self,
+        projects: Vec<&'a Project>,
+        map: &'a Snapshot,
+    ) -> Vec<SectionRow<'a>> {
         match self {
-            SortOrder::Repository => repository::group(projects, map),
-            SortOrder::Activity | SortOrder::Name | SortOrder::Disk => {
-                Cards::ungrouped(self.arrange(projects))
+            SortOrder::Activity => repository::group(projects, map),
+            SortOrder::Name | SortOrder::Disk => {
+                let arranged = self.arrange(projects).into_iter();
+                arranged.map(SectionRow::Project).collect()
             }
         }
     }
 
-    /// `projects` in this order, in no group. They arrive newest activity first, and the Disk sort
-    /// is stable, so projects of the same size keep that order; it weighs `focus::disk_bytes`. The
-    /// Repository sort orders the cards it leaves in no group as the Activity sort does.
+    /// `projects` in this order, every card alone, as the quiet section lists them in every sort.
+    /// They arrive newest activity first, and the Disk sort is stable, so projects of the same size
+    /// keep that order; it weighs `focus::disk_bytes`.
     pub(super) fn arrange<'a>(
         self,
         projects: impl IntoIterator<Item = &'a Project>,
     ) -> Vec<&'a Project> {
         let mut arranged: Vec<&Project> = projects.into_iter().collect();
         match self {
-            SortOrder::Activity | SortOrder::Repository => arranged.sort_by_cached_key(|project| {
-                let slice = activity_slice(project);
-                (
-                    Reverse(slice),
-                    project.name.to_lowercase(),
-                    project.path.clone(),
-                )
+            SortOrder::Activity => arranged.sort_by_cached_key(|project| {
+                activity_rank(activity_slice(project), &project.name, &project.path)
             }),
             SortOrder::Name => arranged.sort_by_cached_key(|project| project.name.to_lowercase()),
             SortOrder::Disk => arranged.sort_by_key(|project| Reverse(disk_bytes(project))),
@@ -84,10 +80,23 @@ pub(super) fn activity_slice(project: &Project) -> Option<u64> {
     Some(since_epoch.as_secs() / ACTIVITY_SLICE.as_secs())
 }
 
+/// Where the Activity sort stands a card, or a repository's group, that goes by `name`, its newest
+/// activity in `slice`: the newest slice first, each slice in name order, ignoring case, and two
+/// of one name by `path`, the card's folder or the group's git dir, so that no two tie.
+pub(super) fn activity_rank<'p>(
+    slice: Option<u64>,
+    name: &str,
+    path: &'p Path,
+) -> (Reverse<Option<u64>>, String, &'p Path) {
+    (Reverse(slice), name.to_lowercase(), path)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use super::super::Row;
+    use super::super::fixtures::{self, linked_worktree, main_worktree, shown, snapshot};
     use super::*;
     use crate::map::Measurement;
     use crate::map::test_support::{at, cargo_target, measured, project_at};
@@ -162,15 +171,23 @@ mod tests {
     }
 
     #[test]
-    fn the_repository_sort_leaves_its_cards_in_no_group_in_the_activity_order() {
-        let projects = [
-            active("a-older", Some(1_000)),
-            active("b-newer", Some(1_500)),
-        ];
-        assert_eq!(
-            names(SortOrder::Repository.arrange(&projects)),
-            ["b-newer", "a-older"]
+    fn only_the_activity_sort_nests_a_repositorys_worktrees() {
+        let app = "/code/app/.git";
+        let map = snapshot(
+            vec![
+                main_worktree(app, "main", fixtures::project("app", 1)),
+                linked_worktree(app, "fix", fixtures::project("app-fix", 1)),
+            ],
+            vec![],
         );
+        let laid_out = |sort: SortOrder| {
+            let rows = sort.lay_out(map.projects.iter().collect(), &map);
+            let rows: Vec<Row> = rows.into_iter().map(Row::from).collect();
+            shown(&rows)
+        };
+        assert_eq!(laid_out(SortOrder::Activity), ["app: app, app-fix"]);
+        assert_eq!(laid_out(SortOrder::Name), ["app", "app-fix"]);
+        assert_eq!(laid_out(SortOrder::Disk), ["app", "app-fix"]);
     }
 
     #[test]

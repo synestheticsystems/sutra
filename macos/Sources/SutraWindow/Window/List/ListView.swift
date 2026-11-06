@@ -56,10 +56,10 @@ private struct Rows: View {
                     switch row {
                     case .card(let card):
                         CardView(model: card, dashboard: dashboard)
-                    case .repository(_, let name, let tooltip, let total, let cards):
+                    case .repository(let commonDir, let name, let tooltip, let total, let fold):
                         RepositoryGroup(
-                            name: name, tooltip: tooltip, total: total, cards: cards,
-                            dashboard: dashboard
+                            commonDir: commonDir, name: name, tooltip: tooltip, total: total,
+                            fold: fold, dashboard: dashboard
                         )
                     case .elsewhere(let heading, let lines, let waiting):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
@@ -75,39 +75,100 @@ private struct Rows: View {
     }
 }
 
-/// One repository's worktrees: a light line with the repository's name and the disk its worktrees
-/// take, then their cards, set in a little so they read as the repository's at a glance.
+/// One repository's worktrees: a light line with a disclosure chevron, the repository's name and
+/// the disk its worktrees take, then their cards, set in a little so they read as the repository's
+/// at a glance. A click on the line folds the group shut, and another opens it again. Folded, the
+/// line stands alone on a card's surface, the robots of the agents in its worktrees at its end,
+/// and throbs as their cards would while one of them waits on the user.
 private struct RepositoryGroup: View {
+    /// The git folder the worktrees share, which the click names to the core.
+    let commonDir: String
     let name: String
     /// Where the repository is.
     let tooltip: String
     let total: String?
-    let cards: [CardModel]
+    let fold: Fold
     let dashboard: DashboardModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(name)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let total {
-                    Text(total)
+        switch fold {
+        case .open(let cards):
+            VStack(alignment: .leading, spacing: 8) {
+                header(open: true)
+                    .padding(.horizontal, 4)
+                    // A little more room above the line than below, so it reads as its cards'
+                    // heading.
+                    .padding(.top, 4)
+                ForEach(cards, id: \.path) { card in
+                    CardView(model: card, dashboard: dashboard)
+                        .padding(.leading, 12)
+                }
+            }
+        case .folded(let sessions, let subagents, let waiting):
+            HStack(spacing: 12) {
+                header(open: false)
+                if !sessions.isEmpty || !subagents.isEmpty {
+                    // Laid out first and never cut, as on a card's tray.
+                    FoldedAgents(sessions: sessions, subagents: subagents)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(1)
+            .background { CardSurface(waiting: waiting) }
+        }
+    }
+
+    /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
+    /// the name and the total.
+    private func header(open: Bool) -> some View {
+        Button {
+            dashboard.perform(.toggleRepositoryFold(commonDir: commonDir))
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .accessibilityHidden(true)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(name)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let total {
+                        Text(total)
+                    }
                 }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
-            .hoverTip(tooltip)
-            .padding(.horizontal, 4)
-            // A little more room above the line than below, so it reads as its cards' heading.
-            .padding(.top, 4)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-            ForEach(cards, id: \.path) { card in
-                CardView(model: card, dashboard: dashboard)
-                    .padding(.leading, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .hoverTip(tooltip)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityValue(open ? "Open" : "Folded")
+    }
+}
+
+/// The agents in a folded group's worktrees, at its line's end as on a card's tray: the sessions,
+/// whose faces move, then past a divider the subagents, whose faces hold still.
+private struct FoldedAgents: View {
+    let sessions: [AgentBadge]
+    let subagents: [AgentBadge]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            AgentBadges(badges: sessions, moves: true)
+            if !sessions.isEmpty && !subagents.isEmpty {
+                Divider()
+                    .frame(height: 12)
             }
+            AgentBadges(badges: subagents, moves: false)
         }
     }
 }

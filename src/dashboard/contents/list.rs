@@ -1,28 +1,31 @@
 //! The list, or what stands in its place: what the store edition needs before it can read
 //! anything, the wait for the first map, or why nothing is listed. Otherwise the rows: a card per
-//! project, or in the Repository sort each repository's cards under a header with its name and
-//! disk, then the agents working outside every project, and the row standing for the quiet
+//! project, or in the Activity sort a repository's group, its cards under a header with its name
+//! and disk, then the agents working outside every project, and the row standing for the quiet
 //! projects.
 
 mod elsewhere;
+mod repository;
 
 use std::path::PathBuf;
 
 use super::card::{self, CardContext, Naming, agents};
-use crate::dashboard::listing::{FOCUS_LARGE_BYTES, FOCUS_RECENT, Listing, Row};
+use crate::dashboard::listing::{FOCUS_LARGE_BYTES, FOCUS_RECENT, Folds, Listing, Row};
 use crate::dashboard::{List, ListRow, format};
+use crate::map::Snapshot;
 use crate::map::grant::GrantError;
-use crate::map::{FolderSize, Project, Snapshot};
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
-/// `lost_grant` why the one granted on an earlier launch could not be reopened.
+/// `lost_grant` why the one granted on an earlier launch could not be reopened. `folds` says which
+/// repositories' groups are folded shut.
 pub(in crate::dashboard) fn list(
     listing: Option<&Listing>,
     filter: Option<&str>,
     roots: &[PathBuf],
     lost_grant: Option<&GrantError>,
     engine_stopped: bool,
+    folds: &Folds,
     cards: &CardContext,
 ) -> List {
     if roots.is_empty() {
@@ -41,28 +44,18 @@ pub(in crate::dashboard) fn list(
             rows: listing
                 .rows
                 .iter()
-                .map(|row| list_row(row, listing.snapshot, cards))
+                .map(|row| list_row(row, listing.snapshot, folds, cards))
                 .collect(),
         },
     }
 }
 
-fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
+fn list_row(row: &Row, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
     match row {
         Row::Project(project) => ListRow::Card {
             card: Box::new(card::card(project, Naming::Folder, map, cards)),
         },
-        Row::Repository(group) => ListRow::Repository {
-            common_dir: format::path_text(group.common_dir),
-            name: group.name.clone(),
-            tooltip: format::tilde(group.folder, cards.home),
-            total: total_of(&group.worktrees, cards),
-            cards: group
-                .cards
-                .iter()
-                .map(|project| card::card(project, Naming::Branch, map, cards))
-                .collect(),
-        },
+        Row::Repository(group) => repository::row(group, map, folds, cards),
         Row::Elsewhere(working) => ListRow::Elsewhere {
             heading: "Elsewhere".to_string(),
             lines: elsewhere::lines(working, cards),
@@ -75,20 +68,6 @@ fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
             tooltip: what_makes_one_quiet(),
         },
     }
-}
-
-/// What `worktrees` take on disk between them, as their trays write it: the totals the trays show,
-/// added up, at least that when part of one could not be read. A worktree still being sized adds
-/// nothing, and the sum says nothing of it; `None` while none is sized.
-fn total_of(worktrees: &[&Project], cards: &CardContext) -> Option<String> {
-    let total = worktrees
-        .iter()
-        .filter_map(|worktree| card::tray_total(worktree, cards))
-        .reduce(|total, size| FolderSize {
-            bytes: total.bytes + size.bytes,
-            partial: total.partial || size.partial,
-        })?;
-    Some(format::size(total.bytes, total.partial))
 }
 
 /// Why the list is empty: the filter admits no project, or the scan found nothing.
@@ -137,31 +116,20 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::dashboard::cleaning::Cleaning;
-    use crate::dashboard::cleaning::tests::{cleaning, deleted};
+    use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::Arrangement;
     use crate::dashboard::listing::fixtures::{
         agent, linked_worktree, main_worktree, now, project, quiet, snapshot, subagent_in,
     };
-    use crate::dashboard::{AgentLook, ElsewhereLine, SortOrder};
-    use crate::map::test_support::{cargo_target, measured, project_at, usage};
-    use crate::map::{AgentStatus, DirUsage, Measurement};
+    use crate::dashboard::{AgentLook, ElsewhereLine, RepositoryFold};
+    use crate::map::AgentStatus;
     use crate::notifications::Notifier;
 
     const HOME: &str = "/Users/dev";
 
-    /// What the cards read, with `cleaning` at work.
-    fn context<'a>(cleaning: &'a Cleaning, notifier: &'a Notifier) -> CardContext<'a> {
-        CardContext {
-            notifier,
-            cleaning,
-            home: Path::new(HOME),
-            now: now(),
-        }
-    }
-
-    /// What `list` gives for `map` as the user arranged it, under the root `/code`.
-    fn listed(map: &Snapshot, arrangement: &Arrangement) -> List {
+    /// What `list` gives for `map` as the user arranged it, under the root `/code`, the groups of
+    /// the repositories in `folds` folded shut.
+    fn listed_with(map: &Snapshot, arrangement: &Arrangement, folds: &Folds) -> List {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
         let cards = CardContext {
             notifier: &notifier,
@@ -177,8 +145,15 @@ mod tests {
             &roots,
             None,
             false,
+            folds,
             &cards,
         )
+    }
+
+    /// What `list` gives for `map` as the user arranged it, under the root `/code`, no group
+    /// folded.
+    fn listed(map: &Snapshot, arrangement: &Arrangement) -> List {
+        listed_with(map, arrangement, &Folds::default())
     }
 
     #[test]
@@ -233,93 +208,32 @@ mod tests {
     }
 
     #[test]
-    fn a_repositorys_group_is_its_name_its_disk_and_its_cards_going_by_their_branches() {
-        let app = "/code/app/.git";
-        let sized = |bytes, project| Project {
-            own_files: measured(bytes),
-            ..project
-        };
+    fn a_group_the_user_folded_shows_its_header_alone_and_the_others_their_cards() {
+        let (app, site) = ("/code/app/.git", "/code/site/.git");
         let map = snapshot(
             vec![
-                sized(2_000_000_000, main_worktree(app, "main", project("app", 1))),
+                main_worktree(app, "main", project("app", 1)),
                 linked_worktree(app, "fix", project("app-fix", 1)),
-                sized(500_000_000, linked_worktree(app, "old", quiet("app-old"))),
+                main_worktree(site, "main", project("site", 1)),
+                linked_worktree(site, "fix", project("site-fix", 1)),
             ],
             vec![],
         );
-        let mut arrangement = Arrangement::default();
-        arrangement.set_sort(SortOrder::Repository, &map, now());
-        let List::Rows { rows } = listed(&map, &arrangement) else {
+        let mut folds = Folds::default();
+        folds.toggle(app, &map);
+        let List::Rows { rows } = listed_with(&map, &Arrangement::default(), &folds) else {
             panic!("a map with projects lists them");
         };
-        let [
-            ListRow::Repository {
-                common_dir,
-                name,
-                tooltip,
-                total,
-                cards,
-            },
-            ListRow::QuietProjects { .. },
-        ] = rows.as_slice()
-        else {
-            panic!("the group, then the quiet row: {rows:?}");
-        };
-        assert_eq!((common_dir.as_str(), name.as_str()), (app, "app"));
-        assert_eq!(tooltip, "/code/app", "where the repository is");
-        assert_eq!(
-            total.as_deref(),
-            Some("2.5 GB"),
-            "the quiet worktree's size too, and nothing yet of the one being sized"
-        );
-        let shown: Vec<(&str, &str, bool)> = cards
+        let folded: Vec<(&str, bool)> = rows
             .iter()
-            .map(|card| {
-                (
-                    card.path.as_str(),
-                    card.name.as_str(),
-                    card.branch.is_some(),
-                )
+            .map(|row| match row {
+                ListRow::Repository { name, fold, .. } => {
+                    (name.as_str(), matches!(fold, RepositoryFold::Folded { .. }))
+                }
+                row => panic!("only the two groups: {row:?}"),
             })
             .collect();
-        assert_eq!(
-            shown,
-            [
-                ("/code/app", "main", false),
-                ("/code/app-fix", "fix", false)
-            ]
-        );
-    }
-
-    #[test]
-    fn a_repositorys_total_waits_for_a_first_size_and_says_when_it_is_a_lower_bound() {
-        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
-        let cards = context(&cleaning, &notifier);
-        let being_sized = project_at("/code/app");
-        let read_in_part = Project {
-            own_files: Measurement::Measured(DirUsage {
-                unreadable_dirs: 1,
-                ..usage(5_000_000)
-            }),
-            ..project_at("/code/app-fix")
-        };
-        assert_eq!(total_of(&[&being_sized], &cards), None);
-        assert_eq!(
-            total_of(&[&being_sized, &read_in_part], &cards).as_deref(),
-            Some("\u{2265}5 MB")
-        );
-    }
-
-    #[test]
-    fn a_repositorys_total_falls_with_what_a_clean_leaves_as_its_worktrees_trays_do() {
-        let (cleaning, notifier) = (deleted(), Notifier::new(|_, _| {}));
-        let cards = context(&cleaning, &notifier);
-        let app = Project {
-            own_files: measured(1_000_000_000),
-            artifacts: vec![cargo_target("/code/app/target", measured(12_300_000_000))],
-            ..project_at("/code/app")
-        };
-        assert_eq!(total_of(&[&app], &cards).as_deref(), Some("1 GB"));
+        assert_eq!(folded, [("app", true), ("site", false)]);
     }
 
     #[test]
@@ -352,16 +266,17 @@ mod tests {
             now: now(),
         };
         let roots = [PathBuf::from("/code")];
+        let none = Folds::default();
         assert_eq!(
-            list(None, None, &roots, None, false, &cards),
+            list(None, None, &roots, None, false, &none, &cards),
             List::Scanning
         );
         assert!(matches!(
-            list(None, None, &roots, None, true, &cards),
+            list(None, None, &roots, None, true, &none, &cards),
             List::Empty { message } if message.starts_with("The scanner stopped before its first")
         ));
         assert!(matches!(
-            list(None, None, &[], None, false, &cards),
+            list(None, None, &[], None, false, &none, &cards),
             List::NoFolder { lost: None, .. }
         ));
     }

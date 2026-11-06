@@ -283,7 +283,7 @@ mod tests {
         let sort = toolbar_over(&two, false).sort.unwrap();
         assert_eq!(sort.current, SortOrder::Activity);
         let labels: Vec<&str> = sort.choices.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, ["Activity", "Name", "Disk", "Repository"]);
+        assert_eq!(labels, ["Activity", "Name", "Disk"]);
         assert_eq!(toolbar_over(&two, false).folder, None);
         assert_eq!(
             toolbar_over(&two, true).folder.as_deref(),

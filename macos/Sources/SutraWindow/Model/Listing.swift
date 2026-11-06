@@ -14,9 +14,9 @@ public enum Listing: Equatable {
 /// One row of the list.
 public enum Row: Identifiable, Equatable {
     case card(CardModel)
-    /// One repository's worktrees under its header, in the Repository sort.
+    /// One repository's worktrees under its header, where two or more are listed together.
     case repository(
-        commonDir: String, name: String, tooltip: String, total: String?, cards: [CardModel]
+        commonDir: String, name: String, tooltip: String, total: String?, fold: Fold
     )
     case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
@@ -41,17 +41,36 @@ public enum Row: Identifiable, Equatable {
         switch (lhs, rhs) {
         // The same model is the same row, whatever its card now says: the card redraws itself.
         case (.card(let lhs), .card(let rhs)): lhs === rhs
-        // A group is the same while its header reads the same over the same card models.
-        case (.repository(let lhsDir, let lhsName, let lhsTooltip, let lhsTotal, let lhsCards),
-              .repository(let rhsDir, let rhsName, let rhsTooltip, let rhsTotal, let rhsCards)):
+        // A group is the same while its header reads the same over the same fold.
+        case (.repository(let lhsDir, let lhsName, let lhsTooltip, let lhsTotal, let lhsFold),
+              .repository(let rhsDir, let rhsName, let rhsTooltip, let rhsTotal, let rhsFold)):
             lhsDir == rhsDir && lhsName == rhsName && lhsTooltip == rhsTooltip
-                && lhsTotal == rhsTotal && lhsCards.elementsEqual(rhsCards, by: ===)
+                && lhsTotal == rhsTotal && lhsFold == rhsFold
         case (.elsewhere(let lhsHeading, let lhsLines, let lhsWaiting),
               .elsewhere(let rhsHeading, let rhsLines, let rhsWaiting)):
             lhsHeading == rhsHeading && lhsLines == rhsLines && lhsWaiting == rhsWaiting
         case (.quietProjects(let lhsOpen, let lhsLabel, let lhsTooltip),
               .quietProjects(let rhsOpen, let rhsLabel, let rhsTooltip)):
             lhsOpen == rhsOpen && lhsLabel == rhsLabel && lhsTooltip == rhsTooltip
+        default: false
+        }
+    }
+}
+
+/// What stands under a repository's header, as the window keeps it: the models of the group's
+/// cards, or, folded shut, the core's record of the agents in them, which the header shows.
+public enum Fold: Equatable {
+    case open([CardModel])
+    case folded(sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool)
+
+    public static func == (lhs: Fold, rhs: Fold) -> Bool {
+        switch (lhs, rhs) {
+        // The same models are the same cards, whatever they now say: each card redraws itself.
+        case (.open(let lhsCards), .open(let rhsCards)):
+            lhsCards.elementsEqual(rhsCards, by: ===)
+        case (.folded(let lhsSessions, let lhsSubagents, let lhsWaiting),
+              .folded(let rhsSessions, let rhsSubagents, let rhsWaiting)):
+            lhsSessions == rhsSessions && lhsSubagents == rhsSubagents && lhsWaiting == rhsWaiting
         default: false
         }
     }
@@ -105,14 +124,22 @@ struct CardModels {
                 kept[card.path] = model
                 return model
             }
+            func models(under fold: RepositoryFold) -> Fold {
+                switch fold {
+                case .open(let cards):
+                    .open(cards.map(model(of:)))
+                case .folded(let sessions, let subagents, let waiting):
+                    .folded(sessions: sessions, subagents: subagents, waiting: waiting)
+                }
+            }
             let shown = rows.map { row -> Row in
                 switch row {
                 case .card(let card):
                     return .card(model(of: card))
-                case .repository(let commonDir, let name, let tooltip, let total, let cards):
+                case .repository(let commonDir, let name, let tooltip, let total, let fold):
                     return .repository(
                         commonDir: commonDir, name: name, tooltip: tooltip, total: total,
-                        cards: cards.map(model(of:))
+                        fold: models(under: fold)
                     )
                 case .elsewhere(let heading, let lines, let waiting):
                     return .elsewhere(heading: heading, lines: lines, waiting: waiting)

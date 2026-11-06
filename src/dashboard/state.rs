@@ -134,6 +134,7 @@ impl State {
             Action::ToggleQuietProjects => {
                 self.arrangement.toggle_quiet(self.snapshot.as_deref(), now);
             }
+            Action::ToggleRepositoryFold { common_dir } => self.toggle_fold(&common_dir),
             Action::PointerEnteredList => {
                 let map = self.snapshot.as_deref();
                 self.arrangement.pointer_entered(map, now);
@@ -255,6 +256,7 @@ impl State {
                 &self.roots,
                 self.lost_grant.as_ref(),
                 self.engine_stopped,
+                &self.settings.folded_repositories,
                 &cards,
             ),
             footer: map.and_then(|map| footer::footer(map, &self.home)),
@@ -284,7 +286,21 @@ impl State {
         self.notifier.process_snapshot(&snapshot);
         self.cleaning.settle(&snapshot);
         self.arrangement.observe(&snapshot, now);
+        if self.settings.folded_repositories.forget_gone(&snapshot) {
+            self.save_settings();
+        }
         self.snapshot = Some(snapshot);
+    }
+
+    /// The user clicked the header of the group of the repository whose git folder reads
+    /// `common_dir`: fold it shut or open it, and keep that for the next run.
+    fn toggle_fold(&mut self, common_dir: &str) {
+        let Some(map) = &self.snapshot else {
+            return;
+        };
+        if self.settings.folded_repositories.toggle(common_dir, map) {
+            self.save_settings();
+        }
     }
 
     /// Start an engine on the roots in place of the one running, and start afresh all that follows

@@ -13,14 +13,18 @@ use crate::map::{AgentSession, AgentStatus, SessionHost};
 /// The badges of the sessions that earn one, in the order the map lists the sessions. A session
 /// keeps its place for as long as it lasts, so a robot never moves when its status changes: its
 /// face already tells which one waits.
-pub(super) fn badges(agents: &[AgentSession], now: SystemTime) -> Vec<AgentBadge> {
+pub(in crate::dashboard::contents) fn badges(
+    agents: &[AgentSession],
+    now: SystemTime,
+) -> Vec<AgentBadge> {
     shown(agents)
         .into_iter()
         .map(|agent| badge(agent, now))
         .collect()
 }
 
-/// Whether any of `agents` waits on the user, which makes the card or the row they are on throb.
+/// Whether any of `agents` waits on the user, which makes the card, the row or the folded header
+/// they are on throb.
 pub(in crate::dashboard::contents) fn any_waiting<'a>(
     agents: impl IntoIterator<Item = &'a AgentSession>,
 ) -> bool {

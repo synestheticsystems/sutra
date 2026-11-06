@@ -3,6 +3,7 @@
 //! then shows. Every folder is a fixture, and the notifier is muted throughout.
 
 mod cards;
+mod folds;
 mod maps;
 mod settings;
 

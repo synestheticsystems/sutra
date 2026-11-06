@@ -1,5 +1,5 @@
-//! What the user set that outlasts a run: the free space to keep, and which of the folders macOS
-//! guards to watch.
+//! What the user set that outlasts a run: the free space to keep, which of the folders macOS
+//! guards to watch, and which repositories' groups are folded shut on the list.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::dashboard::listing::Folds;
 use crate::home;
 use crate::map::{PrivateFolder, ScanOptions};
 
@@ -23,6 +24,8 @@ pub(super) struct SavedSettings {
     pub(super) keep_free_bytes: Option<u64>,
     /// The private folders to watch (see `ScanOptions`).
     pub(super) watched_private_folders: BTreeSet<PrivateFolder>,
+    /// The repositories whose groups the user folded shut, none at first.
+    pub(super) folded_repositories: Folds,
 }
 
 impl Default for SavedSettings {
@@ -32,6 +35,7 @@ impl Default for SavedSettings {
         SavedSettings {
             keep_free_bytes: None,
             watched_private_folders: BTreeSet::from([PrivateFolder::Documents]),
+            folded_repositories: Folds::default(),
         }
     }
 }
@@ -93,34 +97,47 @@ impl SavedSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dashboard::listing::fixtures::{main_worktree, project, snapshot};
     use crate::map::test_support::TempDir;
 
     #[test]
     fn settings_saved_are_read_back() {
         let fixture = TempDir::new("settings-round-trip");
         let path = fixture.path("Sutra/settings.json");
-        let settings = SavedSettings {
+        let app = "/code/app/.git";
+        let map = snapshot(vec![main_worktree(app, "main", project("app", 1))], vec![]);
+        let mut settings = SavedSettings {
             keep_free_bytes: Some(100_000_000_000),
             watched_private_folders: BTreeSet::from([
                 PrivateFolder::Desktop,
                 PrivateFolder::Downloads,
             ]),
+            folded_repositories: Folds::default(),
         };
+        settings.folded_repositories.toggle(app, &map);
 
         settings.save(Some(&path)).unwrap();
 
-        assert_eq!(SavedSettings::load(Some(&path)).unwrap(), settings);
+        let read_back = SavedSettings::load(Some(&path)).unwrap();
+        assert_eq!(read_back, settings);
+        assert!(read_back.folded_repositories.is_folded(app));
     }
 
     #[test]
-    fn a_file_saved_before_a_setting_existed_gives_it_its_default_which_watches_documents_alone() {
+    fn a_file_saved_before_a_setting_existed_gives_it_its_default() {
         let fixture = TempDir::new("settings-older");
         let older = fixture.write("settings.json", r#"{"keep_free_bytes": 25000000000}"#);
         let settings = SavedSettings::load(Some(&older)).unwrap();
         assert_eq!(settings.keep_free_bytes, Some(25_000_000_000));
         assert_eq!(
             settings.scan_options().private_folders,
-            BTreeSet::from([PrivateFolder::Documents])
+            BTreeSet::from([PrivateFolder::Documents]),
+            "Documents alone is watched"
+        );
+        assert_eq!(
+            settings.folded_repositories,
+            Folds::default(),
+            "no group is folded"
         );
     }
 

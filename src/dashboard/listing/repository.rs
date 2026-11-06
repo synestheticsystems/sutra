@@ -1,14 +1,15 @@
-//! The Repository sort's groups. A repository is the worktrees that share one git dir
+//! The Activity sort's groups. A repository is the worktrees that share one git dir
 //! (`RepoInfo::common_dir`): a main worktree and the worktrees linked to it. Two clones of one
 //! remote are two repositories, and a bare repository's linked worktrees are a group of their own.
+//! A repository has a group only where two or more of its worktrees are listed together, so the
+//! list gains no header for a project on its own.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::Cards;
-use super::sort::activity_slice;
-use crate::dashboard::SortOrder;
+use super::SectionRow;
+use super::sort::{activity_rank, activity_slice};
 use crate::map::{Project, RepoInfo, Snapshot};
 
 /// One repository's worktrees on the list, under the header that names it.
@@ -19,20 +20,22 @@ pub(in crate::dashboard) struct Group<'a> {
     pub(in crate::dashboard) name: String,
     /// The folder the repository goes by (`RepoInfo::folder`), which the header's tooltip names.
     pub(in crate::dashboard) folder: &'a Path,
-    /// The worktrees the list shows: the main worktree first, then the linked ones by their
-    /// five-minute slice, each slice in the order of the branches they go by on the list.
+    /// The worktrees the list shows, two or more, whether the header holds them folded shut or
+    /// not: the main worktree first, then the linked ones by their five-minute slice, each slice
+    /// in the order of the names they go by on the list.
     pub(in crate::dashboard) cards: Vec<&'a Project>,
     /// Every worktree of the repository on the map, listed or not, whose sizes the header adds up.
     pub(in crate::dashboard) worktrees: Vec<&'a Project>,
 }
 
-/// `projects`, one section's cards, gathered into their repositories' groups, with the folders in
-/// no repository after them in the Activity order. The groups stand by their newest activity
-/// slice, then by name, so a group moves up only when one of its cards' activity enters a newer
-/// slice. `map` gives each group every worktree of its repository.
-pub(super) fn group<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Cards<'a> {
+/// `projects`, one section's cards, in the Activity order, with the cards of each repository that
+/// has two or more of them gathered into its group. The groups and the cards standing alone
+/// interleave, each group in the place its newest card would take, so a group moves up only when
+/// one of its cards' activity enters a newer slice. `map` gives each group every worktree of its
+/// repository.
+pub(super) fn group<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Vec<SectionRow<'a>> {
+    let mut rows = Vec::new();
     let mut gatherings: HashMap<&Path, Gathering> = HashMap::new();
-    let mut ungrouped = Vec::new();
     for project in projects {
         match &project.repo {
             Some(repo) => gatherings
@@ -40,9 +43,17 @@ pub(super) fn group<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Cards<
                 .or_insert_with(|| Gathering::new(repo))
                 .cards
                 .push(project),
-            None => ungrouped.push(project),
+            None => rows.push(SectionRow::Project(project)),
         }
     }
+    // A header over one card would only take room, so that card stands alone.
+    gatherings.retain(|_, gathering| match gathering.cards.as_slice() {
+        [alone] => {
+            rows.push(SectionRow::Project(alone));
+            false
+        }
+        _ => true,
+    });
     for project in &map.projects {
         let gathering = project
             .repo
@@ -52,22 +63,18 @@ pub(super) fn group<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Cards<
             gathering.worktrees.push(project);
         }
     }
-    let mut groups: Vec<Group> = gatherings
-        .into_values()
-        .map(Gathering::into_group)
-        .collect();
-    groups.sort_by_cached_key(|group| {
-        let newest = group.cards.iter().map(|card| activity_slice(card)).max();
-        (
-            Reverse(newest.flatten()),
-            group.name.to_lowercase(),
-            group.common_dir,
-        )
+    let groups = gatherings.into_values().map(Gathering::into_group);
+    rows.extend(groups.map(SectionRow::Repository));
+    rows.sort_by_cached_key(|row| match row {
+        SectionRow::Project(project) => {
+            activity_rank(activity_slice(project), &project.name, &project.path)
+        }
+        SectionRow::Repository(group) => {
+            let newest = group.cards.iter().map(|card| activity_slice(card)).max();
+            activity_rank(newest.flatten(), &group.name, group.common_dir)
+        }
     });
-    Cards {
-        groups,
-        ungrouped: SortOrder::Activity.arrange(ungrouped),
-    }
+    rows
 }
 
 /// A repository's worktrees as `group` gathers them, before the group can be named.
@@ -94,17 +101,15 @@ impl<'a> Gathering<'a> {
             .copied()
             .find(|worktree| is_main_worktree(worktree));
         let mut cards = self.cards;
-        // As the Activity sort orders them, except that a nested card goes by its branch, so
-        // within a slice the cards stand in the order of the branches they show.
+        // As the Activity sort orders them, except that a nested card goes by its branch, or on
+        // no branch by its folder's name (see `card::header`), so within a slice the cards stand
+        // in the order of the names they show.
         cards.sort_by_cached_key(|card| {
-            let branch = card
-                .repo
-                .as_ref()
-                .and_then(|repo| repo.branch.as_deref().or(repo.head.as_deref()));
+            let branch = card.repo.as_ref().and_then(|repo| repo.branch.as_deref());
             (
                 !is_main_worktree(card),
                 Reverse(activity_slice(card)),
-                branch.unwrap_or_default().to_lowercase(),
+                branch.unwrap_or(&card.name).to_lowercase(),
                 card.path.clone(),
             )
         });
@@ -149,12 +154,25 @@ mod tests {
     use super::super::fixtures::{linked_worktree, main_worktree, project, quiet, shown, snapshot};
     use super::*;
 
+    /// What `group` makes of `projects` on `map`, as the rows show it.
+    fn grouped_of(projects: Vec<&Project>, map: &Snapshot) -> Vec<String> {
+        let rows: Vec<Row> = group(projects, map).into_iter().map(Row::from).collect();
+        shown(&rows)
+    }
+
     /// What `group` makes of every project on `map`, as the rows show it.
     fn grouped(map: &Snapshot) -> Vec<String> {
-        let rows: Vec<Row> = group(map.projects.iter().collect(), map)
-            .into_rows()
-            .collect();
-        shown(&rows)
+        grouped_of(map.projects.iter().collect(), map)
+    }
+
+    /// The groups `group` makes of every project on `map`, failing on any card left alone.
+    fn groups(map: &Snapshot) -> Vec<Group<'_>> {
+        let rows = group(map.projects.iter().collect(), map).into_iter();
+        rows.map(|row| match row {
+            SectionRow::Repository(group) => group,
+            SectionRow::Project(alone) => panic!("{} stands alone", alone.name),
+        })
+        .collect()
     }
 
     #[test]
@@ -174,28 +192,57 @@ mod tests {
     }
 
     #[test]
-    fn linked_worktrees_in_one_slice_stand_in_the_order_of_the_branches_they_show() {
+    fn linked_worktrees_in_one_slice_stand_in_the_order_of_the_names_they_go_by() {
         let app = "/code/app/.git";
+        // On no branch, it goes by its folder's name, not by the commit its head is at.
+        let linked = linked_worktree(app, "", project("app-m", 1));
+        let detached = Project {
+            repo: linked.repo.map(|repo| RepoInfo {
+                branch: None,
+                head: Some("01fb326".to_string()),
+                ..repo
+            }),
+            ..linked
+        };
         let map = snapshot(
             vec![
                 linked_worktree(app, "zeta", project("app-a", 1)),
+                detached,
                 linked_worktree(app, "alpha", project("app-b", 1)),
             ],
             vec![],
         );
-        assert_eq!(grouped(&map), ["app: app-b, app-a"]);
+        assert_eq!(grouped(&map), ["app: app-b, app-m, app-a"]);
     }
 
     #[test]
-    fn the_groups_stand_by_their_newest_slice_then_by_name_and_the_folders_in_none_follow() {
+    fn a_repository_with_one_card_among_them_has_no_group_and_its_card_stands_alone() {
+        let app = "/code/app/.git";
+        let map = snapshot(
+            vec![
+                linked_worktree(app, "fix", project("app-fix", 1)),
+                project("notes", 1),
+                main_worktree(app, "main", quiet("app")),
+            ],
+            vec![],
+        );
+        let listed = vec![&map.projects[0], &map.projects[1]];
+        assert_eq!(grouped_of(listed, &map), ["app-fix", "notes"]);
+    }
+
+    #[test]
+    fn groups_and_cards_alone_interleave_by_their_newest_slice_then_by_name() {
+        let (alpha, beta, gamma) = ("/code/alpha/.git", "/code/beta/.git", "/code/gamma/.git");
         let map = snapshot(
             vec![
                 project("notes", 0),
-                main_worktree("/code/beta/.git", "main", project("beta", 1)),
+                main_worktree(beta, "main", project("beta", 1)),
                 project("draft", 1),
-                main_worktree("/code/alpha/.git", "main", project("alpha", 60)),
-                linked_worktree("/code/alpha/.git", "fix", project("alpha-fix", 0)),
-                main_worktree("/code/gamma/.git", "main", project("gamma", 30)),
+                main_worktree(alpha, "main", project("alpha", 60)),
+                linked_worktree(alpha, "fix", project("alpha-fix", 0)),
+                main_worktree(gamma, "main", project("gamma", 30)),
+                linked_worktree(gamma, "old", project("gamma-old", 40)),
+                project("zine", 30),
             ],
             vec![],
         );
@@ -203,29 +250,31 @@ mod tests {
             grouped(&map),
             [
                 "alpha: alpha, alpha-fix",
-                "beta: beta",
-                "gamma: gamma",
+                "beta",
                 "draft",
-                "notes"
+                "notes",
+                "gamma: gamma, gamma-old",
+                "zine"
             ],
-            "alpha's newest slice is its linked worktree's"
+            "alpha's newest card is its linked worktree, and beta's one card stands alone"
         );
     }
 
     #[test]
     fn two_clones_of_one_remote_are_two_repositories() {
         let clone = |parent: &str| {
-            let path = PathBuf::from(parent).join("app");
-            let common_dir = path.join(".git");
-            let app = Project {
-                path,
-                ..project("app", 1)
+            let common_dir = format!("{parent}/app/.git");
+            let worktree = |name: &str| Project {
+                path: PathBuf::from(parent).join(name),
+                ..project(name, 1)
             };
-            main_worktree(&common_dir.to_string_lossy(), "main", app)
+            [
+                main_worktree(&common_dir, "main", worktree("app")),
+                linked_worktree(&common_dir, "fix", worktree("app-fix")),
+            ]
         };
-        let map = snapshot(vec![clone("/work"), clone("/code")], vec![]);
-        let cards = group(map.projects.iter().collect(), &map);
-        let dirs: Vec<&Path> = cards.groups.iter().map(|group| group.common_dir).collect();
+        let map = snapshot([clone("/work"), clone("/code")].concat(), vec![]);
+        let dirs: Vec<&Path> = groups(&map).iter().map(|group| group.common_dir).collect();
         assert_eq!(
             dirs,
             [Path::new("/code/app/.git"), Path::new("/work/app/.git")],
@@ -236,22 +285,27 @@ mod tests {
     #[test]
     fn a_repository_goes_by_its_main_worktrees_name_listed_or_not_whatever_its_git_dir() {
         // Kept the way some keep their worktrees, its git dir is `.bare` in the main worktree,
-        // which is quiet, so only the linked worktree is listed.
+        // which is quiet, so only the linked worktrees are listed.
         let bare = "/code/app/.bare";
         let map = snapshot(
             vec![
                 linked_worktree(bare, "fix", project("app-fix", 1)),
+                linked_worktree(bare, "docs", project("app-docs", 1)),
                 main_worktree(bare, "main", quiet("app")),
             ],
             vec![],
         );
-        let cards = group(vec![&map.projects[0]], &map);
-        let [group] = cards.groups.as_slice() else {
-            panic!("one group, not {}", cards.groups.len());
+        let rows = group(vec![&map.projects[0], &map.projects[1]], &map);
+        let [SectionRow::Repository(group)] = rows.as_slice() else {
+            panic!("one group, not {}", rows.len());
         };
         assert_eq!(group.name, "app");
         let worktrees: Vec<&str> = group.worktrees.iter().map(|w| w.name.as_str()).collect();
-        assert_eq!(worktrees, ["app-fix", "app"], "every worktree on the map");
+        assert_eq!(
+            worktrees,
+            ["app-fix", "app-docs", "app"],
+            "every worktree on the map"
+        );
     }
 
     #[test]
@@ -264,14 +318,14 @@ mod tests {
             vec![],
         );
         assert_eq!(grouped(&bare), ["tool: tool-fix, tool-main"]);
+        let site = "/Volumes/work/site/.git";
         let outside_the_roots = snapshot(
-            vec![linked_worktree(
-                "/Volumes/work/site/.git",
-                "fix",
-                project("site-fix", 1),
-            )],
+            vec![
+                linked_worktree(site, "fix", project("site-fix", 1)),
+                linked_worktree(site, "docs", project("site-docs", 1)),
+            ],
             vec![],
         );
-        assert_eq!(grouped(&outside_the_roots), ["site: site-fix"]);
+        assert_eq!(grouped(&outside_the_roots), ["site: site-docs, site-fix"]);
     }
 }
