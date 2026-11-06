@@ -14,12 +14,13 @@ mod sort;
 pub(super) use arrangement::Arrangement;
 pub(super) use focus::{FOCUS_LARGE_BYTES, FOCUS_RECENT};
 
+use std::path::Path;
 use std::time::SystemTime;
 
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
 use self::repository::Group;
-use crate::map::{AgentSession, Project, Snapshot};
+use crate::map::{AgentSession, AwaySubagent, Project, Snapshot};
 
 /// One row of the list.
 pub(super) enum Row<'a> {
@@ -27,7 +28,7 @@ pub(super) enum Row<'a> {
     /// One repository's worktrees, under the header that names it: the Repository sort's group.
     Repository(Group<'a>),
     /// The agents working outside every project: all of them, or those the filter admits.
-    Elsewhere(Vec<&'a AgentSession>),
+    Elsewhere(Elsewhere<'a>),
     /// "▸ 764 quiet": the projects outside the focus, behind one row.
     QuietProjects {
         count: usize,
@@ -57,12 +58,26 @@ impl<'a> Cards<'a> {
     }
 }
 
-/// The agents working outside every project that have something to show.
-fn elsewhere(snapshot: &Snapshot) -> impl Iterator<Item = &AgentSession> {
-    snapshot
-        .unplaced_agents
-        .iter()
-        .filter(|agent| !agent.is_finished_job())
+/// The agents working outside every project that have something to show: the sessions, but for
+/// jobs that have finished, and the subagents at work away from theirs.
+pub(super) struct Elsewhere<'a> {
+    pub(super) sessions: Vec<&'a AgentSession>,
+    pub(super) subagents: Vec<&'a AwaySubagent>,
+}
+
+impl<'a> Elsewhere<'a> {
+    /// Those on `snapshot` working in a folder `admits` admits, `None` when that is none.
+    fn of(snapshot: &'a Snapshot, admits: impl Fn(&Path) -> bool) -> Option<Elsewhere<'a>> {
+        let sessions = snapshot.unplaced_agents.iter();
+        let sessions = sessions.filter(|agent| !agent.is_finished_job() && admits(&agent.cwd));
+        let subagents = snapshot.unplaced_subagents.iter();
+        let subagents = subagents.filter(|away| admits(&away.subagent.cwd));
+        let row = Elsewhere {
+            sessions: sessions.collect(),
+            subagents: subagents.collect(),
+        };
+        (!row.sessions.is_empty() || !row.subagents.is_empty()).then_some(row)
+    }
 }
 
 pub(super) struct Listing<'a> {
@@ -106,12 +121,8 @@ impl<'a> Listing<'a> {
             Some(query) => {
                 let admitted = snapshot.projects.iter().filter(|p| query.admits(p));
                 rows.extend(cards(Section::Main, admitted.collect()));
-                let elsewhere: Vec<&AgentSession> = elsewhere(snapshot)
-                    .filter(|agent| query.admits_folder(&agent.cwd))
-                    .collect();
-                if !elsewhere.is_empty() {
-                    rows.push(Row::Elsewhere(elsewhere));
-                }
+                let elsewhere = Elsewhere::of(snapshot, |folder| query.admits_folder(folder));
+                rows.extend(elsewhere.map(Row::Elsewhere));
             }
             None => {
                 let (focused, quiet): (Vec<&Project>, Vec<&Project>) = snapshot
@@ -119,10 +130,7 @@ impl<'a> Listing<'a> {
                     .iter()
                     .partition(|project| in_focus(project, now));
                 rows.extend(cards(Section::Main, focused));
-                let elsewhere: Vec<&AgentSession> = elsewhere(snapshot).collect();
-                if !elsewhere.is_empty() {
-                    rows.push(Row::Elsewhere(elsewhere));
-                }
+                rows.extend(Elsewhere::of(snapshot, |_| true).map(Row::Elsewhere));
                 if !quiet.is_empty() {
                     let shown = arrangement.quiet_shown();
                     rows.push(Row::QuietProjects {
@@ -167,8 +175,10 @@ pub(super) mod fixtures {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
-    use crate::map::test_support::{agent_session, at, project_at, snapshot_of};
-    use crate::map::{AgentSession, AgentStatus, Project, RepoInfo, Snapshot};
+    use crate::map::test_support::{agent_session, at, project_at, snapshot_of, subagent_at_work};
+    use crate::map::{
+        AgentSession, AgentStatus, AwaySubagent, Project, RepoInfo, Snapshot, Subagent,
+    };
 
     pub(in crate::dashboard) fn now() -> SystemTime {
         at(1_000_000_000)
@@ -234,6 +244,15 @@ pub(super) mod fixtures {
         }
     }
 
+    /// A subagent at work in `cwd` for an idle session in `/code/app`.
+    pub(in crate::dashboard) fn away_subagent(cwd: &str) -> AwaySubagent {
+        let subagent = Subagent {
+            cwd: PathBuf::from(cwd),
+            ..subagent_at_work(cwd)
+        };
+        AwaySubagent::new(subagent, &agent("/code/app", AgentStatus::Idle))
+    }
+
     /// A map of `projects`, in the order given, which the engine delivers newest activity first.
     pub(in crate::dashboard) fn snapshot(
         projects: Vec<Project>,
@@ -266,7 +285,7 @@ pub(super) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+        agent, away_subagent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
     };
     use super::*;
     use crate::dashboard::SortOrder;
@@ -363,7 +382,31 @@ mod tests {
         let Row::Elsewhere(agents) = &listing.rows[2] else {
             panic!("the agents elsewhere come last");
         };
-        assert_eq!(agents.len(), 1, "only the agent whose folder matches");
+        assert_eq!(
+            agents.sessions.len(),
+            1,
+            "only the agent whose folder matches"
+        );
+    }
+
+    #[test]
+    fn a_subagent_at_work_in_no_project_makes_the_elsewhere_row_and_a_filter_finds_its_folder() {
+        let map = Snapshot {
+            unplaced_subagents: vec![away_subagent("/tmp/build"), away_subagent("/tmp/other")],
+            ..snapshot(vec![project("app", 1)], vec![])
+        };
+        let listing = Listing::new(&map, &Arrangement::default(), now());
+        assert_eq!(shown(&listing.rows), ["app", "elsewhere"]);
+
+        let mut filtered = Arrangement::default();
+        filtered.set_filter_text("build".to_string(), Some(&map), now());
+        let listing = Listing::new(&map, &filtered, now());
+        let [Row::Elsewhere(working)] = listing.rows.as_slice() else {
+            panic!("only the agents elsewhere match");
+        };
+        let subagents = working.subagents.iter();
+        let folders: Vec<&Path> = subagents.map(|away| away.subagent.cwd.as_path()).collect();
+        assert_eq!(folders, [Path::new("/tmp/build")]);
     }
 
     #[test]

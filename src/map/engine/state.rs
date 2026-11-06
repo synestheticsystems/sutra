@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod measurements;
+mod placement;
 mod tracked;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -19,10 +20,11 @@ use crate::map::devrunner::FolderEnvironments;
 use crate::map::grant::Roots;
 use crate::map::scan::Boundary;
 use crate::map::{
-    ActivitySource, AgentSession, FolderAccess, Measurement, Project, RepoInfo, ScanOptions,
-    ScanStats, Snapshot, Source, SourceProblem, agents, devrunner, scan,
+    ActivitySource, AgentSession, AwaySubagent, FolderAccess, Measurement, Project, RepoInfo,
+    ScanOptions, ScanStats, Snapshot, Source, SourceProblem, agents, devrunner, scan,
 };
 use artifacts::artifact_dirs;
+use placement::{Place, Placed};
 use tracked::Tracked;
 
 pub(super) struct State {
@@ -36,6 +38,7 @@ pub(super) struct State {
     boundary: Boundary,
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
+    unplaced_subagents: Vec<AwaySubagent>,
     /// What each source reported when it was last read, ordered by source.
     problems: Vec<SourceProblem>,
     /// The folders discovery found publishing state of their own.
@@ -60,6 +63,7 @@ impl State {
             opts: opts.clone(),
             projects: BTreeMap::new(),
             unplaced_agents: Vec::new(),
+            unplaced_subagents: Vec::new(),
             problems: Vec::new(),
             state_folders: Vec::new(),
             agent_files: agents::LastRead::default(),
@@ -239,39 +243,54 @@ impl State {
             .collect()
     }
 
-    /// Reload every agent session and place each on the deepest project holding its working
-    /// directory. Returns whether anything changed.
+    /// Reload every agent session and place each where it works (see `Place`), and each of its
+    /// subagents at work away from it where the subagent works. Returns whether anything changed.
     pub(super) fn refresh_agents(&mut self) -> bool {
         let loaded = agents::load(&self.home, &self.boundary, &mut self.agent_files);
         let mut changed = self.report_problems(
             &[
                 Source::ClaudeSessions,
                 Source::ClaudeSessionFile,
+                Source::ClaudeSubagentMeta,
                 Source::CodexDatabase,
             ],
             loaded.problems,
         );
-        let mut placed: HashMap<PathBuf, Vec<AgentSession>> = HashMap::new();
-        let mut unplaced = Vec::new();
+        let mut placed: HashMap<PathBuf, Placed> = HashMap::new();
+        let mut unplaced = Placed::default();
         let mut sessions = loaded.sessions;
         sessions.extend(self.sessions_of(&loaded.being_rewritten));
         for session in sessions {
-            match owner(&self.projects, &session.cwd) {
-                Some(project) => placed
-                    .entry(project.to_path_buf())
-                    .or_default()
-                    .push(session),
-                None => unplaced.push(session),
+            let place = Place::of(&self.projects, &session.cwd);
+            // A subagent at work in its session's place counts only on the session.
+            for subagent in &session.subagents_at_work {
+                let there = match Place::of(&self.projects, &subagent.cwd) {
+                    there if there.lies_in(place) => continue,
+                    Place::Project(project) => placed.entry(project.to_path_buf()).or_default(),
+                    Place::Elsewhere(_) => &mut unplaced,
+                };
+                let away = AwaySubagent::new(subagent.clone(), &session);
+                there.subagents.push(away);
             }
+            match place {
+                Place::Project(project) => placed.entry(project.to_path_buf()).or_default(),
+                Place::Elsewhere(_) => &mut unplaced,
+            }
+            .sessions
+            .push(session);
         }
-        sort_sessions(&mut unplaced);
-        changed |= self.unplaced_agents != unplaced;
-        self.unplaced_agents = unplaced;
+        unplaced.sort();
+        changed |= self.unplaced_agents != unplaced.sessions
+            || self.unplaced_subagents != unplaced.subagents;
+        self.unplaced_agents = unplaced.sessions;
+        self.unplaced_subagents = unplaced.subagents;
         for (path, tracked) in &mut self.projects {
-            let mut sessions = placed.remove(path).unwrap_or_default();
-            sort_sessions(&mut sessions);
-            if tracked.project.agents != sessions {
-                tracked.project.agents = sessions;
+            let mut here = placed.remove(path).unwrap_or_default();
+            here.sort();
+            let project = &mut tracked.project;
+            if project.agents != here.sessions || project.subagents != here.subagents {
+                project.agents = here.sessions;
+                project.subagents = here.subagents;
                 tracked.recompute_activity();
                 changed = true;
             }
@@ -351,6 +370,7 @@ impl State {
             sandboxed: self.sandboxed,
             projects,
             unplaced_agents: self.unplaced_agents.clone(),
+            unplaced_subagents: self.unplaced_subagents.clone(),
             problems: self.problems.clone(),
             scan: self.scan.clone(),
             generated_at: SystemTime::now(),
@@ -386,6 +406,7 @@ fn new_project(
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),
+        subagents: Vec::new(),
         environment: None,
         artifacts,
         own_files: Measurement::Pending,
@@ -415,11 +436,6 @@ fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option
     }
 }
 
-/// A stable order, so a reload that finds the same sessions compares equal.
-fn sort_sessions(sessions: &mut [AgentSession]) {
-    sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-}
-
 fn canonical(path: &Path) -> PathBuf {
     // A root that cannot be resolved (outside the grant) is kept as given; discovery then
     // counts it as unreadable.
@@ -430,8 +446,10 @@ fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use std::io;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::UNIX_EPOCH;
 
     use super::*;
+    use crate::map::AgentStatus;
     use crate::map::test_support::TempDir;
 
     fn tracked(path: &str) -> Tracked {
@@ -485,6 +503,98 @@ mod tests {
             Some(Path::new("/tasks/pair-2/work/app")),
             "a folder whose name begins like another's holds only its own"
         );
+    }
+
+    /// A state reading the fixture `home`, with `projects` on its map.
+    fn state_with(home: &TempDir, projects: &[&str]) -> State {
+        let roots = Roots {
+            home: home.root().to_path_buf(),
+            dirs: Vec::new(),
+            sandboxed: false,
+        };
+        let mut state = State::new(&roots, &ScanOptions::default());
+        for path in projects {
+            state.projects.insert(PathBuf::from(path), tracked(path));
+        }
+        state
+    }
+
+    /// The live, idle session `0b1d` of this process working in `cwd`, under `home`, with a
+    /// subagent at work in each of `subagents`, named after the folder's last part.
+    fn session_with_subagents(home: &TempDir, cwd: &str, subagents: &[&str]) {
+        let me = std::process::id();
+        let now = SystemTime::now();
+        let started = now - std::time::Duration::from_secs(600);
+        let ms = |at: SystemTime| at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let registry = serde_json::json!({
+            "pid": me, "sessionId": "0b1d", "cwd": cwd, "status": "idle",
+            "startedAt": ms(started), "updatedAt": ms(started),
+        });
+        home.write(&format!(".claude/sessions/{me}.json"), registry.to_string());
+        for works_in in subagents {
+            let agent = Path::new(works_in).file_name().unwrap().to_str().unwrap();
+            agents::write_test_subagent_at_work(home.root(), cwd, "0b1d", agent, works_in, now);
+        }
+    }
+
+    /// The subagents the map shows away from their session at `path`, or elsewhere for `None`, by
+    /// the folder each works in.
+    fn away_at(state: &State, path: Option<&str>) -> Vec<PathBuf> {
+        let away = match path {
+            Some(path) => &state.projects[Path::new(path)].project.subagents,
+            None => &state.unplaced_subagents,
+        };
+        away.iter().map(|away| away.subagent.cwd.clone()).collect()
+    }
+
+    #[test]
+    fn a_subagent_at_work_away_from_its_sessions_project_shows_where_it_works_and_counts_on_it() {
+        let home = TempDir::new("state-subagents-away");
+        let worktree = "/code/app/.claude/worktrees/agent-a1";
+        let beside = "/code/app/src";
+        let outside = "/nonexistent/scratch";
+        session_with_subagents(&home, "/code/app", &[worktree, beside, outside]);
+        let mut state = state_with(&home, &["/code/app", worktree]);
+
+        assert!(state.refresh_agents());
+
+        let app = &state.projects[Path::new("/code/app")].project;
+        let [session] = app.agents.as_slice() else {
+            panic!("the session works in its project: {:?}", app.agents);
+        };
+        assert_eq!(session.status, AgentStatus::Busy);
+        assert_eq!(
+            session.subagents_at_work.len(),
+            3,
+            "it still counts them all"
+        );
+        assert_eq!(
+            away_at(&state, Some("/code/app")),
+            Vec::<PathBuf>::new(),
+            "the subagent beside its session counts only on it"
+        );
+        assert_eq!(away_at(&state, Some(worktree)), [PathBuf::from(worktree)]);
+        assert_eq!(away_at(&state, None), [PathBuf::from(outside)]);
+        let away = &state.projects[Path::new(worktree)].project.subagents[0];
+        assert_eq!(away.parent.session_id, "0b1d");
+        assert!(!state.refresh_agents(), "the same subagents read again");
+    }
+
+    #[test]
+    fn a_subagent_of_a_session_elsewhere_shows_away_from_it_unless_inside_its_sessions_folder() {
+        let home = TempDir::new("state-subagents-elsewhere");
+        let session = "/nonexistent/scratch";
+        let inside = "/nonexistent/scratch/deeper";
+        let other = "/nonexistent/other";
+        let project = "/code/app/web";
+        session_with_subagents(&home, session, &[inside, other, project]);
+        let mut state = state_with(&home, &["/code/app"]);
+
+        state.refresh_agents();
+
+        assert_eq!(state.unplaced_agents.len(), 1);
+        assert_eq!(away_at(&state, None), [PathBuf::from(other)]);
+        assert_eq!(away_at(&state, Some("/code/app")), [PathBuf::from(project)]);
     }
 
     #[test]

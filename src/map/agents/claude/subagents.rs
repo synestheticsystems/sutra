@@ -2,8 +2,10 @@
 //! `<home>/.claude/projects/<folder>/<session id>/subagents/agent-<agent id>.jsonl`, and those of a
 //! workflow's subagents one folder down, in `subagents/workflows/<workflow id>/`. What a
 //! transcript says is read from its end (see `transcript`), and only from the transcripts of
-//! sessions still running.
+//! sessions still running. A subagent at work is named by the meta file beside its transcript
+//! (see `meta`).
 
+mod meta;
 mod transcript;
 
 use std::collections::HashMap;
@@ -14,8 +16,12 @@ use std::mem;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
+use self::meta::{Meta, meta_path, read_meta};
 use self::transcript::{Tail, read_tail};
-use crate::map::agents::session::SubagentWork;
+use crate::map::AgentStatus;
+use crate::map::agents::resolve_cwd;
+use crate::map::agents::session::{Subagent, SubagentWork};
+use crate::map::scan::Boundary;
 use crate::model::{ReadFailure, note_failure};
 
 /// The longest folder name Claude Code derives from a working directory. It cuts a longer one to
@@ -23,15 +29,19 @@ use crate::model::{ReadFailure, note_failure};
 const MAX_FOLDER_NAME: usize = 200;
 
 /// What each subagent transcript said when last read, so that a load reads again only the
-/// transcripts written since. It holds only the transcripts the last load asked about, those of
-/// sessions still running, so it does not grow with the thousands a machine keeps.
+/// transcripts written since, and what the meta files of the subagents at work said. It holds only
+/// what the last load asked about, of sessions still running, so it does not grow with the
+/// thousands of transcripts a machine keeps.
 #[derive(Debug, Default)]
 pub struct Transcripts {
     read: HashMap<PathBuf, Reading>,
+    /// By the meta file's path. Claude Code writes a subagent's name and task there as it starts
+    /// the subagent, so one read while the subagent works is not read again.
+    metas: HashMap<PathBuf, Meta>,
 }
 
 /// A transcript's state when it was read, and what it said then.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Reading {
     len: u64,
     modified: Option<SystemTime>,
@@ -42,22 +52,33 @@ struct Reading {
 pub(super) struct Reader<'a> {
     /// Claude Code's `~/.claude/projects`.
     projects: PathBuf,
+    /// Where a subagent's working folder may be resolved.
+    boundary: &'a Boundary,
     now: SystemTime,
     /// The last load's readings.
     earlier: Transcripts,
     /// This load's, for the next.
     transcripts: &'a mut Transcripts,
+    /// The meta files this load could not read.
+    unread_metas: Vec<ReadFailure>,
 }
 
 impl<'a> Reader<'a> {
     /// A reading of the transcripts under `home`, going by what `transcripts` says the last load
-    /// read, and leaving there what this one reads.
-    pub(super) fn new(home: &Path, transcripts: &'a mut Transcripts) -> Self {
+    /// read, and leaving there what this one reads. Working folders are resolved only where
+    /// `boundary` allows.
+    pub(super) fn new(
+        home: &Path,
+        boundary: &'a Boundary,
+        transcripts: &'a mut Transcripts,
+    ) -> Self {
         Reader {
             projects: home.join(".claude").join("projects"),
+            boundary,
             now: SystemTime::now(),
             earlier: mem::take(transcripts),
             transcripts,
+            unread_metas: Vec::new(),
         }
     }
 
@@ -84,36 +105,91 @@ impl<'a> Reader<'a> {
         // this process started is not at work. A transcript not modified since then is not read.
         let before_start =
             |at: Option<SystemTime>| started.zip(at).is_some_and(|(started, at)| at < started);
-        for (path, meta) in transcripts_in(&folder.join("subagents"), failures) {
-            if before_start(meta.modified().ok()) {
+        for (path, listed) in transcripts_in(&folder.join("subagents"), failures) {
+            if before_start(listed.modified().ok()) {
                 continue;
             }
-            match self.read(&path, &meta) {
+            match self.read(&path, &listed) {
                 Ok(tail) if before_start(tail.written) => {}
-                Ok(tail) => work.count(tail.mid_turn, tail.written, self.now),
+                Ok(tail) => {
+                    let (mid_turn, written, now) = (tail.mid_turn, tail.written, self.now);
+                    work.count(mid_turn, written, now, || self.subagent(&path, tail, cwd));
+                }
                 Err(err) => note_failure(&path, &err, failures),
             }
         }
         work
     }
 
-    /// What the transcript at `path` says. One with the length and modification time it had at
-    /// the last load still says what it said then, because Claude Code only appends to it, and is
-    /// not read again.
-    fn read(&mut self, path: &Path, meta: &Metadata) -> io::Result<Tail> {
-        let (len, modified) = (meta.len(), meta.modified().ok());
+    /// The meta files this load could not read, which cost their subagents only their names.
+    pub(super) fn unread_metas(self) -> Vec<ReadFailure> {
+        self.unread_metas
+    }
+
+    /// What the transcript at `path` says, as `listed` measures it. One with the length and
+    /// modification time it had at the last load still says what it said then, because Claude
+    /// Code only appends to it, and is not read again. Of one that has grown, the end is read
+    /// again, and a folder the last load read there holds until an entry names another.
+    fn read(&mut self, path: &Path, listed: &Metadata) -> io::Result<Tail> {
+        let (len, modified) = (listed.len(), listed.modified().ok());
         let tail = match self.earlier.read.get(path) {
-            Some(known) if known.len == len && known.modified == modified => known.tail,
+            Some(known) if known.len == len && known.modified == modified => known.tail.clone(),
+            Some(known) if known.len <= len => read_tail(path, len)?.after(&known.tail),
+            // Not read before, or shrunk, so no longer the file that was.
             _ => read_tail(path, len)?,
         };
         let reading = Reading {
             len,
             modified,
-            tail,
+            tail: tail.clone(),
         };
         self.transcripts.read.insert(path.to_path_buf(), reading);
         Ok(tail)
     }
+
+    /// The subagent at work whose transcript at `transcript` ends as `tail` says, of a session
+    /// Claude Code started in `session_cwd`. Until its transcript names a folder, it is taken to
+    /// work where Claude Code starts a subagent without a worktree of its own: in its session's.
+    fn subagent(&mut self, transcript: &Path, tail: Tail, session_cwd: &str) -> Subagent {
+        let meta = self.meta(transcript);
+        let cwd = tail.cwd.as_deref().unwrap_or(session_cwd);
+        Subagent {
+            id: agent_id(transcript),
+            cwd: resolve_cwd(cwd, self.boundary),
+            name: meta.name,
+            description: meta.description,
+            // Its transcript says only that its turn goes on.
+            status: AgentStatus::Busy,
+            since: None,
+            last_write: tail.written,
+        }
+    }
+
+    /// What the meta file beside `transcript` says, read only when the last load did not read it.
+    /// One not there yet, or that could not be read, names nothing, and the next load reads it
+    /// again.
+    fn meta(&mut self, transcript: &Path) -> Meta {
+        let path = meta_path(transcript);
+        let meta = match self.earlier.metas.remove(&path) {
+            Some(meta) => meta,
+            None => match read_meta(&path) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => return Meta::default(),
+                Err(err) => {
+                    note_failure(&path, &err, &mut self.unread_metas);
+                    return Meta::default();
+                }
+            },
+        };
+        self.transcripts.metas.insert(path, meta.clone());
+        meta
+    }
+}
+
+/// Claude Code's id for the subagent whose transcript is `transcript`, named `agent-<id>.jsonl`.
+fn agent_id(transcript: &Path) -> String {
+    let stem = transcript.file_stem().unwrap_or_default().to_string_lossy();
+    stem.strip_prefix("agent-").unwrap_or(&stem).to_string()
 }
 
 /// Whether `path`, relative to Claude Code's `~/.claude/projects`, is where a subagent's transcript
@@ -220,19 +296,25 @@ fn entries(folder: &Path, failures: &mut Vec<ReadFailure>) -> Vec<(PathBuf, Meta
 }
 
 /// Writes the transcript of the subagent `agent` of the session `session_id` started in `cwd`,
-/// under `home`, which sent a request to the model at `at` and awaits the reply. Returns its path.
+/// under `home`: set to work in `works_in`, it sent a request to the model at `at` and awaits the
+/// reply. Returns its path.
 #[cfg(test)]
 pub(crate) fn write_test_subagent_at_work(
     home: &Path,
     cwd: &str,
     session_id: &str,
     agent: &str,
+    works_in: &str,
     at: SystemTime,
 ) -> PathBuf {
     let folder = home.join(".claude").join("projects").join(folder_name(cwd));
     let subagents = folder.join(session_id).join("subagents");
     let path = subagents.join(format!("agent-{agent}.jsonl"));
-    transcript::write_test_transcript(&path, &[transcript::test_request(at)]);
+    let lines = [
+        transcript::test_prompt(at, works_in),
+        transcript::test_request(at),
+    ];
+    transcript::write_test_transcript(&path, &lines);
     path
 }
 
@@ -240,10 +322,13 @@ pub(crate) fn write_test_subagent_at_work(
 mod tests {
     use std::time::Duration;
 
+    use super::meta::write_test_meta;
     use super::transcript::{
-        test_reply as reply, test_request as request, timestamp, write_test_transcript,
+        TEST_FOLDER, test_prompt as prompt, test_reply as reply, test_request as request,
+        timestamp, write_test_transcript,
     };
     use super::*;
+    use crate::map::ScanOptions;
     use crate::map::test_support::{TempDir, set_mtime};
 
     const MINUTE: Duration = Duration::from_secs(60);
@@ -318,11 +403,23 @@ mod tests {
         now: SystemTime,
         transcripts: &mut Transcripts,
     ) -> (SubagentWork, Vec<ReadFailure>) {
-        let mut reader = Reader::new(home.root(), transcripts);
+        let (work, failures, _) = described_work(home, started, now, transcripts);
+        (work, failures)
+    }
+
+    /// That load, with the meta files it could not read.
+    fn described_work(
+        home: &TempDir,
+        started: SystemTime,
+        now: SystemTime,
+        transcripts: &mut Transcripts,
+    ) -> (SubagentWork, Vec<ReadFailure>, Vec<ReadFailure>) {
+        let boundary = home.boundary(&ScanOptions::default());
+        let mut reader = Reader::new(home.root(), &boundary, transcripts);
         reader.now = now;
         let mut failures = Vec::new();
-        let work = reader.session_work("/code/app", "0b1d", Some(started), &mut failures);
-        (work, failures)
+        let work = reader.session_work(TEST_FOLDER, "0b1d", Some(started), &mut failures);
+        (work, failures, reader.unread_metas())
     }
 
     /// Where the transcript of the subagent `agent` of that session lies.
@@ -356,7 +453,14 @@ mod tests {
 
         let (work, failures) = session_work(&home, started, now, &mut Transcripts::default());
 
-        assert_eq!(work.at_work, 2, "the working one and the workflow's");
+        let subagents = work.at_work.iter();
+        let mut ids: Vec<&str> = subagents.map(|subagent| subagent.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            ["step", "working"],
+            "the working one and the workflow's"
+        );
         let newest = work.last_write.map(timestamp);
         assert_eq!(newest, Some(timestamp(now - MINUTE)), "the one done");
         assert_eq!(failures, []);
@@ -390,7 +494,7 @@ mod tests {
         write_test_transcript(&path, &[request(now)]);
         let mut transcripts = Transcripts::default();
         let (first, _) = session_work(&home, now - MINUTE, now, &mut transcripts);
-        assert_eq!(first.at_work, 1);
+        assert_eq!(first.at_work.len(), 1);
 
         // Opening the transcript now fails, and its state can still be looked at.
         home.restrict(&path, 0o000);
@@ -413,21 +517,17 @@ mod tests {
         let path = transcript_path(&home, "finishing");
         write_test_transcript(&path, &[request(now - MINUTE)]);
         let mut transcripts = Transcripts::default();
-        assert_eq!(
-            session_work(&home, started, now, &mut transcripts)
+        let at_work = |transcripts: &mut Transcripts| {
+            session_work(&home, started, now, transcripts)
                 .0
-                .at_work,
-            1
-        );
+                .at_work
+                .len()
+        };
+        assert_eq!(at_work(&mut transcripts), 1);
 
         let finished = [request(now - MINUTE), reply(now, Some("end_turn"), "text")];
         write_test_transcript(&path, &finished);
-        assert_eq!(
-            session_work(&home, started, now, &mut transcripts)
-                .0
-                .at_work,
-            0
-        );
+        assert_eq!(at_work(&mut transcripts), 0);
         assert_eq!(transcripts.read.keys().collect::<Vec<_>>(), [&path]);
 
         fs::remove_file(&path).unwrap();
@@ -455,6 +555,108 @@ mod tests {
         assert_eq!(failures, [(folder, io::ErrorKind::PermissionDenied)]);
     }
 
+    /// Where the subagents of the session `0b1d` work when given a worktree of their own.
+    const WORKTREE: &str = "/code/app/.claude/worktrees/agent-a1";
+
+    #[test]
+    fn a_subagent_at_work_is_named_by_its_meta_file_and_works_where_its_transcript_says() {
+        let home = TempDir::new("subagents-described");
+        let now = SystemTime::now();
+        let path = transcript_path(&home, "a1");
+        write_test_transcript(&path, &[prompt(now - MINUTE, WORKTREE), request(now)]);
+        write_test_meta(&path, "dashboard-fixes", "Fix dashboard review findings");
+
+        let (work, failures, unread_metas) =
+            described_work(&home, now - 60 * MINUTE, now, &mut Transcripts::default());
+
+        let [subagent] = work.at_work.as_slice() else {
+            panic!("one subagent at work: {:?}", work.at_work);
+        };
+        assert_eq!(subagent.id, "a1");
+        assert_eq!(subagent.cwd, Path::new(WORKTREE));
+        assert_eq!(subagent.name.as_deref(), Some("dashboard-fixes"));
+        let task = subagent.description.as_deref();
+        assert_eq!(task, Some("Fix dashboard review findings"));
+        assert_eq!(subagent.status, AgentStatus::Busy);
+        assert_eq!(subagent.since, None);
+        assert_eq!(subagent.last_write.map(timestamp), Some(timestamp(now)));
+        assert_eq!((failures, unread_metas), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_subagent_with_no_meta_file_or_folder_named_works_unnamed_in_its_sessions_folder() {
+        let home = TempDir::new("subagents-undescribed");
+        let now = SystemTime::now();
+        write_test_transcript(&transcript_path(&home, "a1"), &[request(now)]);
+
+        let (work, _, unread_metas) =
+            described_work(&home, now - MINUTE, now, &mut Transcripts::default());
+
+        let [subagent] = work.at_work.as_slice() else {
+            panic!("one subagent at work: {:?}", work.at_work);
+        };
+        assert_eq!(subagent.cwd, Path::new(TEST_FOLDER), "its session's folder");
+        assert_eq!((&subagent.name, &subagent.description), (&None, &None));
+        assert_eq!(unread_metas, [], "a meta file not there is no failure");
+    }
+
+    #[test]
+    fn the_folder_a_subagent_works_in_holds_across_loads_while_its_transcripts_end_names_none() {
+        let home = TempDir::new("subagents-folder-held");
+        let now = SystemTime::now();
+        let path = transcript_path(&home, "a1");
+        let mut lines = vec![prompt(now - MINUTE, WORKTREE), request(now - MINUTE)];
+        write_test_transcript(&path, &lines);
+        let folder = |transcripts: &mut Transcripts| {
+            let (work, ..) = described_work(&home, now - 60 * MINUTE, now, transcripts);
+            work.at_work[0].cwd.clone()
+        };
+        let mut transcripts = Transcripts::default();
+        assert_eq!(folder(&mut transcripts), Path::new(WORKTREE));
+
+        // The prompt now lies further back than the end read.
+        lines.extend([transcript::test_context_past_the_end_read(), request(now)]);
+        write_test_transcript(&path, &lines);
+
+        assert_eq!(folder(&mut transcripts), Path::new(WORKTREE));
+        assert_eq!(
+            folder(&mut Transcripts::default()),
+            Path::new(TEST_FOLDER),
+            "without the earlier load's reading, only its session's folder is known"
+        );
+    }
+
+    #[test]
+    fn a_meta_file_is_read_once_while_its_subagent_works_and_one_unreadable_costs_only_names() {
+        let home = TempDir::new("subagents-meta-once");
+        let now = SystemTime::now();
+        let path = transcript_path(&home, "a1");
+        let mut lines = vec![prompt(now - MINUTE, WORKTREE), request(now - MINUTE)];
+        write_test_transcript(&path, &lines);
+        write_test_meta(&path, "dashboard-fixes", "Fix dashboard review findings");
+        let mut transcripts = Transcripts::default();
+        let named = |transcripts: &mut Transcripts| {
+            let (work, _, unread_metas) =
+                described_work(&home, now - 60 * MINUTE, now, transcripts);
+            (work.at_work[0].name.clone(), unread_metas)
+        };
+        let dashboard_fixes = Some("dashboard-fixes".to_string());
+        assert_eq!(named(&mut transcripts), (dashboard_fixes.clone(), vec![]));
+
+        // Opening the meta file now fails, as a read that happened would show.
+        let meta = meta_path(&path);
+        home.restrict(&meta, 0o000);
+        lines.push(reply(now, Some("tool_use"), "tool_use"));
+        write_test_transcript(&path, &lines);
+
+        assert_eq!(named(&mut transcripts), (dashboard_fixes, vec![]));
+        assert_eq!(
+            named(&mut Transcripts::default()),
+            (None, vec![(meta, io::ErrorKind::PermissionDenied)]),
+            "without the earlier load's reading it is read, fails, and the subagent still counts"
+        );
+    }
+
     #[test]
     fn a_transcript_that_is_not_a_regular_file_is_passed_over() {
         let home = TempDir::new("subagents-fifo");
@@ -472,9 +674,10 @@ mod tests {
         let root = home.root().to_path_buf();
         std::thread::spawn(move || {
             let mut transcripts = Transcripts::default();
-            let mut reader = Reader::new(&root, &mut transcripts);
+            let boundary = Boundary::new(&[], &root, &ScanOptions::default());
+            let mut reader = Reader::new(&root, &boundary, &mut transcripts);
             let mut failures = Vec::new();
-            let work = reader.session_work("/code/app", "0b1d", Some(now), &mut failures);
+            let work = reader.session_work(TEST_FOLDER, "0b1d", Some(now), &mut failures);
             let _ = sender.send((work, failures));
         });
         let read = receiver

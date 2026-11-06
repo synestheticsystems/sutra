@@ -23,14 +23,33 @@ const TURN_KINDS: [&str; 3] = [
     r#""type":"api-request""#,
 ];
 
-/// What the end of a transcript says about its subagent: the newest entry that tells of its turn.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// What the end of a transcript says about its subagent: the newest entry that tells of its turn,
+/// and while the turn goes on, the folder the subagent works in.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct Tail {
     pub(super) mid_turn: bool,
     /// When that entry was written, by its own date. A transcript's modification time also moves
     /// when nothing is added to it: on Daniel's Mac, dozens of old transcripts at a time, several
     /// times a week (2026-11-05).
     pub(super) written: Option<SystemTime>,
+    /// The working folder the newest entry naming one records, as Claude Code wrote it. Each of
+    /// the subagent's replies and results names its own folder, which is its worktree when it has
+    /// one and follows it wherever it changes directory; a request to the model names none. Only
+    /// a subagent mid-turn is placed by its folder, so only then is it looked for. `None` when no
+    /// entry in the end read names one: in 1,594 of 73,826 moments mid-turn in the transcripts on
+    /// Daniel's Mac (2026-11-05), the newest that did began further back, behind a large result.
+    pub(super) cwd: Option<String>,
+}
+
+impl Tail {
+    /// This end of a transcript, read after `earlier`, its end before it grew. Claude Code only
+    /// appends, so mid-turn the folder `earlier` named still holds while this end names none.
+    pub(super) fn after(mut self, earlier: &Tail) -> Tail {
+        if self.mid_turn && self.cwd.is_none() {
+            self.cwd.clone_from(&earlier.cwd);
+        }
+        self
+    }
 }
 
 /// What the end of the transcript at `path`, `len` bytes long when listed, says.
@@ -43,12 +62,21 @@ pub(super) fn read_tail(path: &Path, len: u64) -> io::Result<Tail> {
     Ok(tail_of(&bytes))
 }
 
-/// What the newest entry in `bytes` that tells of the turn says. The window's first line may begin
-/// partway through an entry, and its last may be one Claude Code is still appending; neither
-/// parses, so neither counts.
+/// What the newest entry in `bytes` that tells of the turn says, with, mid-turn, the folder the
+/// newest entry naming one records. The window's first line may begin partway through an entry,
+/// and its last may be one Claude Code is still appending; neither parses, so neither counts.
 fn tail_of(bytes: &[u8]) -> Tail {
     let lines = bytes.split(|&byte| byte == b'\n');
-    lines.rev().find_map(turn_entry).unwrap_or_default()
+    let mut entries = lines.rev().filter_map(turn_entry);
+    let Some(mut tail) = entries.next() else {
+        return Tail::default();
+    };
+    tail.cwd = if tail.mid_turn {
+        tail.cwd.or_else(|| entries.find_map(|older| older.cwd))
+    } else {
+        None
+    };
+    tail
 }
 
 /// What `line` says, when it is an entry that tells of the turn.
@@ -63,16 +91,19 @@ fn turn_entry(line: &[u8]) -> Option<Tail> {
     Some(Tail {
         mid_turn: entry.mid_turn()?,
         written: entry.timestamp.as_deref().and_then(parse_timestamp),
+        cwd: entry.cwd,
     })
 }
 
-/// One transcript entry, reduced to what tells whether the subagent's turn goes on.
+/// One transcript entry, reduced to what tells whether the subagent's turn goes on, and where it
+/// works.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Entry {
     #[serde(rename = "type")]
     kind: String,
     timestamp: Option<String>,
+    cwd: Option<String>,
     message: Option<Message>,
     /// Marks the result of a tool that ends the turn, such as the one with which a subagent of the
     /// Claude app hands its report back.
@@ -230,7 +261,13 @@ pub(super) fn timestamp(at: SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z")
 }
 
-/// An entry of the kind `kind`, dated `at`, with `fields` beside, shaped as Claude Code writes one.
+/// The folder the subagents of the tests' transcripts work in, unless an entry names another.
+#[cfg(test)]
+pub(super) const TEST_FOLDER: &str = "/code/app";
+
+/// An entry of the kind `kind`, dated `at`, with `fields` beside, shaped as Claude Code writes one:
+/// a prompt, a result or a reply names the folder its subagent works in, `TEST_FOLDER` unless
+/// `fields` name another, and a request to the model names none.
 #[cfg(test)]
 fn test_entry(kind: &str, at: SystemTime, fields: serde_json::Value) -> String {
     let mut entry = serde_json::json!({
@@ -240,6 +277,9 @@ fn test_entry(kind: &str, at: SystemTime, fields: serde_json::Value) -> String {
         "type": kind,
         "timestamp": timestamp(at),
     });
+    if kind != "api-request" {
+        entry["cwd"] = serde_json::json!(TEST_FOLDER);
+    }
     let fields = fields.as_object().expect("fields are an object").clone();
     entry.as_object_mut().unwrap().extend(fields);
     entry.to_string()
@@ -249,6 +289,28 @@ fn test_entry(kind: &str, at: SystemTime, fields: serde_json::Value) -> String {
 #[cfg(test)]
 pub(super) fn test_request(at: SystemTime) -> String {
     test_entry("api-request", at, serde_json::json!({}))
+}
+
+/// A record of the context sent with a request, larger than the end read, which names no folder.
+#[cfg(test)]
+pub(super) fn test_context_past_the_end_read() -> String {
+    let message = serde_json::json!({"role": "user", "content": "x".repeat(TAIL_BYTES as usize)});
+    serde_json::json!({
+        "type": "api-request-blob", "agentId": "a1b2c3", "hash": "45d3", "message": message,
+    })
+    .to_string()
+}
+
+/// The prompt Claude Code hands a subagent it has set to work in `cwd`, at `at`.
+#[cfg(test)]
+pub(super) fn test_prompt(at: SystemTime, cwd: &str) -> String {
+    let message =
+        serde_json::json!({"role": "user", "content": "Find where the map reads agents."});
+    test_entry(
+        "user",
+        at,
+        serde_json::json!({"message": message, "cwd": cwd}),
+    )
 }
 
 /// A reply at `at` that stopped for `stop_reason` with one block of the kind `block`.
@@ -292,8 +354,14 @@ mod tests {
     }
 
     fn prompt(at: SystemTime) -> String {
-        let message = json!({"role": "user", "content": "Find where the map reads agents."});
-        test_entry("user", at, json!({"message": message}))
+        test_prompt(at, TEST_FOLDER)
+    }
+
+    /// `entry` as written in `cwd`.
+    fn written_in(entry: String, cwd: &str) -> String {
+        let mut entry: serde_json::Value = serde_json::from_str(&entry).unwrap();
+        entry["cwd"] = json!(cwd);
+        entry.to_string()
     }
 
     fn stopped(at: SystemTime) -> String {
@@ -384,9 +452,58 @@ mod tests {
             read_tail(&path, len).unwrap(),
             Tail {
                 mid_turn: false,
-                written: Some(t)
+                written: Some(t),
+                cwd: None,
             }
         );
+    }
+
+    #[test]
+    fn mid_turn_a_subagent_works_in_the_folder_its_newest_entry_naming_one_records() {
+        let t = at(1_000);
+        let worktree = "/code/app/.claude/worktrees/agent-a1";
+        let asking = [
+            prompt(t),
+            written_in(result(t, false), worktree),
+            request(t),
+        ];
+        assert_eq!(
+            tail(&asking).cwd.as_deref(),
+            Some(worktree),
+            "a request names no folder, so the result before it tells"
+        );
+        let moved = [
+            written_in(prompt(t), worktree),
+            written_in(reply(t, Some("tool_use"), "tool_use"), "/code/app/web"),
+        ];
+        assert_eq!(tail(&moved).cwd.as_deref(), Some("/code/app/web"));
+        assert_eq!(tail(&[request(t)]).cwd, None, "no entry read names one");
+    }
+
+    #[test]
+    fn mid_turn_the_folder_an_earlier_end_named_holds_until_a_later_end_names_another() {
+        let t = at(1_000);
+        let worktree = "/code/app/.claude/worktrees/agent-a1";
+        let earlier = tail(&[written_in(prompt(t), worktree), request(t)]);
+        assert_eq!(earlier.cwd.as_deref(), Some(worktree));
+
+        let behind_a_large_result = tail(&[request(t)]);
+        let held = behind_a_large_result.after(&earlier);
+        assert_eq!(held.cwd.as_deref(), Some(worktree));
+
+        let moved = tail(&[written_in(result(t, false), "/code/app/web"), request(t)]);
+        assert_eq!(moved.after(&earlier).cwd.as_deref(), Some("/code/app/web"));
+
+        let ended = tail(&[reply(t, Some("end_turn"), "text")]);
+        assert_eq!(ended.after(&earlier).cwd, None, "only mid-turn");
+    }
+
+    #[test]
+    fn the_folder_of_a_subagent_whose_turn_has_ended_is_not_looked_for() {
+        let t = at(1_000);
+        let ended = tail(&[prompt(t), reply(t, Some("end_turn"), "text")]);
+        assert!(!ended.mid_turn);
+        assert_eq!(ended.cwd, None);
     }
 
     #[test]

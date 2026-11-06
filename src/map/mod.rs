@@ -5,7 +5,8 @@
 //!   - git: branch, head and the time of the last git activity, read from the worktree's git dir
 //!     without ever writing to it (a write would show up in our own file watcher);
 //!   - dev-runner environments, from `~/.dev-runner/` and from the project's own `.dev-runner/`;
-//!   - coding-agent sessions (Claude Code, Codex) whose working directory lies inside the project;
+//!   - coding-agent sessions (Claude Code, Codex) whose working directory lies inside the project,
+//!     and the subagents at work inside it for sessions that work elsewhere;
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
@@ -32,7 +33,9 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-pub use agents::{AgentSession, AgentStatus, Harness, SessionHost};
+pub use agents::{
+    AgentSession, AgentStatus, AwaySubagent, Harness, ParentSession, SessionHost, Subagent,
+};
 pub use disk::{DirUsage, Measurement};
 pub use project::{
     ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, Project, RepoInfo,
@@ -93,6 +96,9 @@ pub struct Snapshot {
     pub projects: Vec<Project>,
     /// Agent sessions whose working directory lies in no known project.
     pub unplaced_agents: Vec<AgentSession>,
+    /// Subagents at work in a folder that lies in no known project, away from the session they
+    /// work for, by session.
+    pub unplaced_subagents: Vec<AwaySubagent>,
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.
     pub problems: Vec<SourceProblem>,
@@ -205,6 +211,9 @@ pub enum Source {
     /// One session's own files: its file in that registry, or its subagents' transcripts under
     /// `~/.claude/projects/` and their folders. The other sessions still show.
     ClaudeSessionFile,
+    /// The meta file beside a subagent's transcript, which names the subagent and its task. The
+    /// subagent still shows, its transcript telling all that it is doing, but unnamed.
+    ClaudeSubagentMeta,
     /// Codex's thread database, `~/.codex/state_5.sqlite`.
     CodexDatabase,
     /// A file watcher could not start, or could not watch a root or a folder outside the roots that
@@ -215,7 +224,8 @@ pub enum Source {
 
 impl Source {
     /// Whether the source tells what is at work in a project: failing to read it may hide an agent,
-    /// a running environment or a project's latest activity. Discovery failing only loses folders.
+    /// a running environment or a project's latest activity. Discovery failing only loses folders,
+    /// and a subagent's meta file only its name.
     pub fn tells_what_is_at_work(self) -> bool {
         match self {
             Source::Registry
@@ -224,7 +234,7 @@ impl Source {
             | Source::ClaudeSessionFile
             | Source::CodexDatabase
             | Source::Watcher => true,
-            Source::Scan => false,
+            Source::Scan | Source::ClaudeSubagentMeta => false,
         }
     }
 
@@ -238,6 +248,7 @@ impl Source {
             Source::Scan
             | Source::EnvironmentState
             | Source::ClaudeSessionFile
+            | Source::ClaudeSubagentMeta
             | Source::Watcher => false,
         }
     }
@@ -280,5 +291,11 @@ mod tests {
     fn one_environments_or_one_sessions_file_hides_only_that_one() {
         assert!(!Source::EnvironmentState.is_sole_source());
         assert!(!Source::ClaudeSessionFile.is_sole_source());
+    }
+
+    #[test]
+    fn a_subagents_meta_file_hides_neither_its_subagent_nor_what_is_at_work() {
+        assert!(!Source::ClaudeSubagentMeta.is_sole_source());
+        assert!(!Source::ClaudeSubagentMeta.tells_what_is_at_work());
     }
 }

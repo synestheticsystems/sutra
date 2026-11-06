@@ -1,21 +1,26 @@
-//! A card's agents, one lozenge per session, as `(Claude) (Codex) 4m` reads. The look says what a
-//! session is doing: waiting on the user, at work, or quiet mid-turn or at rest. Beside a lozenge
-//! stands only how long it has waited or been quiet. A session the Claude app runs opens there on
-//! a click.
+//! A card's agents, one lozenge per session, as `(Claude) (Codex) 4m` reads, and an outlined one
+//! for each subagent at work in the project for a session elsewhere. The look says what an agent
+//! is doing: waiting on the user, at work, or quiet mid-turn or at rest. Beside a lozenge stands
+//! only how long it has waited or been quiet. A session the Claude app runs opens there on a
+//! click, and a subagent's lozenge opens the session it works for.
 
 use std::time::SystemTime;
 
 use crate::dashboard::{AgentLook, AgentLozenge, format};
-use crate::map::{AgentSession, AgentStatus, SessionHost};
+use crate::map::{AgentSession, AgentStatus, AwaySubagent, SessionHost};
 
-/// The lozenges of the sessions that earn one, in the order the map lists the sessions. A
-/// session keeps its place for as long as it lasts, so a lozenge never moves when its status
-/// changes: the look already tells which one waits.
-pub(super) fn lozenges(agents: &[AgentSession], now: SystemTime) -> Vec<AgentLozenge> {
-    shown(agents)
-        .into_iter()
-        .map(|agent| lozenge(agent, now))
-        .collect()
+/// The lozenges of the sessions that earn one, then those of the subagents at work here for
+/// sessions elsewhere, each in the order the map lists them. An agent keeps its place for as long
+/// as it lasts, so a lozenge never moves when its status changes: the look already tells which one
+/// waits.
+pub(super) fn lozenges(
+    agents: &[AgentSession],
+    subagents: &[AwaySubagent],
+    now: SystemTime,
+) -> Vec<AgentLozenge> {
+    let sessions = shown(agents).into_iter().map(|agent| lozenge(agent, now));
+    let subagents = subagents.iter().map(|away| subagent_lozenge(away, now));
+    sessions.chain(subagents).collect()
 }
 
 /// Whether any of `agents` waits on the user, which makes the card or the row they are on throb.
@@ -44,9 +49,28 @@ pub(in crate::dashboard::contents) fn lozenge(
     AgentLozenge {
         harness: agent.harness.to_string(),
         look: look(agent.status),
-        beside: how_long(agent, now),
+        outlined: false,
+        beside: how_long(agent.status, agent.since, now),
         tooltip: agent_tooltip(agent, now),
         link: agent.host.as_ref().and_then(SessionHost::link),
+    }
+}
+
+/// The lozenge at `now` of a subagent at work away from its session, coloured as any agent's.
+/// The outline, not a word on the card, says it is a subagent; a click opens the session it works
+/// for.
+pub(in crate::dashboard::contents) fn subagent_lozenge(
+    away: &AwaySubagent,
+    now: SystemTime,
+) -> AgentLozenge {
+    let subagent = &away.subagent;
+    AgentLozenge {
+        harness: away.parent.harness.to_string(),
+        look: look(subagent.status),
+        outlined: true,
+        beside: how_long(subagent.status, subagent.since, now),
+        tooltip: subagent_tooltip(away, now),
+        link: away.parent.host.as_ref().and_then(SessionHost::link),
     }
 }
 
@@ -59,40 +83,47 @@ fn look(status: AgentStatus) -> AgentLook {
     }
 }
 
-/// How long a session has waited, or been quiet, from its first whole minute.
-fn how_long(agent: &AgentSession, now: SystemTime) -> Option<String> {
-    agent
-        .since
-        .filter(|_| matches!(agent.status, AgentStatus::Waiting | AgentStatus::Quiet))
+/// How long an agent at `status` since `since` has waited, or been quiet, from its first whole
+/// minute.
+fn how_long(status: AgentStatus, since: Option<SystemTime>, now: SystemTime) -> Option<String> {
+    since
+        .filter(|_| matches!(status, AgentStatus::Waiting | AgentStatus::Quiet))
         .and_then(|since| format::whole_units(since, now))
 }
 
-/// Claude Code's permission prompt, the wait people meet most, reads as a sentence; any other reason
-/// keeps the harness's own words.
-fn waiting_for(agent: &AgentSession) -> String {
-    match agent.waiting_for.as_deref() {
-        Some("permission_prompt") => "waiting for permission".to_string(),
-        Some(_) => format!("waiting: {}", agent.waiting_reason().unwrap_or_default()),
-        None => "waiting".to_string(),
+/// What a waiting session waits for, when its harness says: Claude Code's permission prompt, the
+/// wait people meet most, reads as a sentence; any other reason keeps the harness's own words.
+fn waiting_for(agent: &AgentSession) -> Option<String> {
+    match agent.waiting_for.as_deref()? {
+        "permission_prompt" => Some("waiting for permission".to_string()),
+        _ => agent
+            .waiting_reason()
+            .map(|reason| format!("waiting: {reason}")),
     }
 }
 
-/// An agent's tooltip: its status in words, which the lozenge says only in its look, with how many
-/// of its subagents are at work, and the session's name, or its id when it has none. The count
-/// explains a session busy here that its own app shows at rest, having handed its work to
-/// subagents.
-fn agent_tooltip(agent: &AgentSession, now: SystemTime) -> String {
-    let status = match agent.status {
-        AgentStatus::Waiting => waiting_for(agent),
+/// A status in words, which a lozenge says only in its look, at `now` for an agent at `status`
+/// since `since`.
+fn status_words(status: AgentStatus, since: Option<SystemTime>, now: SystemTime) -> String {
+    match status {
+        AgentStatus::Waiting => "waiting".to_string(),
         AgentStatus::Busy => "Busy".to_string(),
-        AgentStatus::Quiet => match agent.since {
+        AgentStatus::Quiet => match since {
             Some(since) => format!("Mid-turn, silent for {}", format::age(since, now)),
             None => "Mid-turn, silent".to_string(),
         },
         AgentStatus::Idle => "Idle".to_string(),
         AgentStatus::Unknown => "Status unknown".to_string(),
-    };
-    let status = match agent.subagents_at_work {
+    }
+}
+
+/// An agent's tooltip: its status in words, what it waits for when it says, with how many of its
+/// subagents are at work, and the session's name, or its id when it has none. The count explains a
+/// session busy here that its own app shows at rest, having handed its work to subagents.
+fn agent_tooltip(agent: &AgentSession, now: SystemTime) -> String {
+    let waits_for = waiting_for(agent).filter(|_| agent.status == AgentStatus::Waiting);
+    let status = waits_for.unwrap_or_else(|| status_words(agent.status, agent.since, now));
+    let status = match agent.subagents_at_work.len() {
         0 => status,
         n => format!("{status}, {} at work", format::plural(n as u64, "subagent")),
     };
@@ -102,13 +133,29 @@ fn agent_tooltip(agent: &AgentSession, now: SystemTime) -> String {
     )
 }
 
+/// A subagent's tooltip: its status in words, then in words what its outline says, that it is a
+/// subagent, with its name and task when its harness records them, and the session it works for,
+/// by name or else by id.
+fn subagent_tooltip(away: &AwaySubagent, now: SystemTime) -> String {
+    let subagent = &away.subagent;
+    let status = status_words(subagent.status, subagent.since, now);
+    let names = [&subagent.name, &subagent.description].into_iter();
+    let quoted = names
+        .flatten()
+        .map(|name| format!("\u{201c}{name}\u{201d}, "));
+    let quoted: String = quoted.collect();
+    let parent = &away.parent;
+    let works_for = parent.label.as_deref().unwrap_or(&parent.session_id);
+    format!("{status}\nSubagent {quoted}working for {works_for}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::map::Harness;
-    use crate::map::test_support::{agent_session, at};
+    use crate::map::test_support::{agent_session, at, subagent_at_work};
+    use crate::map::{Harness, Subagent};
 
     fn session(status: AgentStatus) -> AgentSession {
         agent_session("abc-123", status)
@@ -233,15 +280,99 @@ mod tests {
     fn an_agents_tooltip_counts_its_subagents_at_work() {
         let now = at(0);
         let mut busy = session(AgentStatus::Busy);
-        busy.subagents_at_work = 1;
+        busy.subagents_at_work = vec![subagent_at_work("a1")];
         assert_eq!(
             agent_tooltip(&busy, now),
             "Busy, 1 subagent at work\nabc-123"
         );
-        busy.subagents_at_work = 3;
+        busy.subagents_at_work = ["a1", "a2", "a3"].map(subagent_at_work).to_vec();
         assert_eq!(
             agent_tooltip(&busy, now),
             "Busy, 3 subagents at work\nabc-123"
+        );
+    }
+
+    #[test]
+    fn a_cards_lozenges_are_its_sessions_then_the_subagents_at_work_for_sessions_elsewhere() {
+        let here = [agent_session("here", AgentStatus::Busy)];
+        let elsewhere = agent_session("elsewhere", AgentStatus::Idle);
+        let subagents = [AwaySubagent::new(subagent_at_work("a1"), &elsewhere)];
+
+        let lozenges = lozenges(&here, &subagents, at(0));
+
+        let outlined: Vec<bool> = lozenges.iter().map(|lozenge| lozenge.outlined).collect();
+        assert_eq!(outlined, [false, true]);
+    }
+
+    #[test]
+    fn a_subagents_lozenge_is_outlined_coloured_as_any_agents_and_opens_its_sessions_link() {
+        let now = at(10_000);
+        let host = SessionHost::ClaudeApp {
+            app_session_id: Some("local_2b5d1f5a-66c8".to_string()),
+        };
+        let parent = AgentSession {
+            host: Some(host),
+            ..session(AgentStatus::Idle)
+        };
+        let busy = subagent_lozenge(&AwaySubagent::new(subagent_at_work("a1"), &parent), now);
+        assert!(busy.outlined);
+        assert_eq!(
+            (busy.harness.as_str(), busy.look),
+            ("Claude", AgentLook::Working)
+        );
+        assert_eq!(busy.beside, None);
+        assert_eq!(
+            busy.link.as_deref(),
+            Some("claude://code/continue?session=local_2b5d1f5a-66c8")
+        );
+
+        let quiet = Subagent {
+            status: AgentStatus::Quiet,
+            since: Some(now - Duration::from_secs(4 * 60 + 10)),
+            ..subagent_at_work("a2")
+        };
+        let quiet = subagent_lozenge(&AwaySubagent::new(quiet, &parent), now);
+        assert_eq!(
+            (quiet.look, quiet.beside.as_deref()),
+            (AgentLook::Still, Some("4m"))
+        );
+        assert!(!lozenge(&parent, now).outlined, "a session's is filled");
+    }
+
+    #[test]
+    fn a_subagents_tooltip_says_its_status_names_it_and_its_task_and_the_session_it_works_for() {
+        let now = at(0);
+        let launch = AgentSession {
+            label: Some("Sutra launch".to_string()),
+            ..session(AgentStatus::Idle)
+        };
+        let tooltip = |subagent: Subagent, parent: &AgentSession| {
+            subagent_tooltip(&AwaySubagent::new(subagent, parent), now)
+        };
+        let fixes = Subagent {
+            name: Some("dashboard-fixes".to_string()),
+            description: Some("Fix dashboard review findings".to_string()),
+            ..subagent_at_work("a1")
+        };
+        assert_eq!(
+            tooltip(fixes, &launch),
+            "Busy\nSubagent \u{201c}dashboard-fixes\u{201d}, \u{201c}Fix dashboard review \
+             findings\u{201d}, working for Sutra launch"
+        );
+        let nicknamed = Subagent {
+            name: Some("Boyle".to_string()),
+            ..subagent_at_work("a2")
+        };
+        assert_eq!(
+            tooltip(nicknamed, &launch),
+            "Busy\nSubagent \u{201c}Boyle\u{201d}, working for Sutra launch"
+        );
+        let unnamed = subagent_at_work("a3");
+        let untitled = session(AgentStatus::Idle);
+        assert_eq!(
+            tooltip(unnamed, &untitled),
+            "Busy\nSubagent working for abc-123",
+            "a session without a name goes by its id"
         );
     }
 

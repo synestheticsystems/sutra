@@ -19,9 +19,10 @@ pub(super) struct Tracked {
     /// The newest change the engine saw happen while watching: a file written in the project, or
     /// its environment publishing a new status.
     pub(super) observed: Option<(SystemTime, ActivitySource)>,
-    /// The newest activity of any agent seen here. It outlives the session: one that only read
-    /// leaves nothing else behind when it ends, and without this the project would fall back to its
-    /// last commit and count as idle at once.
+    /// The newest activity of any agent seen here, a session or a subagent at work for a session
+    /// elsewhere. It outlives the agent: one that only read leaves nothing else behind when it
+    /// ends, and without this the project would fall back to its last commit and count as idle at
+    /// once.
     pub(super) agent_activity: Option<SystemTime>,
     /// Every environment describing this folder; `project.environment` is what they merge into.
     pub(super) environments: Option<FolderEnvironments>,
@@ -127,11 +128,11 @@ impl Tracked {
     }
 
     pub(super) fn recompute_activity(&mut self) {
-        let agent = self
-            .project
-            .agents
-            .iter()
-            .filter_map(|agent| agent.last_activity)
+        let sessions = self.project.agents.iter().map(|agent| agent.last_activity);
+        let subagents = self.project.subagents.iter();
+        let agent = sessions
+            .chain(subagents.map(|away| away.subagent.last_write))
+            .flatten()
             .max();
         self.agent_activity = self.agent_activity.max(agent);
         let newest = [
@@ -172,8 +173,8 @@ fn environment_started(env: &Environment) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::test_support::{agent_session, at, environment_at};
-    use crate::map::{AgentSession, AgentStatus, ScanOptions};
+    use crate::map::test_support::{agent_session, at, environment_at, subagent_at_work};
+    use crate::map::{AgentSession, AgentStatus, AwaySubagent, ScanOptions, Subagent};
 
     fn tracked() -> Tracked {
         let boundary = Boundary::new(&[], std::path::Path::new("/"), &ScanOptions::default());
@@ -222,6 +223,24 @@ mod tests {
             project.project.activity_source,
             Some(ActivitySource::FileChange)
         );
+    }
+
+    #[test]
+    fn a_subagent_at_work_here_for_a_session_elsewhere_is_this_projects_agent_activity() {
+        let mut project = tracked();
+        project.git_activity = Some(at(100));
+        project.project.agents = vec![agent(200)];
+        let subagent = Subagent {
+            last_write: Some(at(300)),
+            ..subagent_at_work("a1")
+        };
+        let session = agent_session("elsewhere", AgentStatus::Idle);
+        project.project.subagents = vec![AwaySubagent::new(subagent, &session)];
+
+        project.recompute_activity();
+
+        assert_eq!(project.project.last_activity, Some(at(300)));
+        assert_eq!(project.project.activity_source, Some(ActivitySource::Agent));
     }
 
     #[test]

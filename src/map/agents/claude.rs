@@ -67,8 +67,9 @@ struct RegistryEntry {
 /// The sessions of every Claude Code process still running, each with the work of its subagents.
 /// No registry folder means Claude Code never ran here, and yields no sessions; a registry folder
 /// that cannot be listed is a problem. So is a file in it, or a subagent's transcript or folder,
-/// that cannot be read, which costs only its own session. `transcripts` holds the last load's
-/// readings of subagent transcripts, and this load's afterwards.
+/// that cannot be read, which costs only its own session, and a subagent's meta file, which costs
+/// only the subagent's name. `transcripts` holds the last load's readings of subagent files, and
+/// this load's afterwards.
 pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcripts) -> Loaded {
     let registry = home.join(".claude").join("sessions");
     let dir = match fs::read_dir(&registry) {
@@ -88,7 +89,7 @@ pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcrip
     let mut sessions = Vec::new();
     let mut being_rewritten = Vec::new();
     let mut failures = Vec::new();
-    let mut subagents = subagents::Reader::new(home, transcripts);
+    let mut subagents = subagents::Reader::new(home, boundary, transcripts);
     for file in dir {
         let file = match file {
             Ok(file) => file,
@@ -127,9 +128,15 @@ pub(super) fn load(home: &Path, boundary: &Boundary, transcripts: &mut Transcrip
             Err(err) => failures.push((path, err.kind())),
         }
     }
+    let mut problems = SourceProblem::per_kind(Source::ClaudeSessionFile, failures);
+    let unread_metas = subagents.unread_metas();
+    problems.extend(SourceProblem::per_kind(
+        Source::ClaudeSubagentMeta,
+        unread_metas,
+    ));
     Loaded {
         sessions,
-        problems: SourceProblem::per_kind(Source::ClaudeSessionFile, failures),
+        problems,
         being_rewritten,
     }
 }
@@ -203,7 +210,7 @@ impl RegistryEntry {
                 .max(self.status_updated_at)
                 .and_then(time_from_unix_ms),
             host: host(self.entrypoint.as_str(), self.host_session_id.as_str()),
-            subagents_at_work: 0,
+            subagents_at_work: Vec::new(),
         }
     }
 }
@@ -528,17 +535,19 @@ mod tests {
         idle_session(&home, &cwd, now);
         let cwd = cwd.to_str().unwrap();
         let last_write = now - Duration::from_secs(30);
-        write_test_subagent_at_work(home.root(), cwd, "0b1d", "working", last_write);
+        write_test_subagent_at_work(home.root(), cwd, "0b1d", "working", cwd, last_write);
         // Cut off mid-turn when the session's earlier process ended.
         let cut_off = now - Duration::from_secs(300);
-        write_test_subagent_at_work(home.root(), cwd, "0b1d", "cut-off", cut_off);
+        write_test_subagent_at_work(home.root(), cwd, "0b1d", "cut-off", cwd, cut_off);
 
         let sessions = load_home(&home).sessions;
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
         assert_eq!(session.status, AgentStatus::Busy);
-        assert_eq!(session.subagents_at_work, 1);
+        let subagents = session.subagents_at_work.iter();
+        let ids: Vec<&str> = subagents.map(|subagent| subagent.id.as_str()).collect();
+        assert_eq!(ids, ["working"]);
         assert_eq!(session.since, None);
         // Claude Code dates an entry to the millisecond.
         let behind = last_write.duration_since(session.last_activity.unwrap());
@@ -555,7 +564,7 @@ mod tests {
         let cwd = home.dir("app");
         idle_session(&home, &cwd, now);
         let cwd = cwd.to_str().unwrap();
-        let working = write_test_subagent_at_work(home.root(), cwd, "0b1d", "working", now);
+        let working = write_test_subagent_at_work(home.root(), cwd, "0b1d", "working", cwd, now);
         let folder = working.parent().unwrap().to_path_buf();
         home.restrict(&folder, 0o000);
 
@@ -568,6 +577,37 @@ mod tests {
             [SourceProblem::new(
                 Source::ClaudeSessionFile,
                 folder,
+                io::ErrorKind::PermissionDenied
+            )]
+        );
+    }
+
+    #[test]
+    fn a_subagents_meta_file_that_cannot_be_read_is_a_problem_of_its_own_and_costs_only_names() {
+        let home = TempDir::new("agents-claude-subagent-meta");
+        let now = SystemTime::now();
+        let cwd = home.dir("app");
+        idle_session(&home, &cwd, now);
+        let cwd = cwd.to_str().unwrap();
+        let working = write_test_subagent_at_work(home.root(), cwd, "0b1d", "working", cwd, now);
+        let meta = working.with_extension("meta.json");
+        fs::write(&meta, r#"{"name": "dashboard-fixes"}"#).unwrap();
+        home.restrict(&meta, 0o000);
+
+        let loaded = load_home(&home);
+
+        let session = &loaded.sessions[0];
+        assert_eq!(
+            session.status,
+            AgentStatus::Busy,
+            "its subagent still counts"
+        );
+        assert_eq!(session.subagents_at_work[0].name, None);
+        assert_eq!(
+            loaded.problems,
+            [SourceProblem::new(
+                Source::ClaudeSubagentMeta,
+                meta,
                 io::ErrorKind::PermissionDenied
             )]
         );

@@ -14,7 +14,7 @@ pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 
 pub(in crate::dashboard) const FOCUS_LARGE_BYTES: u64 = 1 << 30;
 
 /// Whether the project belongs in the focused view. A project is in focus when any of these holds:
-///   - a coding agent has a session in it;
+///   - a coding agent has a session in it, or a subagent at work for a session elsewhere;
 ///   - a dev-runner environment describes it, from `~/.dev-runner/` or its own `.dev-runner/`;
 ///   - its last activity lies within `FOCUS_RECENT` of `now`;
 ///   - its folder holds at least `FOCUS_LARGE_BYTES` (see `disk_bytes`), so a forgotten folder
@@ -24,6 +24,7 @@ pub(in crate::dashboard) const FOCUS_LARGE_BYTES: u64 = 1 << 30;
 /// Both thresholds are first guesses, to tune once the focused view has been lived with.
 pub(super) fn in_focus(project: &Project, now: SystemTime) -> bool {
     !project.agents.is_empty()
+        || !project.subagents.is_empty()
         || project.environment.is_some()
         || project.last_activity.is_some_and(|at| {
             // A time ahead of the clock (a file touched with a future date) is recent.
@@ -47,8 +48,9 @@ mod tests {
     use super::*;
     use crate::map::test_support::{
         agent_session, at, cargo_target, environment_at, measured, node_modules, project_at,
+        subagent_at_work,
     };
-    use crate::map::{AgentStatus, ArtifactDir, Measurement};
+    use crate::map::{AgentStatus, ArtifactDir, AwaySubagent, Measurement};
 
     fn now() -> SystemTime {
         at(1_000_000_000)
@@ -101,6 +103,16 @@ mod tests {
     fn an_agent_session_brings_a_project_into_focus() {
         let working = Project {
             agents: vec![agent_session("thread-1", AgentStatus::Idle)],
+            ..out_of_focus()
+        };
+        assert!(in_focus(&working, now()));
+    }
+
+    #[test]
+    fn a_subagent_at_work_for_a_session_elsewhere_brings_a_project_into_focus() {
+        let session = agent_session("elsewhere", AgentStatus::Idle);
+        let working = Project {
+            subagents: vec![AwaySubagent::new(subagent_at_work("a1"), &session)],
             ..out_of_focus()
         };
         assert!(in_focus(&working, now()));

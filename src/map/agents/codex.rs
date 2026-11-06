@@ -20,7 +20,7 @@ pub use self::rollout::Rollouts;
 use self::rollout::{Rollout, Turn};
 use self::sub_agents::Threads;
 use super::session::SubagentWork;
-use super::{AgentSession, AgentStatus, Harness, resolve_cwd, time_from_unix_ms};
+use super::{AgentSession, AgentStatus, Harness, Subagent, resolve_cwd, time_from_unix_ms};
 use crate::map::scan::Boundary;
 use crate::map::{Source, SourceProblem};
 
@@ -80,15 +80,15 @@ pub(super) fn load(
     let mut work: HashMap<String, SubagentWork> = HashMap::new();
     for (sub_agent, parent) in threads.sub_agents {
         let rollout = sub_agent.rollout(rollouts, &earlier);
-        let mid_turn = rollout
-            .as_ref()
-            .is_some_and(|rollout| rollout.last_turn == Some(Turn::Open));
-        let written = u64::try_from(sub_agent.silent_since_ms(rollout.as_ref()))
-            .ok()
-            .and_then(time_from_unix_ms);
+        let newest_turn = rollout.as_ref().and_then(|rollout| rollout.last_turn);
+        let silent_since_ms = sub_agent.silent_since_ms(rollout.as_ref());
+        let mid_turn = newest_turn == Some(Turn::Open);
+        let written = time_from_codex_ms(silent_since_ms);
         work.entry(parent)
             .or_default()
-            .count(mid_turn, written, now);
+            .count(mid_turn, written, now, || {
+                sub_agent.into_subagent(newest_turn, silent_since_ms, now_ms, boundary)
+            });
     }
     Ok(threads
         .user_facing
@@ -177,18 +177,49 @@ impl Thread {
             waiting_for: None,
             kind: Some(self.source),
             label: None,
-            // A quiet thread's status dates from its last write; the others record no start.
-            since: (status == AgentStatus::Quiet)
-                .then_some(silent_since_ms)
-                .and_then(|ms| u64::try_from(ms).ok())
-                .and_then(time_from_unix_ms),
-            last_activity: u64::try_from(last_write_ms)
-                .ok()
-                .and_then(time_from_unix_ms),
+            since: quiet_since(status, silent_since_ms),
+            last_activity: time_from_codex_ms(last_write_ms),
             host: None,
-            subagents_at_work: 0,
+            subagents_at_work: Vec::new(),
         }
     }
+
+    /// The sub-agent at work this thread is, given its newest turn event and when it was last
+    /// written: busy, or quiet once silent mid-turn as long as the user's own thread would be (see
+    /// `status`).
+    fn into_subagent(
+        self,
+        newest_turn: Option<Turn>,
+        silent_since_ms: i64,
+        now_ms: i64,
+        boundary: &Boundary,
+    ) -> Subagent {
+        let status = status(newest_turn, now_ms - silent_since_ms);
+        Subagent {
+            name: self.nickname(),
+            id: self.id,
+            cwd: resolve_cwd(&self.cwd, boundary),
+            // Codex records no task in a few words for a sub-agent, as Claude Code does.
+            description: None,
+            status,
+            since: quiet_since(status, silent_since_ms),
+            last_write: time_from_codex_ms(silent_since_ms),
+        }
+    }
+}
+
+/// When a thread's status began: a quiet thread's dates from its last write, at
+/// `silent_since_ms`, and the others record no start.
+fn quiet_since(status: AgentStatus, silent_since_ms: i64) -> Option<SystemTime> {
+    (status == AgentStatus::Quiet)
+        .then(|| time_from_codex_ms(silent_since_ms))
+        .flatten()
+}
+
+/// A time as Codex stores it, in milliseconds since the Unix epoch, or `None` before the epoch or
+/// past the clock's range.
+fn time_from_codex_ms(ms: i64) -> Option<SystemTime> {
+    u64::try_from(ms).ok().and_then(time_from_unix_ms)
 }
 
 /// Read the threads written since `since_ms`, and those their sub-agents descend from, through a
@@ -557,7 +588,8 @@ mod tests {
         let parent = &sessions[0];
         assert_eq!(parent.status, AgentStatus::Busy);
         assert_eq!(
-            parent.subagents_at_work, 1,
+            parent.subagents_at_work.len(),
+            1,
             "the guardian counts for nothing"
         );
         let age = idle_for(parent);
@@ -565,6 +597,58 @@ mod tests {
             age >= Duration::from_secs(10) && age < Duration::from_secs(20),
             "the sub-agent's write: {age:?}"
         );
+    }
+
+    #[test]
+    fn a_sub_agent_at_work_is_named_by_codex_works_in_its_threads_folder_and_quiets_as_a_thread() {
+        let home = TempDir::new("agents-codex-sub-agent-described");
+        let h = home.root();
+        let web = home.dir("web");
+        let resting = rollout(h, "parent", "task_complete", 30 * MINUTE_MS);
+        let working = rollout(h, "explorer", "task_started", 10 * SECOND_MS);
+        let silent = rollout(h, "reviewer", "task_started", 5 * MINUTE_MS);
+        let conn = create_db(h);
+        insert(&conn, recent("parent", &resting, h, 30 * MINUTE_MS));
+        let source = spawned_by("parent");
+        let explorer = recent("explorer", &working, &web, 10 * SECOND_MS);
+        let reviewer = recent("reviewer", &silent, h, 5 * MINUTE_MS);
+        insert(
+            &conn,
+            Row {
+                source: &source,
+                ..explorer
+            },
+        );
+        insert(
+            &conn,
+            Row {
+                source: &source,
+                ..reviewer
+            },
+        );
+
+        let sessions = load_home(&home).unwrap();
+
+        let [explorer, reviewer] = sessions[0].subagents_at_work.as_slice() else {
+            panic!(
+                "two sub-agents at work: {:?}",
+                sessions[0].subagents_at_work
+            );
+        };
+        assert_eq!(explorer.id, "explorer");
+        assert_eq!(explorer.cwd, fs::canonicalize(&web).unwrap());
+        assert_eq!(explorer.name.as_deref(), Some("Boyle"));
+        assert_eq!(explorer.description, None);
+        assert_eq!((explorer.status, explorer.since), (AgentStatus::Busy, None));
+        assert_eq!(reviewer.status, AgentStatus::Quiet);
+        let silent_for = SystemTime::now()
+            .duration_since(reviewer.since.expect("a quiet sub-agent dates its silence"))
+            .unwrap();
+        assert!(
+            silent_for >= 5 * Duration::from_secs(60) && silent_for < Duration::from_secs(310),
+            "{silent_for:?}"
+        );
+        assert_eq!(reviewer.last_write, reviewer.since);
     }
 
     #[test]
@@ -598,7 +682,8 @@ mod tests {
         assert_eq!(ids(&sessions), ["parent"]);
         assert_eq!(sessions[0].status, AgentStatus::Busy);
         assert_eq!(
-            sessions[0].subagents_at_work, 1,
+            sessions[0].subagents_at_work.len(),
+            1,
             "the lead wrote too long ago to count"
         );
     }
@@ -634,7 +719,9 @@ mod tests {
         let mut rollouts = Rollouts::default();
         let at_work = |sessions: &[AgentSession]| -> Vec<(AgentStatus, usize)> {
             let sessions = sessions.iter();
-            sessions.map(|s| (s.status, s.subagents_at_work)).collect()
+            sessions
+                .map(|s| (s.status, s.subagents_at_work.len()))
+                .collect()
         };
 
         let first = load(h, &boundary, &mut rollouts).unwrap();
@@ -688,7 +775,7 @@ mod tests {
         assert_eq!(ids(&sessions), ["parent"]);
         let parent = &sessions[0];
         assert_eq!(parent.status, AgentStatus::Idle);
-        assert_eq!(parent.subagents_at_work, 0);
+        assert_eq!(parent.subagents_at_work, []);
         let age = idle_for(parent);
         assert!(
             age >= Duration::from_secs(60) && age < Duration::from_secs(70),

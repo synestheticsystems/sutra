@@ -21,10 +21,12 @@ pub struct IdleFolder<'a> {
     pub bytes: u64,
 }
 
-/// Whether something is at work in `project` now: an agent, other than a job that has finished, or
-/// an environment whose process lives.
+/// Whether something is at work in `project` now: an agent, other than a job that has finished, a
+/// subagent at work there for a session elsewhere, as in a worktree of its own, or an environment
+/// whose process lives.
 fn in_use(project: &Project) -> bool {
     project.agents.iter().any(|agent| !agent.is_finished_job())
+        || !project.subagents.is_empty()
         || project.environment.as_ref().is_some_and(|env| env.alive)
 }
 
@@ -195,9 +197,11 @@ mod tests {
     use crate::map::clean::locks::tests::hold_like_cargo;
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, measured,
-        node_modules, project_at, snapshot_of,
+        node_modules, project_at, snapshot_of, subagent_at_work,
     };
-    use crate::map::{AgentStatus, Harness, Measurement, PrivateFolder, Source, SourceProblem};
+    use crate::map::{
+        AgentStatus, AwaySubagent, Harness, Measurement, PrivateFolder, Source, SourceProblem,
+    };
     use std::io;
 
     const DAY: u64 = 86_400;
@@ -292,6 +296,16 @@ mod tests {
         let mut found = names(&map);
         found.sort();
         assert_eq!(found, ["environment-stopped", "finished-job"]);
+    }
+
+    #[test]
+    fn a_subagent_at_work_for_a_session_elsewhere_keeps_its_worktree_out() {
+        let session = agent_session("/code/app", AgentStatus::Idle);
+        let map = snapshot_of(vec![Project {
+            subagents: vec![AwaySubagent::new(subagent_at_work("a1"), &session)],
+            ..quiet_project("agent-a1", 9, LARGE)
+        }]);
+        assert_eq!(names(&map), [""; 0]);
     }
 
     #[test]
@@ -562,6 +576,11 @@ mod tests {
             names(&map_with(Source::Scan)),
             ["app"],
             "a folder discovery could not list hides no agent"
+        );
+        assert_eq!(
+            names(&map_with(Source::ClaudeSubagentMeta)),
+            ["app"],
+            "a subagent's meta file only names it"
         );
     }
 

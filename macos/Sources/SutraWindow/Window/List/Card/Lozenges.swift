@@ -1,9 +1,10 @@
 import SutraCore
 import SwiftUI
 
-/// One agent session, as `(Claude) 4m` reads: the capsule's colour says what it is doing, and a
-/// waiting or working one moves with its rhythm. Its tooltip says the rest in words; a click opens
-/// the session where it runs.
+/// One agent session, as `(Claude) 4m` reads, or a subagent at work away from its session, drawn
+/// as the capsule's edge alone: the colour says what it is doing, and a waiting or working one
+/// moves with its rhythm. Its tooltip says the rest in words; a click opens the session where it
+/// runs, a subagent's the session it works for.
 struct AgentLozengeView: View {
     let lozenge: AgentLozenge
 
@@ -11,12 +12,8 @@ struct AgentLozengeView: View {
         HStack(spacing: 6) {
             Lozenge(ink: lozenge.look.ink) {
                 Text(lozenge.harness)
-            } fill: {
-                if let swell = lozenge.look.swell {
-                    SwellLayer(swell: swell, shape: .capsule)
-                } else {
-                    Capsule().fill(Still.fill)
-                }
+            } capsule: {
+                AgentCapsule(look: lozenge.look, outlined: lozenge.outlined)
             }
             if let beside = lozenge.beside {
                 Text(beside)
@@ -28,6 +25,29 @@ struct AgentLozengeView: View {
         .opensLink(lozenge.link)
         .accessibilityValue(lozenge.tooltip)
         .help(lozenge.tooltip)
+    }
+}
+
+/// The capsule under an agent's name, in its look's colour: filled, or outlined for a subagent.
+private struct AgentCapsule: View {
+    let look: AgentLook
+    let outlined: Bool
+
+    /// As thin as a card's edge.
+    private static let edgeWidth: CGFloat = 1
+
+    var body: some View {
+        if outlined {
+            if let swell = look.edgeSwell {
+                SwellLayer(swell: swell, shape: .capsuleEdge(width: Self.edgeWidth))
+            } else {
+                Capsule().strokeBorder(Still.edge, lineWidth: Self.edgeWidth)
+            }
+        } else if let swell = look.swell {
+            SwellLayer(swell: swell, shape: .capsule)
+        } else {
+            Capsule().fill(Still.fill)
+        }
     }
 }
 
@@ -46,7 +66,7 @@ struct UnitLozengeView: View {
                         Text(port).monospaced()
                     }
                 }
-            } fill: {
+            } capsule: {
                 Capsule().fill(lozenge.look.fill)
             }
             if let beside = lozenge.beside {
@@ -83,11 +103,11 @@ private struct SwitchedOff: View {
     }
 }
 
-/// A lozenge's shape: `label` on a capsule painted by `fill`.
-private struct Lozenge<Label: View, Fill: View>: View {
+/// A lozenge's shape: `label` on a capsule, which `capsule` paints, filled or as its edge alone.
+private struct Lozenge<Label: View, Painted: View>: View {
     let ink: Color
     @ViewBuilder let label: () -> Label
-    @ViewBuilder let fill: () -> Fill
+    @ViewBuilder let capsule: () -> Painted
 
     var body: some View {
         label()
@@ -96,7 +116,7 @@ private struct Lozenge<Label: View, Fill: View>: View {
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .background(content: fill)
+            .background(content: capsule)
     }
 }
 

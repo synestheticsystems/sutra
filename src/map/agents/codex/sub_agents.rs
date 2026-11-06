@@ -35,6 +35,13 @@ impl Thread {
             _ => Origin::Other,
         }
     }
+
+    /// The name Codex gave a sub-agent it spawned, as `Boyle` reads, when its source records one.
+    pub(super) fn nickname(&self) -> Option<String> {
+        let source: serde_json::Value = serde_json::from_str(&self.source).ok()?;
+        let nickname = source.pointer("/subagent/thread_spawn/agent_nickname")?;
+        nickname.as_str().map(str::to_string)
+    }
 }
 
 /// The threads of one load: the user-facing ones, which the map shows, and the sub-agent threads,
@@ -156,6 +163,19 @@ mod tests {
             ("thread_spawn", Origin::Other),
         ] {
             assert_eq!(thread("t", source).origin(), origin, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_sub_agent_is_named_by_the_nickname_codex_gave_it_and_another_thread_by_none() {
+        let named = thread("t", &spawned_by("app")).nickname();
+        assert_eq!(named.as_deref(), Some("Boyle"));
+        for source in [
+            "cli",
+            r#"{"subagent":{"thread_spawn":{"parent_thread_id":"app","agent_nickname":7}}}"#,
+            r#"{"subagent":{"thread_spawn":"#,
+        ] {
+            assert_eq!(thread("t", source).nickname(), None, "{source}");
         }
     }
 

@@ -32,16 +32,69 @@ pub struct AgentSession {
     pub last_activity: Option<SystemTime>,
     /// Where the session runs, when the harness records it.
     pub host: Option<SessionHost>,
-    /// How many of the session's subagents are at work: Claude Code's subagents, or the threads a
-    /// Codex thread spawned. While one is, the session counts as busy unless it waits on the user
-    /// (see `with_subagent_work`).
-    pub subagents_at_work: usize,
+    /// The session's subagents at work: Claude Code's subagents, or the threads a Codex thread
+    /// spawned, by id. While one is, the session counts as busy unless it waits on the user (see
+    /// `with_subagent_work`). The map also shows each where it works, when that is away from the
+    /// session (see `AwaySubagent`).
+    pub subagents_at_work: Vec<Subagent>,
+}
+
+/// One of a session's subagents at work, as its harness's files tell it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subagent {
+    /// Claude Code's id for the subagent, or the Codex thread's.
+    pub id: String,
+    /// The folder it works in, resolved as a session's is (see `resolve_cwd`).
+    pub cwd: PathBuf,
+    /// Its name, and the task it was given in a few words, when its harness records them.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Busy, or for a Codex thread silent past a minute, quiet: no harness writes down that a
+    /// subagent waits on the user, and one at rest is not at work.
+    pub status: AgentStatus,
+    /// When a quiet subagent last wrote; the others record no start.
+    pub since: Option<SystemTime>,
+    pub last_write: Option<SystemTime>,
+}
+
+/// A session's subagent at work away from the session: in another project than the session's, or,
+/// outside every project, in a folder the session's does not hold. The map shows it there, apart
+/// from the session, which still counts it (see `State::refresh_agents`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaySubagent {
+    pub subagent: Subagent,
+    /// The session it works for.
+    pub parent: ParentSession,
+}
+
+/// The session a subagent works for: its harness, its id and name, and where it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParentSession {
+    pub harness: Harness,
+    pub session_id: String,
+    pub label: Option<String>,
+    pub host: Option<SessionHost>,
+}
+
+impl AwaySubagent {
+    /// `subagent`, at work away from `session`, the session it works for.
+    pub(crate) fn new(subagent: Subagent, session: &AgentSession) -> AwaySubagent {
+        AwaySubagent {
+            subagent,
+            parent: ParentSession {
+                harness: session.harness,
+                session_id: session.session_id.clone(),
+                label: session.label.clone(),
+                host: session.host.clone(),
+            },
+        }
+    }
 }
 
 /// What a session's subagents did, as their harness's files tell it.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct SubagentWork {
-    pub(super) at_work: usize,
+    pub(super) at_work: Vec<Subagent>,
     /// When one of them last wrote.
     pub(super) last_write: Option<SystemTime>,
 }
@@ -49,20 +102,23 @@ pub(super) struct SubagentWork {
 impl SubagentWork {
     /// Count one subagent, whose files say whether its turn goes on (`mid_turn`) and when it last
     /// wrote, as of `now`. It is at work while mid-turn and not silent past
-    /// `SUBAGENT_SILENCE_LIMIT`.
+    /// `SUBAGENT_SILENCE_LIMIT`, and only then does `describe` say what it is, as reading that can
+    /// take more of its files.
     pub(super) fn count(
         &mut self,
         mid_turn: bool,
         last_write: Option<SystemTime>,
         now: SystemTime,
+        describe: impl FnOnce() -> Subagent,
     ) {
         // `duration_since` fails for a write dated after `now`, which is as fresh as writes come.
         let silent_too_long = |at: SystemTime| {
             now.duration_since(at)
                 .is_ok_and(|silent| silent > SUBAGENT_SILENCE_LIMIT)
         };
-        let at_work = mid_turn && last_write.is_some_and(|at| !silent_too_long(at));
-        self.at_work += usize::from(at_work);
+        if mid_turn && last_write.is_some_and(|at| !silent_too_long(at)) {
+            self.at_work.push(describe());
+        }
         self.last_write = self.last_write.max(last_write);
     }
 }
@@ -71,17 +127,19 @@ impl AgentSession {
     /// This session, counting what its subagents did as its own. Their writes are its activity,
     /// and while one is at work the session is busy, whatever its harness says of the session
     /// itself: a session that handed its work to subagents and went idle is still at it. A session
-    /// waiting on the user stays waiting, because the user is wanted either way.
-    pub(super) fn with_subagent_work(mut self, work: SubagentWork) -> AgentSession {
-        self.subagents_at_work = work.at_work;
+    /// waiting on the user stays waiting, because the user is wanted either way. The subagents
+    /// keep the order of their ids, so a reload that finds the same ones compares equal.
+    pub(super) fn with_subagent_work(mut self, mut work: SubagentWork) -> AgentSession {
         self.last_activity = self.last_activity.max(work.last_write);
-        let promoted =
-            work.at_work > 0 && !matches!(self.status, AgentStatus::Busy | AgentStatus::Waiting);
+        let promoted = !work.at_work.is_empty()
+            && !matches!(self.status, AgentStatus::Busy | AgentStatus::Waiting);
         if promoted {
             self.status = AgentStatus::Busy;
             // No file records when the subagents' work made the session busy.
             self.since = None;
         }
+        work.at_work.sort_by(|a, b| a.id.cmp(&b.id));
+        self.subagents_at_work = work.at_work;
         self
     }
 
@@ -145,21 +203,21 @@ pub enum SessionHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::test_support::{agent_session, at};
+    use crate::map::test_support::{agent_session, at, subagent_at_work};
 
     const MINUTE: Duration = Duration::from_secs(60);
 
-    /// The work of one subagent, as of `now`.
+    /// The work of one subagent `a1`, as of `now`.
     fn one(mid_turn: bool, last_write: Option<SystemTime>, now: SystemTime) -> SubagentWork {
         let mut work = SubagentWork::default();
-        work.count(mid_turn, last_write, now);
+        work.count(mid_turn, last_write, now, || subagent_at_work("a1"));
         work
     }
 
     #[test]
     fn a_subagent_is_at_work_while_mid_turn_until_silent_past_the_limit() {
         let now = at(100_000);
-        let at_work = |mid_turn, last_write| one(mid_turn, last_write, now).at_work == 1;
+        let at_work = |mid_turn, last_write| one(mid_turn, last_write, now).at_work.len() == 1;
 
         assert!(at_work(true, Some(now - 9 * MINUTE)));
         assert!(at_work(true, Some(now + MINUTE)), "dated after now");
@@ -169,14 +227,18 @@ mod tests {
     }
 
     #[test]
-    fn subagent_work_counts_those_at_work_and_keeps_the_newest_write() {
+    fn subagent_work_describes_only_those_at_work_and_keeps_the_newest_write() {
         let now = at(100_000);
         let mut work = SubagentWork::default();
-        work.count(true, Some(now - MINUTE), now);
-        work.count(false, Some(now - 2 * MINUTE), now);
-        work.count(true, Some(now - 3 * MINUTE), now);
+        work.count(true, Some(now - MINUTE), now, || subagent_at_work("a1"));
+        work.count(false, Some(now - 2 * MINUTE), now, || {
+            panic!("a subagent whose turn has closed is not described")
+        });
+        work.count(true, Some(now - 3 * MINUTE), now, || subagent_at_work("a3"));
 
-        assert_eq!(work.at_work, 2);
+        let subagents = work.at_work.iter();
+        let ids: Vec<&str> = subagents.map(|subagent| subagent.id.as_str()).collect();
+        assert_eq!(ids, ["a1", "a3"]);
         assert_eq!(work.last_write, Some(now - MINUTE));
     }
 
@@ -195,13 +257,28 @@ mod tests {
                 since: Some(at(5)),
                 ..agent_session("s", status)
             }
-            .with_subagent_work(working);
+            .with_subagent_work(working.clone());
 
             assert_eq!(session.status, expected, "{status:?}");
-            assert_eq!(session.subagents_at_work, 1, "{status:?}");
+            assert_eq!(session.subagents_at_work, working.at_work, "{status:?}");
             let since = (status == expected).then_some(at(5));
             assert_eq!(session.since, since, "{status:?} keeps its own start");
         }
+    }
+
+    #[test]
+    fn a_sessions_subagents_at_work_keep_the_order_of_their_ids_whatever_order_they_were_read_in() {
+        let now = at(100_000);
+        let mut work = SubagentWork::default();
+        for id in ["c3", "a1", "b2"] {
+            work.count(true, Some(now), now, || subagent_at_work(id));
+        }
+
+        let session = agent_session("s", AgentStatus::Idle).with_subagent_work(work);
+
+        let subagents = session.subagents_at_work.iter();
+        let ids: Vec<&str> = subagents.map(|subagent| subagent.id.as_str()).collect();
+        assert_eq!(ids, ["a1", "b2", "c3"]);
     }
 
     #[test]
@@ -216,10 +293,35 @@ mod tests {
             .clone()
             .with_subagent_work(one(false, Some(at(60_000)), now));
         assert_eq!(newer.status, AgentStatus::Idle);
-        assert_eq!(newer.subagents_at_work, 0);
+        assert_eq!(newer.subagents_at_work, []);
         assert_eq!(newer.last_activity, Some(at(60_000)));
 
         let older = session.with_subagent_work(one(false, Some(at(40_000)), now));
         assert_eq!(older.last_activity, Some(at(50_000)), "an older write");
+    }
+
+    #[test]
+    fn a_subagent_away_from_its_session_carries_the_sessions_name_and_host() {
+        let host = SessionHost::ClaudeApp {
+            app_session_id: Some("local_2b5d".to_string()),
+        };
+        let session = AgentSession {
+            label: Some("Sutra launch".to_string()),
+            host: Some(host.clone()),
+            ..agent_session("0b1d", AgentStatus::Idle)
+        };
+
+        let away = AwaySubagent::new(subagent_at_work("a1"), &session);
+
+        assert_eq!(away.subagent, subagent_at_work("a1"));
+        assert_eq!(
+            away.parent,
+            ParentSession {
+                harness: Harness::ClaudeCode,
+                session_id: "0b1d".to_string(),
+                label: Some("Sutra launch".to_string()),
+                host: Some(host),
+            }
+        );
     }
 }

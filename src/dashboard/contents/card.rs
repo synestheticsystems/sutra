@@ -49,7 +49,7 @@ pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &Card
         branch: identity.branch,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
-        agents: agents::lozenges(&project.agents, ctx.now),
+        agents: agents::lozenges(&project.agents, &project.subagents, ctx.now),
         units: project
             .environment
             .as_ref()

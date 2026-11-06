@@ -15,7 +15,7 @@ use super::clean::CargoEnv;
 use super::scan::Boundary;
 use super::{
     AgentSession, AgentStatus, ArtifactDir, ArtifactKind, DirUsage, FolderAccess, Harness,
-    Measurement, Project, ScanOptions, ScanStats, Snapshot,
+    Measurement, Project, ScanOptions, ScanStats, Snapshot, Subagent,
 };
 use crate::model::{EnvSources, Environment};
 
@@ -269,6 +269,7 @@ pub(crate) fn project_at(path: impl Into<PathBuf>) -> Project {
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),
+        subagents: Vec::new(),
         environment: None,
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
@@ -291,7 +292,20 @@ pub(crate) fn agent_session(id: &str, status: AgentStatus) -> AgentSession {
         since: None,
         last_activity: None,
         host: None,
-        subagents_at_work: 0,
+        subagents_at_work: Vec::new(),
+    }
+}
+
+/// A busy subagent `id` working in `/code/app`, its harness recording nothing more of it.
+pub(crate) fn subagent_at_work(id: &str) -> Subagent {
+    Subagent {
+        id: id.to_string(),
+        cwd: PathBuf::from("/code/app"),
+        name: None,
+        description: None,
+        status: AgentStatus::Busy,
+        since: None,
+        last_write: None,
     }
 }
 
@@ -318,6 +332,7 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
         sandboxed: false,
         projects,
         unplaced_agents: Vec::new(),
+        unplaced_subagents: Vec::new(),
         problems: Vec::new(),
         scan: ScanStats::default(),
         generated_at: UNIX_EPOCH,

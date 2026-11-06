@@ -541,8 +541,14 @@ fn a_subagent_set_to_work_in_an_idle_session_shows_within_a_second() {
     let status = |engine: &Engine| engine.state.snapshot().unplaced_agents[0].status;
     assert_eq!(status(&engine), AgentStatus::Idle);
 
-    let transcript =
-        agents::write_test_subagent_at_work(fixture.root(), "/elsewhere", "0b1d", "a1", now);
+    let transcript = agents::write_test_subagent_at_work(
+        fixture.root(),
+        "/elsewhere",
+        "0b1d",
+        "a1",
+        "/elsewhere",
+        now,
+    );
     let written = EventKind::Modify(ModifyKind::Data(DataChange::Content));
     engine.on_fs_event(Ok(Event::new(written).add_path(transcript)));
     // Past the burst's quiet, and before the tick that reads every agent anyway.

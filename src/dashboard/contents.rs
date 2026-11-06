@@ -151,7 +151,7 @@ pub enum ListRow {
         cards: Vec<Card>,
     },
     /// The agents working outside every project, under `heading`, each beside the folder it works
-    /// in, those waiting on the user first.
+    /// in: the sessions in the map's order, then the subagents at work away from theirs.
     Elsewhere {
         heading: String,
         agents: Vec<ElsewhereAgent>,
@@ -188,6 +188,7 @@ pub struct Card {
     /// Why the folder cannot be read, above the agents and units that sources outside it still
     /// show.
     pub unreadable: Option<Unreadable>,
+    /// Its sessions in the map's order, then the subagents at work in it for sessions elsewhere.
     pub agents: Vec<AgentLozenge>,
     pub units: Vec<UnitLozenge>,
     pub tray: Option<Tray>,
@@ -203,16 +204,21 @@ pub struct Chip {
     pub tooltip: String,
 }
 
-/// One agent session, as `(Claude) 4m` reads: the colour says what it is doing.
+/// One agent session, or a subagent at work away from its session, as `(Claude) 4m` reads: the
+/// colour says what it is doing.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct AgentLozenge {
     pub harness: String,
     pub look: AgentLook,
+    /// A subagent's: drawn as an outline in the look's colour, where a session's is filled.
+    pub outlined: bool,
     /// How long it has waited or been quiet, from its first whole minute.
     pub beside: Option<String>,
-    /// Its status in words, and the session's name or id.
+    /// Its status in words, and the session's name or id, or the subagent's names and the
+    /// session it works for.
     pub tooltip: String,
-    /// Opens the session in the app it runs in, on a click.
+    /// Opens the session in the app it runs in, on a click; a subagent's opens the session it
+    /// works for.
     pub link: Option<String>,
 }
 

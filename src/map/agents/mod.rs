@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(crate) use claude::is_subagent_transcript;
 #[cfg(test)]
 pub(crate) use claude::write_test_subagent_at_work;
-pub use session::{AgentSession, AgentStatus, Harness, SessionHost};
+pub use session::{
+    AgentSession, AgentStatus, AwaySubagent, Harness, ParentSession, SessionHost, Subagent,
+};
 
 use super::SourceProblem;
 use super::scan::Boundary;
