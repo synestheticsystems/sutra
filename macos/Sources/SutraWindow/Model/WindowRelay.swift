@@ -6,8 +6,11 @@ import SutraCore
 /// the contents as they are by the time it runs, and posts the core's banners.
 public final class WindowRelay: DashboardWindow {
     private struct State: Sendable {
-        /// Set once the model exists, which needs the core, which needs this relay first.
-        var model: DashboardModel?
+        /// Set once the model exists, which needs the core, which needs this relay first. Weak,
+        /// because the running core holds this relay and the model holds the core. A strong
+        /// reference would keep all three alive, so a core the app let go of without `stop()`
+        /// would never be released, and its threads would run on.
+        weak var model: DashboardModel?
         var refreshPending = false
     }
 
@@ -18,8 +21,9 @@ public final class WindowRelay: DashboardWindow {
         self.banners = banners
     }
 
-    /// Send the core's changes to `model` from now on. The model read the contents when it was
-    /// made, so nothing the core said before this is lost.
+    /// Send the core's changes to `model` from now on, for as long as the app keeps it: the relay
+    /// does not. The model read the contents when it was made, so nothing the core said before
+    /// this is lost.
     @MainActor
     public func deliver(to model: DashboardModel) {
         state.withLock { $0.model = model }
