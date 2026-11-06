@@ -31,7 +31,19 @@ pub(in crate::dashboard) fn toolbar(
         filter: arrangement.filter().map(str::to_string),
         clean,
         muted: notifier.global_mute,
+        mute_tooltip: if notifier.global_mute {
+            "Unmute all sounds"
+        } else {
+            "Mute all sounds"
+        }
+        .to_string(),
         notifications_off: notifier.global_notifications_off,
+        notifications_tooltip: if notifier.global_notifications_off {
+            "Enable notifications"
+        } else {
+            "Disable notifications"
+        }
+        .to_string(),
         // The store edition sees only the folder the user granted, and the user may change it.
         folder: map
             .filter(|_| sandboxed)

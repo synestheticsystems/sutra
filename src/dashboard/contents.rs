@@ -41,7 +41,12 @@ pub struct Toolbar {
     /// The clean of idle build folders.
     pub clean: CleanControl,
     pub muted: bool,
+    /// What the sound switch does: `Mute all sounds`, or `Unmute all sounds` while muted.
+    pub mute_tooltip: String,
     pub notifications_off: bool,
+    /// What the notification switch does: `Disable notifications`, or `Enable notifications`
+    /// while they are off.
+    pub notifications_tooltip: String,
     /// The store edition's folder button, with what it watches for its tooltip; `None` outside the
     /// App Sandbox, where Sutra reads the whole home folder, and until the first map arrives.
     pub folder: Option<String>,

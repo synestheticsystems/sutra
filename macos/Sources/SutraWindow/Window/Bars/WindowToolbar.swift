@@ -13,14 +13,13 @@ struct WindowToolbar: ToolbarContent {
             HelpToggle(dashboard: dashboard)
             IconButton(
                 symbol: dashboard.toolbar.muted ? "speaker.slash" : "speaker.wave.2",
-                tooltip: dashboard.toolbar.muted ? "Unmute all sounds" : "Mute all sounds"
+                tooltip: dashboard.toolbar.muteTooltip
             ) {
                 dashboard.perform(.toggleGlobalMute)
             }
             IconButton(
                 symbol: dashboard.toolbar.notificationsOff ? "bell.slash" : "bell",
-                tooltip: dashboard.toolbar.notificationsOff
-                    ? "Enable notifications" : "Disable notifications"
+                tooltip: dashboard.toolbar.notificationsTooltip
             ) {
                 dashboard.perform(.toggleGlobalNotifications)
             }
