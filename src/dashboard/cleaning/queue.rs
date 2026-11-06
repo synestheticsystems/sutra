@@ -123,9 +123,7 @@ impl Cleaning {
                 continue;
             }
             if !self.may_start(&waiting, map, now, home) {
-                for folder in waiting.prepared.plan.folders() {
-                    self.folders.remove(folder);
-                }
+                self.show_sizes_again(waiting.prepared.plan.folders());
                 continue;
             }
             self.begin(waiting, home);
@@ -181,9 +179,7 @@ impl Cleaning {
             )
         };
         if let Err(err) = deleting {
-            for folder in &folders {
-                self.folders.remove(folder);
-            }
+            self.show_sizes_again(folders.iter().map(PathBuf::as_path));
             let title = words::stopped(&clicked, None, 0, home).0;
             self.stopped.push((title, err.to_string()));
             return;
@@ -194,6 +190,25 @@ impl Cleaning {
             by,
             progress,
         });
+    }
+
+    /// Show `folders`' sizes again on their cards, all but those a clean still waiting or running
+    /// will delete: two cards can ask for a folder two projects build in, and the clean that goes
+    /// on keeps its folder showing as being cleaned.
+    fn show_sizes_again<'a>(&mut self, folders: impl IntoIterator<Item = &'a Path>) {
+        for folder in folders {
+            let waits = self
+                .waiting
+                .iter()
+                .any(|waiting| waiting.prepared.plan.folders().contains(&folder));
+            let runs = self
+                .running
+                .iter()
+                .any(|running| running.folders.iter().any(|its| its == folder));
+            if !waits && !runs {
+                self.folders.remove(folder);
+            }
+        }
     }
 
     /// Everything queued has ended: one alert for all that stopped.
@@ -247,9 +262,7 @@ impl Cleaning {
             CleanOutcome::Failed(err) => Some(err),
             CleanOutcome::Lost => None,
         };
-        for folder in &running.folders {
-            self.folders.remove(folder);
-        }
+        self.show_sizes_again(running.folders.iter().map(PathBuf::as_path));
         let stopped = words::stopped(
             target,
             failure.as_ref(),
@@ -476,6 +489,28 @@ mod tests {
         assert_eq!(cleaning.running[0].clicked, next);
         assert!(!cleaning.folders.contains_key(&target));
         assert!(target.exists());
+    }
+
+    #[test]
+    fn a_folder_another_clean_still_deletes_goes_on_showing_as_being_cleaned_when_one_is_dropped() {
+        let fixture = crate::map::test_support::TempDir::new("cleaning-shared-dropped");
+        let shared = fixture.dir("shared/target");
+        let map = snapshot_of(Vec::new());
+        let mut cleaning = cleaning();
+        let gone = By::UserForIdle {
+            project: PathBuf::from("/code/gone"),
+        };
+        cleaning.queue(shared.clone(), prepared_at(&shared), gone);
+        // The same folder again, as a second card would ask for one two projects build in.
+        cleaning.queue(shared.clone(), prepared_at(&shared), By::User);
+
+        cleaning.start_next(Some(&map), at(100), fixture.root());
+
+        assert_eq!(cleaning.running.len(), 1, "the second clean goes");
+        assert!(
+            cleaning.folders.contains_key(&shared),
+            "its card goes on showing the clean that goes"
+        );
     }
 
     #[test]
