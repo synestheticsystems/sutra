@@ -3,9 +3,9 @@ import SwiftUI
 
 /// The card's tray along its bottom edge, all on one line: at its start the folder's disk use, as
 /// `32 GB  target/  node_modules/` reads, with an alert sign first when the folder could not be
-/// sized; at its far end the subagents at work in the folder. While a clean is at work, the seam
-/// bar along the tray's top edge fills as space comes back. While the pointer is over the card, the
-/// folder's full path shows in the room between.
+/// sized; at its far end a badge for each subagent at work in the folder. While a clean is at
+/// work, the seam bar along the tray's top edge fills as space comes back. While the pointer is
+/// over the card, the folder's full path shows in the room between.
 struct TrayView: View {
     let tray: Tray
     /// The folder in full, with `~` for the home folder.
@@ -19,7 +19,7 @@ struct TrayView: View {
                 FillBar(progress: progress, fill: Color.accentColor, thickness: 3)
                     .accessibilityHidden(true)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if let disk = tray.disk {
                     DiskUseLine(disk: disk)
                         .layoutPriority(1)
