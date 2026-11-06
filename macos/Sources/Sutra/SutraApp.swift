@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let relay = WindowRelay(banners: NotificationBanners())
         core = Dashboard.start(window: relay)
-        dashboard = DashboardModel(core: core)
+        dashboard = DashboardModel(core: core, native: Native())
         relay.deliver(to: dashboard)
         super.init()
     }

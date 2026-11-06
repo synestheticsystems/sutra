@@ -13,8 +13,8 @@ struct MenuEntries: View {
     @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
 
     var body: some View {
-        if let folder, let editor = Native.editor(chosen: chosenEditor) {
-            Button("Open in \(editor.name)") { Native.open(folder, in: editor) }
+        if let folder, let editor = dashboard.native.editor(chosen: chosenEditor) {
+            Button("Open in \(editor.name)") { dashboard.native.open(folder, in: editor) }
         }
         ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
             switch entry {

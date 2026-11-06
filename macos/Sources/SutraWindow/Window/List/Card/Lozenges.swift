@@ -70,15 +70,8 @@ private struct Lozenge<Label: View>: View {
 
 extension View {
     /// A click opens `link` when there is one, and the pointer shows that it will.
-    @ViewBuilder
     func opensLink(_ link: String?) -> some View {
-        if let link {
-            Button { Native.open(link: link) } label: { self }
-                .buttonStyle(.plain)
-                .linkPointer()
-        } else {
-            self
-        }
+        modifier(OpensLink(link: link))
     }
 
     /// The pointing hand over what opens something, on the macOS versions that let SwiftUI set
@@ -89,6 +82,24 @@ extension View {
             pointerStyle(.link)
         } else {
             self
+        }
+    }
+}
+
+/// What `opensLink` makes of a view: a modifier, as only a view or a modifier reads the services
+/// the window reaches from the environment.
+private struct OpensLink: ViewModifier {
+    let link: String?
+
+    @Environment(\.native) private var native
+
+    func body(content: Content) -> some View {
+        if let link {
+            Button { native.open(link: link) } label: { content }
+                .buttonStyle(.plain)
+                .linkPointer()
+        } else {
+            content
         }
     }
 }

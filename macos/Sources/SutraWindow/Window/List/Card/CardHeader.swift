@@ -62,15 +62,16 @@ struct CardHeader: View {
 private struct OpenButtons: View {
     let path: String
 
+    @Environment(\.native) private var native
     @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
 
     var body: some View {
         HStack(spacing: 4) {
-            if let editor = Native.editor(chosen: chosenEditor) {
-                OpenButton(app: editor) { Native.open(path, in: editor) }
+            if let editor = native.editor(chosen: chosenEditor) {
+                OpenButton(app: editor) { native.open(path, in: editor) }
             }
-            if let finder = Native.finder {
-                OpenButton(app: finder) { Native.openInFinder(path) }
+            if let finder = native.finder {
+                OpenButton(app: finder) { native.openInFinder(path) }
             }
         }
     }

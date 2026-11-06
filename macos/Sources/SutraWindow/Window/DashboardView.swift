@@ -54,6 +54,13 @@ public struct DashboardView: View {
         // Nothing moves while macOS is set to reduce motion, while nobody can see the window, or
         // once the map no longer updates, when a pulse would claim news Sutra no longer has.
         .environment(\.motion, reduceMotion || !seen || dashboard.stopped != nil ? .steady : .live)
+        // The views open, copy and reveal through the services the model holds, links in text
+        // too.
+        .environment(\.native, dashboard.native)
+        .environment(\.openURL, OpenURLAction { url in
+            dashboard.native.open(link: url.absoluteString)
+            return .handled
+        })
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didChangeOcclusionStateNotification
         )) { _ in

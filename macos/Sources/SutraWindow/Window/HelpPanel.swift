@@ -62,6 +62,7 @@ struct HelpPanel: View {
 /// The prompt to paste into a coding agent, selectable so the user can take part of it, with a
 /// Copy button that answers Copied for a moment.
 private struct AgentPrompt: View {
+    @Environment(\.native) private var native
     @State private var copied = false
 
     /// The URL pins to `main` rather than a release tag because the guide is a living reference:
@@ -81,7 +82,7 @@ private struct AgentPrompt: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button {
-                Native.copy(Self.prompt)
+                native.copy(Self.prompt)
                 copied = true
             } label: {
                 Label {

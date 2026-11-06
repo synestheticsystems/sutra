@@ -34,11 +34,14 @@ public final class DashboardModel {
     @ObservationIgnored var settingsInFront = false
 
     @ObservationIgnored private let core: any DashboardProtocol
+    /// The macOS services the window reaches itself, which its views reach too.
+    @ObservationIgnored let native: any NativeServices
     @ObservationIgnored private var cards = CardModels()
 
     /// Reads what the window shows from `core` at once, and again on each `refresh`.
-    public init(core: any DashboardProtocol) {
+    public init(core: any DashboardProtocol, native: any NativeServices) {
         self.core = core
+        self.native = native
         let contents = core.contents()
         var cards = CardModels()
         title = contents.title
@@ -126,13 +129,13 @@ public final class DashboardModel {
         return false
     }
 
-    /// Carry out a menu line: the platform services are the window's, the rest the core's.
+    /// Carry out a menu line: the window's own with its native services, the rest with the core.
     func choose(_ action: MenuAction) {
         switch action {
         case .revealInFinder(let path):
-            Native.revealInFinder(path)
+            native.revealInFinder(path)
         case .copyPath(let path):
-            Native.copy(path)
+            native.copy(path)
         case .chooseFolder:
             chooseFolder()
         case .dashboard(let action):
@@ -142,7 +145,7 @@ public final class DashboardModel {
 
     /// The store edition's open panel; the folder chosen goes to the core.
     func chooseFolder() {
-        if let folder = Native.chooseFolder() {
+        if let folder = native.chooseFolder() {
             perform(.folderGranted(folder: folder))
         }
     }

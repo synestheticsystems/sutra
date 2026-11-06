@@ -12,7 +12,7 @@ public struct SettingsView: View {
 
     @Environment(\.controlActiveState) private var activeState
     @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
-    @State private var opensAtLogin = Native.opensAtLogin
+    @State private var opensAtLogin: Bool
     /// Flipped with each choice sent, which draws the controls again from what the core holds. A
     /// pop-up or a switch shows the user's choice as soon as it is made, and would go on showing it
     /// while the core holds another, as it does while it asks first.
@@ -20,6 +20,7 @@ public struct SettingsView: View {
 
     public init(dashboard: DashboardModel) {
         self.dashboard = dashboard
+        _opensAtLogin = State(initialValue: dashboard.native.opensAtLogin)
     }
 
     public var body: some View {
@@ -27,14 +28,14 @@ public struct SettingsView: View {
         Form {
             Toggle("Open at login", isOn: Binding(
                 get: { opensAtLogin },
-                set: { opensAtLogin = Native.setOpensAtLogin($0) }
+                set: { opensAtLogin = dashboard.native.setOpensAtLogin($0) }
             ))
-            if !Native.editors.isEmpty {
+            if !dashboard.native.editors.isEmpty {
                 Picker("Open folders in", selection: Binding(
-                    get: { Native.editor(chosen: chosenEditor)?.bundleIdentifier ?? "" },
+                    get: { dashboard.native.editor(chosen: chosenEditor)?.bundleIdentifier ?? "" },
                     set: { chosenEditor = $0 }
                 )) {
-                    ForEach(Native.editors, id: \.bundleIdentifier) { editor in
+                    ForEach(dashboard.native.editors, id: \.bundleIdentifier) { editor in
                         Text(editor.name).tag(editor.bundleIdentifier)
                     }
                 }
@@ -64,7 +65,7 @@ public struct SettingsView: View {
         .onChange(of: activeState, initial: true) {
             dashboard.settingsInFront = activeState == .key
             // The user may have changed it in System Settings meanwhile.
-            opensAtLogin = Native.opensAtLogin
+            opensAtLogin = dashboard.native.opensAtLogin
         }
         .onDisappear { dashboard.settingsClosed() }
     }
