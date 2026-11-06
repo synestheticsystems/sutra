@@ -431,15 +431,26 @@ pub(super) mod tests {
     /// A clean of `folder`. Starting it runs a real delete, so a test that starts it has `folder`
     /// in a fixture of its own.
     pub(in crate::dashboard) fn prepared_at(folder: &Path) -> Prepared {
+        prepared_of(&[folder])
+    }
+
+    /// A clean of `folders`, as a target-dir and a build-dir set elsewhere make one. Starting it
+    /// runs a real delete, so a test that starts it has each folder in a fixture of its own.
+    pub(in crate::dashboard) fn prepared_of(folders: &[&Path]) -> Prepared {
+        let folders = folders
+            .iter()
+            .map(|folder| PlannedFolder {
+                path: folder.to_path_buf(),
+                origin: Origin::Default,
+            })
+            .collect::<Vec<_>>();
+        let sizes = vec![None; folders.len()];
         Prepared::for_test(
             Plan::CargoClean(CleanPlan {
                 workspace: PathBuf::from("/code/app"),
-                folders: vec![PlannedFolder {
-                    path: folder.to_path_buf(),
-                    origin: Origin::Default,
-                }],
+                folders,
             }),
-            vec![None],
+            sizes,
             clean::Sharing::default(),
         )
     }

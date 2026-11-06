@@ -1,6 +1,7 @@
 //! Cleaning without being asked, once the user chose how much free space to keep: when less than that
 //! is free, the build folder quiet the longest is cleaned, then free space is read again, so no more
-//! goes than it takes. Nothing with an agent or a running environment is touched.
+//! goes than it takes. Nothing with an agent or a running environment is touched, and nothing on
+//! another volume, where emptying a folder gives none of the room back.
 
 use std::collections::HashMap;
 use std::fs;
@@ -100,6 +101,19 @@ pub(in crate::dashboard) fn free_bytes(path: &Path) -> io::Result<u64> {
 /// The volume holding `path`.
 fn volume_of(path: &Path) -> io::Result<u64> {
     Ok(fs::metadata(path)?.dev())
+}
+
+/// Whether every folder `prepared` deletes is on the volume holding `path`. A folder that does not
+/// answer counts as elsewhere.
+pub(super) fn is_all_on_volume_of(prepared: &Prepared, path: &Path) -> bool {
+    let Ok(volume) = volume_of(path) else {
+        return false;
+    };
+    prepared
+        .plan
+        .folders()
+        .into_iter()
+        .all(|folder| volume_of(folder).is_ok_and(|its_volume| its_volume == volume))
 }
 
 /// The folder to clean next: none while at least `floor` is `free`, else the one quiet the longest

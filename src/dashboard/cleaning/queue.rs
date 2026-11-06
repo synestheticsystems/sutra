@@ -21,8 +21,9 @@ pub(super) enum By {
     /// The user said yes to every idle folder at once, so this one goes only if the project at
     /// `project` is still idle when its turn comes. Its end is told as `User`.
     UserForIdle { project: PathBuf },
-    /// Sutra chose it to keep free space, so it goes only if room is still short and the project at
-    /// `project` still idle when its turn comes. Nobody is waiting, so a banner tells of its end.
+    /// Sutra chose it to keep free space, so it goes only if room is still short on the volume
+    /// holding the home folder, every folder it deletes is on that volume, and the project at
+    /// `project` is still idle when its turn comes. Nobody is waiting, so a banner tells of its end.
     Sutra { project: PathBuf },
 }
 
@@ -88,11 +89,14 @@ impl Cleaning {
                 if !self.keeping_free.is_short_of_room(home) {
                     return false;
                 }
-                let idle = still_idle(project, auto::QUIET_AT_LEAST);
-                if !idle {
+                // The plan can reach past the folder picked, to a build-dir set on another disk,
+                // and emptying that gives none of the room back.
+                let may_go = still_idle(project, auto::QUIET_AT_LEAST)
+                    && auto::is_all_on_volume_of(&waiting.prepared, home);
+                if !may_go {
                     self.keeping_free.pass_over(waiting.clicked.clone(), now);
                 }
-                idle
+                may_go
             }
         }
     }
@@ -267,7 +271,8 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::CleanState;
     use crate::dashboard::cleaning::tests::{
-        cleaning, deleting_two, next_report, prepared_at, prepared_clean, reporting, target,
+        cleaning, deleting_two, next_report, prepared_at, prepared_clean, prepared_of, reporting,
+        target,
     };
     use crate::map::Project;
     use crate::map::clean::{CleanError, Cleaned, Freed};
@@ -464,6 +469,39 @@ mod tests {
         assert_eq!(cleaning.running[0].clicked, next);
         assert!(!cleaning.folders.contains_key(&target));
         assert!(target.exists());
+    }
+
+    #[test]
+    fn a_clean_sutra_chose_does_not_go_when_a_folder_it_deletes_is_on_another_volume() {
+        let fixture = crate::map::test_support::TempDir::new("cleaning-other-volume");
+        let target = fixture.dir("app/target");
+        let project = fixture.path("app");
+        let map = snapshot_of(vec![project_at(project.clone())]);
+        let mut cleaning = cleaning();
+        // No volume holds this much, so room is always short.
+        cleaning.set_keep_free_floor(Some(u64::MAX));
+        let may_start = |cleaning: &mut Cleaning, build_dir: &Path| {
+            let waiting = Waiting {
+                clicked: target.clone(),
+                prepared: prepared_of(&[&target, build_dir]),
+                by: By::Sutra {
+                    project: project.clone(),
+                },
+            };
+            cleaning.may_start(&waiting, Some(&map), at(1_000), fixture.root())
+        };
+
+        assert!(
+            may_start(&mut cleaning, &fixture.dir("cache/app")),
+            "a build-dir on the same volume goes with it"
+        );
+        // `/dev` is a volume of its own, standing in for a build-dir set on an external disk. Only
+        // whether the clean may start is asked, so nothing is deleted.
+        assert!(
+            !may_start(&mut cleaning, Path::new("/dev")),
+            "emptying it frees nothing on the volume short of room"
+        );
+        assert!(cleaning.keeping_free_passed_over(&target));
     }
 
     #[test]
