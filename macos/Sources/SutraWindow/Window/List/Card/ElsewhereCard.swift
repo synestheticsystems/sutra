@@ -2,8 +2,8 @@ import SutraCore
 import SwiftUI
 
 /// The agents working outside every project, on a card of their own under its heading, a line for
-/// each: a session's lozenge, then the folder it works in, with the subagents at work in that same
-/// folder at the line's end, as on a card's tray; or the icons of subagents working in a folder no
+/// each: a session's robot, then the folder it works in, with the subagents at work in that same
+/// folder at the line's end, as on a card's tray; or the robots of subagents working in a folder no
 /// session there works in, then that folder. A folder is cut in the middle when long, and whole in
 /// its tooltip. The card throbs as a project's does while one of them waits on the user.
 struct ElsewhereCard: View {
@@ -17,20 +17,20 @@ struct ElsewhereCard: View {
                 .font(.title3.weight(.semibold))
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    // The folder gives way to the lozenge and the icons, which it never cuts short.
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // The folder gives way to the robots, which it never cuts short.
+                    HStack(spacing: 8) {
                         switch line {
-                        case .session(let lozenge, let folder, let subagents):
-                            AgentLozengeView(lozenge: lozenge)
+                        case .session(let badge, let folder, let subagents):
+                            AgentBadgeView(badge: badge, moves: true)
                                 .fixedSize()
                             Folder(path: folder)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             if !subagents.isEmpty {
-                                SubagentIcons(icons: subagents)
+                                AgentBadges(badges: subagents, moves: false)
                                     .fixedSize()
                             }
                         case .subagents(let subagents, let folder):
-                            SubagentIcons(icons: subagents)
+                            AgentBadges(badges: subagents, moves: false)
                                 .fixedSize()
                             Folder(path: folder)
                         }

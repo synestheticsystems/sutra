@@ -192,13 +192,11 @@ pub struct Card {
     pub branch: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
-    /// Why the folder cannot be read, above the agents and units that sources outside it still
-    /// show.
+    /// Why the folder cannot be read, above the units that sources outside it still show.
     pub unreadable: Option<Unreadable>,
-    /// Its sessions, in the map's order.
-    pub agents: Vec<AgentLozenge>,
     pub units: Vec<UnitLozenge>,
-    /// The card's tray along its bottom: the folder's disk use, then the subagents at work in it.
+    /// The card's tray along its bottom: the folder's disk use, then the agents in it, sessions
+    /// before subagents.
     pub tray: Option<Tray>,
     /// An agent in it waits on the user, so the card throbs.
     pub waiting: bool,
@@ -212,58 +210,52 @@ pub struct Chip {
     pub tooltip: String,
 }
 
-/// One agent session, as `(Claude) 4m` reads: the colour says what it is doing.
+/// One agent, as one of the robots on its card's tray: the robot says which AI it is, and the light
+/// of its face what it is doing. A session's face moves with its look's rhythm, a subagent's holds
+/// still, and where each stands, before the tray's divider or after it, says which it is.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct AgentLozenge {
-    pub harness: String,
+pub struct AgentBadge {
+    pub robot: Robot,
     pub look: AgentLook,
-    /// How long it has waited or been quiet, from its first whole minute.
-    pub beside: Option<String>,
-    /// Its status in words, then on lines of their own the session's name or id and the model it
-    /// works with, when its harness records it, as `claude-opus-5-5` reads.
+    /// What the robot says only in its light, in words, then who the agent is. A session's: its
+    /// status, with how long it has waited and how many of its subagents are at work; its name or
+    /// id; its harness and the model it works with, as `Claude · claude-opus-5-5` reads. A
+    /// subagent's: its status; its name and task, when its harness records them; what kind of
+    /// agent it is, the model it works with and the session it works for, as `general-purpose ·
+    /// claude-opus-5-5 · for Sutra launch` reads.
     pub tooltip: String,
-    /// Opens the session in the app it runs in, on a click.
+    /// Opens the session in the app it runs in, on a click: for a subagent, the session it works
+    /// for.
     pub link: Option<String>,
 }
 
-/// A subagent at work, as a small sign of its harness in its look's colour. Where it stands says it
-/// is a subagent, and its tooltip who it is.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct SubagentIcon {
-    pub harness: AgentHarness,
-    pub look: AgentLook,
-    /// Its status in words, which the icon says only in its colour; then on a line of their own its
-    /// name and task, when its harness records them, as `dashboard-fixes · Fix dashboard review
-    /// findings` reads; then what kind of agent it is and the model it works with, when recorded,
-    /// and the session it works for, as `general-purpose · claude-opus-5-5 · for Sutra launch`
-    /// reads.
-    pub tooltip: String,
-    /// Opens the session it works for in the app that session runs in, on a click.
-    pub link: Option<String>,
-}
-
-/// The harness an agent runs in, which its icon shows by a symbol.
+/// Which AI an agent is, as its robot shows it: by the model its transcript names, or, while none
+/// is known, by the harness it runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum AgentHarness {
-    ClaudeCode,
+pub enum Robot {
+    Claude,
+    /// An OpenAI model, as Codex runs.
     Codex,
+    Gemini,
+    /// A model with no robot of its own.
+    Plain,
 }
 
 /// One line of the agents working outside every project, each with the folder it is about, with
 /// `~` for the home folder.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum ElsewhereLine {
-    /// A session beside the folder it works in, as `(Claude) ~/scratch` reads, and at the line's
-    /// end, as on a card's tray, the subagents at work in that same folder.
+    /// A session's robot beside the folder it works in, and at the line's end, as on a card's
+    /// tray, the subagents at work in that same folder.
     Session {
-        lozenge: AgentLozenge,
+        badge: AgentBadge,
         folder: String,
-        subagents: Vec<SubagentIcon>,
+        subagents: Vec<AgentBadge>,
     },
-    /// The subagents at work in a folder that no session on the row works in: their icons, then
+    /// The subagents at work in a folder that no session on the row works in: their robots, then
     /// the folder.
     Subagents {
-        subagents: Vec<SubagentIcon>,
+        subagents: Vec<AgentBadge>,
         folder: String,
     },
 }
@@ -286,11 +278,11 @@ pub enum UnreadableLook {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentLook {
-    /// Waiting on the user: amber, a session's lozenge throbbing with its card.
+    /// Waiting on the user: an amber face, a session's throbbing with its card.
     Waiting,
-    /// At work: green, a session's lozenge pulsing slowly.
+    /// At work: a green face, a session's pulsing slowly.
     Working,
-    /// Quiet mid-turn, idle, or with no status: grey and still.
+    /// Quiet mid-turn, idle, or with no status: the face unlit and the robot dimmed.
     Still,
 }
 
@@ -322,16 +314,18 @@ pub enum UnitLook {
     Still,
 }
 
-/// The card's tray, all on one line: the folder's disk use at its start, and the subagents at work
-/// in the folder at its end.
+/// The card's tray, all on one line: the folder's disk use at its start, and at its end the agents
+/// in the folder, its sessions, a divider, and the subagents at work in it.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Tray {
     /// The folder's disk use, at the tray's start: `None` for a folder that cannot be read, which
     /// the card says why of, and while nothing about its size is known yet.
     pub disk: Option<DiskUse>,
+    /// The sessions in the folder, in the map's order, so none moves when its status changes.
+    pub sessions: Vec<AgentBadge>,
     /// The subagents at work in the folder, whichever session they work for: by session, each
-    /// session's in its own order, so none moves when its status changes.
-    pub subagents: Vec<SubagentIcon>,
+    /// session's in its own order.
+    pub subagents: Vec<AgentBadge>,
 }
 
 /// The folder's disk use, as `32 GB  target/  node_modules/` reads.

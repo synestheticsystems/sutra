@@ -45,20 +45,22 @@ enum Still {
 }
 
 extension AgentLook {
-    var ink: Color {
+    /// The light of a robot's face while it holds still: green at work, amber waiting, unlit at
+    /// rest. Bright on the black visor, so it reads however small the robot.
+    var faceLight: Color {
         switch self {
-        case .waiting: Hue.amber.ink
-        case .working: Hue.green.ink
-        case .still: Still.ink
+        case .waiting: Color(nsColor: Hue.amber.base)
+        case .working: Color(nsColor: Hue.green.base)
+        case .still: Color.white.opacity(0.55)
         }
     }
 
-    /// How the capsule's fill swells: a waiting agent's with its card's throb, a working one's
-    /// with its slow pulse. `nil` for an agent at rest, whose fill is `Still.fill`.
-    var swell: Swell? {
+    /// How a session's face swells: a waiting one's with its card's throb, a working one's with
+    /// its slow pulse. `nil` at rest, when the face is unlit.
+    var faceSwell: Swell? {
         switch self {
-        case .waiting: Swell(rhythm: .throb, color: Hue.amber.base, rest: 0.18, peak: 0.38)
-        case .working: Swell(rhythm: .pulse, color: Hue.green.base, rest: 0.12, peak: 0.26)
+        case .waiting: Swell(rhythm: .throb, color: Hue.amber.base, rest: 0.45, peak: 1)
+        case .working: Swell(rhythm: .pulse, color: Hue.green.base, rest: 0.45, peak: 1)
         case .still: nil
         }
     }

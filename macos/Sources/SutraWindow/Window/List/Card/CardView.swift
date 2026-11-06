@@ -2,8 +2,8 @@ import SutraCore
 import SwiftUI
 
 /// One project's card: its identity, then what is happening in it (why its folder cannot be read,
-/// its agents, its units), and its tray along the bottom, with its disk use and the subagents at
-/// work in it. It throbs amber while an agent in it waits on the user. A right click offers what
+/// its units), and its tray along the bottom, with its disk use and a robot for each agent in it.
+/// It throbs amber while an agent in it waits on the user. A right click offers what
 /// can be done to the project.
 public struct CardView: View {
     private let model: CardModel
@@ -46,22 +46,16 @@ public struct CardView: View {
 }
 
 /// What is happening in the project, a line each: why its folder cannot be read, when it cannot,
-/// above the agents and units that sources outside the folder still show; its agents; its units.
+/// above the units that sources outside the folder still show; its units. Its agents stand on its
+/// tray.
 private struct Happening: View {
     let card: Card
 
     var body: some View {
-        if card.unreadable != nil || !card.agents.isEmpty || !card.units.isEmpty {
+        if card.unreadable != nil || !card.units.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 if let unreadable = card.unreadable {
                     UnreadableLine(unreadable: unreadable)
-                }
-                if !card.agents.isEmpty {
-                    WrappingLine(spacing: 6) {
-                        ForEach(Array(card.agents.enumerated()), id: \.offset) { _, agent in
-                            AgentLozengeView(lozenge: agent)
-                        }
-                    }
                 }
                 if !card.units.isEmpty {
                     WrappingLine(spacing: 6) {

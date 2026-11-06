@@ -1,36 +1,6 @@
 import SutraCore
 import SwiftUI
 
-/// One agent session, as `(Claude) 4m` reads: the capsule's colour says what it is doing, and a
-/// waiting or working one moves with its rhythm. Its tooltip says the rest in words; a click opens
-/// the session where it runs.
-struct AgentLozengeView: View {
-    let lozenge: AgentLozenge
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Lozenge(ink: lozenge.look.ink) {
-                Text(lozenge.harness)
-            } fill: {
-                if let swell = lozenge.look.swell {
-                    SwellLayer(swell: swell, shape: .capsule)
-                } else {
-                    Capsule().fill(Still.fill)
-                }
-            }
-            if let beside = lozenge.beside {
-                Text(beside)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .opensLink(lozenge.link)
-        .accessibilityValue(lozenge.tooltip)
-        .hoverTip(lozenge.tooltip)
-    }
-}
-
 /// One dev-runner unit, as `(web :3000)` reads: the capsule's colour says its state. Beside it
 /// stands what a unit under way or in trouble says of itself, and a sign for each announcement the
 /// user switched off. A click opens the unit in the browser.
@@ -39,15 +9,13 @@ struct UnitLozengeView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Lozenge(ink: lozenge.look.ink) {
+            Lozenge(ink: lozenge.look.ink, fill: lozenge.look.fill) {
                 HStack(spacing: 3) {
                     Text(lozenge.name)
                     if let port = lozenge.port {
                         Text(port).monospaced()
                     }
                 }
-            } fill: {
-                Capsule().fill(lozenge.look.fill)
             }
             if let beside = lozenge.beside {
                 Text(beside)
@@ -83,11 +51,11 @@ private struct SwitchedOff: View {
     }
 }
 
-/// A lozenge's shape: `label` on a capsule painted by `fill`.
-private struct Lozenge<Label: View, Fill: View>: View {
+/// A lozenge's shape: `label` in `ink` on a capsule of `fill`.
+private struct Lozenge<Label: View>: View {
     let ink: Color
+    let fill: Color
     @ViewBuilder let label: () -> Label
-    @ViewBuilder let fill: () -> Fill
 
     var body: some View {
         label()
@@ -96,7 +64,7 @@ private struct Lozenge<Label: View, Fill: View>: View {
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .background(content: fill)
+            .background(Capsule().fill(fill))
     }
 }
 

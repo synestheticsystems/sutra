@@ -12,7 +12,7 @@ use crate::map::{AgentSession, SubagentWithParent};
 
 /// The lines: the sessions' in the map's order, each with the subagents at work in that same
 /// folder, then a line for each folder the other subagents work in, in the order of the first
-/// subagent there. The map orders both whatever their status, so no line or icon moves when a
+/// subagent there. The map orders both whatever their status, so no line or robot moves when a
 /// status changes.
 pub(super) fn lines(elsewhere: &Elsewhere, cards: &CardContext) -> Vec<ElsewhereLine> {
     let sessions = elsewhere.sessions.iter().map(|&session| Line {
@@ -47,17 +47,14 @@ impl Line<'_> {
     /// The line as the window draws it.
     fn shown(self, cards: &CardContext) -> ElsewhereLine {
         let folder = format::tilde(self.folder, cards.home);
-        let icons = subagents::icons(self.subagents, cards.now);
+        let subagents = subagents::badges(self.subagents, cards.now);
         match self.session {
             Some(session) => ElsewhereLine::Session {
-                lozenge: agents::lozenge(session, cards.now),
+                badge: agents::badge(session, cards.now),
                 folder,
-                subagents: icons,
+                subagents,
             },
-            None => ElsewhereLine::Subagents {
-                subagents: icons,
-                folder,
-            },
+            None => ElsewhereLine::Subagents { subagents, folder },
         }
     }
 }
@@ -67,7 +64,7 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::{agent, now, subagent_in};
-    use crate::dashboard::{AgentLook, SubagentIcon};
+    use crate::dashboard::{AgentBadge, AgentLook};
     use crate::map::AgentStatus;
     use crate::notifications::Notifier;
 
@@ -95,23 +92,23 @@ mod tests {
             sessions: sessions.iter().collect(),
             subagents: subagents.iter().collect(),
         };
-        let names = |icons: Vec<SubagentIcon>| {
-            let name = |icon: &SubagentIcon| {
-                let names = icon.tooltip.lines().nth(1).unwrap_or_default();
+        let names = |badges: Vec<AgentBadge>| {
+            let name = |badge: &AgentBadge| {
+                let names = badge.tooltip.lines().nth(1).unwrap_or_default();
                 names
                     .split(" \u{b7} ")
                     .next()
                     .unwrap_or_default()
                     .to_string()
             };
-            icons.iter().map(name).collect()
+            badges.iter().map(name).collect()
         };
         let shown = |line| match line {
             ElsewhereLine::Session {
-                lozenge,
+                badge,
                 folder,
                 subagents,
-            } => (Some(lozenge.look), folder, names(subagents)),
+            } => (Some(badge.look), folder, names(subagents)),
             ElsewhereLine::Subagents { subagents, folder } => (None, folder, names(subagents)),
         };
         lines(&elsewhere, &cards).into_iter().map(shown).collect()

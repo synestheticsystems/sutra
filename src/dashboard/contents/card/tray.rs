@@ -1,5 +1,5 @@
-//! A card's tray, all on one line: the folder's disk use at its start, and at its end the subagents
-//! at work in the folder. The disk use, as `32 GB  target/  node_modules/` reads, is the folder's
+//! A card's tray, all on one line: the folder's disk use at its start, and at its end the agents in
+//! the folder, sessions before subagents. The disk use, as `32 GB  target/  node_modules/` reads, is the folder's
 //! whole size, then the build folders large enough to matter, largest first. Each folder's own size
 //! is in its tooltip, and the ones too small to name are in the total's. Cleaning is in the card's
 //! right-click menu, and a bar along the top of the tray shows how far a clean has come.
@@ -8,20 +8,27 @@ use std::cmp::Reverse;
 use std::path::Path;
 
 use crate::dashboard::cleaning::CleanState;
-use crate::dashboard::{DiskUse, SubagentIcon, Tray, TrayFolder, format};
+use crate::dashboard::{AgentBadge, DiskUse, Tray, TrayFolder, format};
 use crate::map::{ArtifactDir, FolderAccess, FolderSize, Measurement, Project};
 
-/// The tray of `project`, with `subagents` at its end; `None` while it would hold nothing: no
-/// subagent at work, and nothing about the folder's size known yet, which the bar under the list
-/// shows is still being worked out. `clean_state` says what a clean means for each build folder.
+/// The tray of `project`, with its `sessions` and `subagents` at its end; `None` while it would
+/// hold nothing: no agent, and nothing about the folder's size known yet, which the bar under the
+/// list shows is still being worked out. `clean_state` says what a clean means for each build
+/// folder.
 pub(super) fn tray(
     project: &Project,
-    subagents: Vec<SubagentIcon>,
+    sessions: Vec<AgentBadge>,
+    subagents: Vec<AgentBadge>,
     clean_state: impl Fn(&ArtifactDir) -> Option<CleanState>,
     home: &Path,
 ) -> Option<Tray> {
     let disk = disk_use(project, clean_state, home);
-    (disk.is_some() || !subagents.is_empty()).then_some(Tray { disk, subagents })
+    let holds_any = disk.is_some() || !sessions.is_empty() || !subagents.is_empty();
+    holds_any.then_some(Tray {
+        disk,
+        sessions,
+        subagents,
+    })
 }
 
 /// The folder's disk use, `None` while nothing about its size is known yet.
@@ -243,7 +250,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::dashboard::{AgentHarness, AgentLook};
+    use crate::dashboard::{AgentLook, Robot};
     use crate::map::DirUsage;
     use crate::map::test_support::{cargo_target, measured, node_modules, project_at, usage};
 
@@ -305,27 +312,51 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_that_cannot_be_read_or_has_nothing_sized_yet_has_no_tray_while_no_subagent_works() {
+    fn a_folder_that_cannot_be_read_or_has_nothing_sized_yet_has_no_tray_while_no_agent_is_in_it() {
         for project in unsized_and_unreadable() {
-            assert_eq!(tray(&project, Vec::new(), |_| None, Path::new(HOME)), None);
+            let tray = tray(&project, Vec::new(), Vec::new(), |_| None, Path::new(HOME));
+            assert_eq!(tray, None);
         }
     }
 
     #[test]
-    fn a_subagent_at_work_gives_its_folder_a_tray_whatever_is_known_of_the_folders_size() {
-        let icon = SubagentIcon {
-            harness: AgentHarness::Codex,
+    fn an_agent_gives_its_folder_a_tray_whatever_is_known_of_the_folders_size() {
+        let badge = |tooltip: &str| AgentBadge {
+            robot: Robot::Codex,
             look: AgentLook::Working,
-            tooltip: "Busy\nfor abc-123".to_string(),
+            tooltip: tooltip.to_string(),
             link: None,
         };
+        let (session, subagent) = (badge("Busy\nabc-123\nCodex"), badge("Busy\nfor abc-123"));
         for project in unsized_and_unreadable() {
-            let tray = tray(&project, vec![icon.clone()], |_| None, Path::new(HOME));
+            let only_a_session = tray(
+                &project,
+                vec![session.clone()],
+                Vec::new(),
+                |_| None,
+                Path::new(HOME),
+            );
             assert_eq!(
-                tray,
+                only_a_session,
                 Some(Tray {
                     disk: None,
-                    subagents: vec![icon.clone()],
+                    sessions: vec![session.clone()],
+                    subagents: Vec::new(),
+                })
+            );
+            let only_a_subagent = tray(
+                &project,
+                Vec::new(),
+                vec![subagent.clone()],
+                |_| None,
+                Path::new(HOME),
+            );
+            assert_eq!(
+                only_a_subagent,
+                Some(Tray {
+                    disk: None,
+                    sessions: Vec::new(),
+                    subagents: vec![subagent.clone()],
                 })
             );
         }
@@ -334,12 +365,23 @@ mod tests {
             own_files: measured(5_000_000),
             ..project(Vec::new())
         };
-        let tray = tray(&sized, vec![icon.clone()], |_| None, Path::new(HOME)).unwrap();
+        let tray = tray(
+            &sized,
+            vec![session.clone()],
+            vec![subagent.clone()],
+            |_| None,
+            Path::new(HOME),
+        )
+        .unwrap();
         assert_eq!(
             tray.disk.and_then(|disk| disk.total).as_deref(),
             Some("5 MB")
         );
-        assert_eq!(tray.subagents, [icon], "beside the disk use");
+        assert_eq!(
+            (tray.sessions, tray.subagents),
+            (vec![session], vec![subagent]),
+            "beside the disk use"
+        );
     }
 
     #[test]

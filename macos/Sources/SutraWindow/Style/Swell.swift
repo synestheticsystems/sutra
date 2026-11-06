@@ -34,18 +34,18 @@ struct SwellLayer: NSViewRepresentable {
 
 /// The shapes a swell takes.
 enum SwellShape: Equatable {
-    /// A lozenge's capsule, its ends as round as its height allows.
-    case capsule
     case rectangle(cornerRadius: CGFloat)
     /// A line `width` wide just inside the frame's edge, as a card's edge is drawn.
     case edge(cornerRadius: CGFloat, width: CGFloat)
+    /// A figure filled in the frame's own points, as a robot's face is.
+    case figure(CGPath)
 }
 
 /// The view under a `SwellLayer`: an empty view whose one sublayer carries the swell.
 final class SwellView: NSView {
-    private let swellLayer = CALayer()
+    private let swellLayer = CAShapeLayer()
     private var swell: Swell?
-    private var shape = SwellShape.capsule
+    private var shape = SwellShape.rectangle(cornerRadius: 0)
     private var motion = Motion.steady
 
     private static let animationKey = "swell"
@@ -64,6 +64,11 @@ final class SwellView: NSView {
     /// It lies under what the swell colours, and every click and tooltip is for that.
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+
+    /// A figure is drawn from the top down, as SwiftUI draws.
+    override var isFlipped: Bool {
+        true
     }
 
     func show(_ swell: Swell, as shape: SwellShape, motion: Motion) {
@@ -107,8 +112,8 @@ final class SwellView: NSView {
 
     private var cornerRadius: CGFloat {
         switch shape {
-        case .capsule: min(bounds.width, bounds.height) / 2
         case .rectangle(let radius), .edge(let radius, _): radius
+        case .figure: 0
         }
     }
 
@@ -119,14 +124,20 @@ final class SwellView: NSView {
             color = swell.color.cgColor
         }
         withoutImplicitAnimation {
+            swellLayer.path = nil
             switch shape {
-            case .capsule, .rectangle:
+            case .rectangle:
                 swellLayer.backgroundColor = color
                 swellLayer.borderWidth = 0
             case .edge(_, let width):
                 swellLayer.backgroundColor = nil
                 swellLayer.borderColor = color
                 swellLayer.borderWidth = width
+            case .figure(let figure):
+                swellLayer.backgroundColor = nil
+                swellLayer.borderWidth = 0
+                swellLayer.fillColor = color
+                swellLayer.path = figure
             }
             swellLayer.cornerRadius = cornerRadius
         }

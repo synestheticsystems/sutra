@@ -3,9 +3,10 @@ import SwiftUI
 
 /// The card's tray along its bottom edge, all on one line: at its start the folder's disk use, as
 /// `32 GB  target/  node_modules/` reads, with an alert sign first when the folder could not be
-/// sized; at its far end a badge for each subagent at work in the folder. While a clean is at
-/// work, the seam bar along the tray's top edge fills as space comes back. While the pointer is
-/// over the card, the folder's full path shows in the room between.
+/// sized; at its far end a robot for each agent in the folder, its sessions, a divider, then the
+/// subagents at work in it. While a clean is at work, the seam bar along the tray's top edge fills
+/// as space comes back. While the pointer is over the card, the folder's full path shows in the
+/// room between.
 struct TrayView: View {
     let tray: Tray
     /// The folder in full, with `~` for the home folder.
@@ -34,9 +35,9 @@ struct TrayView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .opacity(hovered ? 1 : 0)
                     .accessibilityHidden(!hovered)
-                if !tray.subagents.isEmpty {
-                    // Laid out first and never cut, so the icons keep their place at the end.
-                    SubagentIcons(icons: tray.subagents)
+                if !tray.sessions.isEmpty || !tray.subagents.isEmpty {
+                    // Laid out first and never cut, so the robots keep their place at the end.
+                    TrayAgents(sessions: tray.sessions, subagents: tray.subagents)
                         .fixedSize()
                         .layoutPriority(2)
                 }
@@ -45,6 +46,24 @@ struct TrayView: View {
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Surface.tray)
+        }
+    }
+}
+
+/// The agents on the tray: the sessions, whose faces move, then past a divider the subagents, whose
+/// faces hold still.
+private struct TrayAgents: View {
+    let sessions: [AgentBadge]
+    let subagents: [AgentBadge]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            AgentBadges(badges: sessions, moves: true)
+            if !sessions.isEmpty && !subagents.isEmpty {
+                Divider()
+                    .frame(height: 12)
+            }
+            AgentBadges(badges: subagents, moves: false)
         }
     }
 }

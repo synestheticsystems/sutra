@@ -215,9 +215,7 @@ mod tests {
         let looks: Vec<(Option<AgentLook>, &str)> = lines
             .iter()
             .map(|line| match line {
-                ElsewhereLine::Session {
-                    lozenge, folder, ..
-                } => (Some(lozenge.look), folder.as_str()),
+                ElsewhereLine::Session { badge, folder, .. } => (Some(badge.look), folder.as_str()),
                 ElsewhereLine::Subagents { folder, .. } => (None, folder.as_str()),
             })
             .collect();

@@ -1,40 +1,39 @@
-//! The subagents at work in a folder, a small icon each: at the end of the card's tray, or of a
-//! line of the agents working elsewhere. The icon says the subagent's harness and its colour what
-//! the subagent is doing, as a session's lozenge does; standing apart from the sessions' lozenges
-//! says it is a subagent. Its tooltip names it, its task, what kind of agent it is, the model it
-//! works with and the session it works for, and a click opens that session.
+//! The subagents at work in a folder, a robot each: after the divider on the card's tray, or at the
+//! end of a line of the agents working elsewhere. The robot says which AI the subagent is and the
+//! light of its face what it is doing, as a session's does; standing after the divider says it is
+//! a subagent. Its tooltip names it, its task, what kind of agent it is, the model it works with
+//! and the session it works for, and a click opens that session.
 
 use std::time::SystemTime;
 
 use super::agents::{look, status_words};
-use crate::dashboard::{AgentHarness, SubagentIcon};
-use crate::map::{Harness, SessionHost, SubagentWithParent};
+use super::robots::robot;
+use crate::dashboard::AgentBadge;
+use crate::map::{SessionHost, SubagentWithParent};
 
-/// The icons at `now` of `subagents`, in the order given: the map's, by session and then each
-/// session's own, which holds whatever their status, so no icon moves when its colour changes.
-pub(in crate::dashboard::contents) fn icons<'a>(
+/// The badges at `now` of `subagents`, in the order given: the map's, by session and then each
+/// session's own, which holds whatever their status, so no robot moves when its light changes.
+pub(in crate::dashboard::contents) fn badges<'a>(
     subagents: impl IntoIterator<Item = &'a SubagentWithParent>,
     now: SystemTime,
-) -> Vec<SubagentIcon> {
+) -> Vec<AgentBadge> {
     let subagents = subagents.into_iter();
-    subagents.map(|working| icon(working, now)).collect()
+    subagents.map(|working| badge(working, now)).collect()
 }
 
-/// The icon at `now` of a subagent at work.
-fn icon(working: &SubagentWithParent, now: SystemTime) -> SubagentIcon {
+/// The badge at `now` of a subagent at work: the robot of the model it works with, or else of the
+/// harness of the session it works for.
+fn badge(working: &SubagentWithParent, now: SystemTime) -> AgentBadge {
     let SubagentWithParent { subagent, parent } = working;
-    SubagentIcon {
-        harness: match parent.harness {
-            Harness::ClaudeCode => AgentHarness::ClaudeCode,
-            Harness::Codex => AgentHarness::Codex,
-        },
+    AgentBadge {
+        robot: robot(parent.harness, subagent.model.as_deref()),
         look: look(subagent.status),
         tooltip: tooltip(working, now),
         link: parent.host.as_ref().and_then(SessionHost::link),
     }
 }
 
-/// The icon's tooltip: the subagent's status in words, as every agent's tooltip begins; a line with
+/// The badge's tooltip: the subagent's status in words, as every agent's tooltip begins; a line with
 /// its name and its task, when its harness records either; and a line with what kind of agent it
 /// is and the model it works with, when recorded, and the session it works for, by name or else by
 /// id.
@@ -67,9 +66,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::dashboard::AgentLook;
+    use crate::dashboard::{AgentLook, Robot};
     use crate::map::test_support::{agent_session, at, subagent_at_work};
-    use crate::map::{AgentSession, AgentStatus, Subagent};
+    use crate::map::{AgentSession, AgentStatus, Harness, Subagent};
 
     /// The idle session `abc-123`, as Claude Code records it, with no name.
     fn parent() -> AgentSession {
@@ -77,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subagents_icon_shows_its_sessions_harness_and_its_own_look_and_opens_its_session() {
+    fn a_subagents_badge_shows_its_robot_and_its_own_look_and_opens_its_session() {
         let now = at(10_000);
         let host = SessionHost::ClaudeApp {
             app_session_id: Some("local_2b5d1f5a-66c8".to_string()),
@@ -86,14 +85,11 @@ mod tests {
             host: Some(host),
             ..parent()
         };
-        let busy = icon(
+        let busy = badge(
             &SubagentWithParent::new(subagent_at_work("a1"), &claude),
             now,
         );
-        assert_eq!(
-            (busy.harness, busy.look),
-            (AgentHarness::ClaudeCode, AgentLook::Working)
-        );
+        assert_eq!((busy.robot, busy.look), (Robot::Claude, AgentLook::Working));
         assert_eq!(
             busy.link.as_deref(),
             Some("claude://code/continue?session=local_2b5d1f5a-66c8")
@@ -108,12 +104,16 @@ mod tests {
             status: AgentStatus::Quiet,
             ..subagent_at_work("t1")
         };
-        let quiet = icon(&SubagentWithParent::new(quiet, &codex), now);
-        assert_eq!(
-            (quiet.harness, quiet.look),
-            (AgentHarness::Codex, AgentLook::Still)
-        );
+        let quiet = badge(&SubagentWithParent::new(quiet, &codex), now);
+        assert_eq!((quiet.robot, quiet.look), (Robot::Codex, AgentLook::Still));
         assert_eq!(quiet.link, None, "a session in a terminal has no link");
+
+        let on_glm = Subagent {
+            model: Some("glm-4.6".to_string()),
+            ..subagent_at_work("a2")
+        };
+        let on_glm = badge(&SubagentWithParent::new(on_glm, &claude), now);
+        assert_eq!(on_glm.robot, Robot::Plain, "its own model picks its robot");
     }
 
     #[test]
