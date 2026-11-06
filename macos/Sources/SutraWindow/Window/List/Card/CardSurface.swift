@@ -13,8 +13,10 @@ struct CardSurface: View {
         ZStack {
             shape
                 .fill(Surface.card)
+                // Faint in both modes: in dark mode the surface's step up from the window and its
+                // edge already lift the card, and a dark halo only muddies the gap between cards.
                 .shadow(
-                    color: .black.opacity(colorScheme == .dark ? 0.4 : 0.08),
+                    color: .black.opacity(colorScheme == .dark ? 0.15 : 0.08),
                     radius: 2,
                     y: 1
                 )
