@@ -69,6 +69,14 @@ impl Watches {
         }
     }
 
+    /// Start the stream over `roots` again, from now. Its events in between go undelivered, so the
+    /// caller reads again what it needs.
+    pub(super) fn restart_over_roots(&mut self, roots: &[PathBuf]) {
+        let (over_roots, root_problems) = watch_roots(roots, self.messages.clone());
+        self._over_roots = over_roots;
+        self.root_problems = root_problems;
+    }
+
     /// Watch each of `folders` and no other folder outside the roots, leaving alone the stream of
     /// each one already watched, unless that stream watches others that leave or join it. Returns
     /// whether discovery should read again: a watch hears only what changes after it begins, and

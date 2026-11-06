@@ -296,7 +296,18 @@ impl<'a> Engine<'a> {
     fn on_macos_answer(&mut self, folder: PrivateFolder, answer: MacOsAnswer, now: Instant) {
         self.state.macos_answered(folder, answer);
         match answer {
-            MacOsAnswer::LetIn => self.timers.rediscover.mark((), now),
+            MacOsAnswer::LetIn => {
+                // The stream over the roots began before macOS let Sutra in, and FSEvents may
+                // not tell a stream about a folder its process could not read when it began. That
+                // is unverified, since testing it means touching a real private folder, so the
+                // stream begins again, now that Sutra may. The rediscovery this answer starts reads
+                // again whatever the restart left undelivered.
+                self.watches.restart_over_roots(self.state.roots());
+                self.dirty |= self
+                    .state
+                    .report_problems(&[Source::Watcher], self.watches.problems());
+                self.timers.rediscover.mark((), now);
+            }
             MacOsAnswer::Refused => self.dirty = true,
         }
     }
