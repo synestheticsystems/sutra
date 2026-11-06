@@ -242,7 +242,7 @@ pub struct UnitLozenge {
 pub enum UnitLook {
     /// Up: green.
     Up,
-    /// On the way: amber.
+    /// On the way: blue, so amber stays for what needs the user.
     Starting,
     /// Failed: red.
     Failed,

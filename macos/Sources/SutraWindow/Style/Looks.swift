@@ -28,8 +28,10 @@ struct Hue {
         Color(nsColor: base).opacity(amount)
     }
 
-    /// What wants the user: an agent waiting, a unit on its way.
+    /// What wants the user: an agent waiting, and nothing else.
     static let amber = Hue(.systemOrange, deepened: 0.42, lifted: 0)
+    /// On its way: a unit starting or building.
+    static let blue = Hue(.systemBlue, deepened: 0.2, lifted: 0.15)
     /// At work, or up.
     static let green = Hue(.systemGreen, deepened: 0.45, lifted: 0)
     /// Failed.
@@ -66,7 +68,7 @@ extension UnitLook {
     var ink: Color {
         switch self {
         case .up: Hue.green.ink
-        case .starting: Hue.amber.ink
+        case .starting: Hue.blue.ink
         case .failed: Hue.red.ink
         case .still: Still.ink
         }
@@ -75,7 +77,7 @@ extension UnitLook {
     var fill: Color {
         switch self {
         case .up: Hue.green.fill(0.18)
-        case .starting: Hue.amber.fill(0.22)
+        case .starting: Hue.blue.fill(0.18)
         case .failed: Hue.red.fill(0.18)
         case .still: Still.fill
         }
