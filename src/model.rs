@@ -189,32 +189,6 @@ impl Environment {
     pub fn port_for(&self, unit_name: &str) -> Option<u16> {
         self.ports.get(unit_name).copied()
     }
-
-    /// Short display name derived from the project directory.
-    pub fn display_name(&self) -> &str {
-        self.dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-    }
-
-    /// Elapsed time since started, as a human-readable string.
-    pub fn elapsed_string(&self) -> String {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let elapsed = now.saturating_sub(self.started);
-        if elapsed < 60 {
-            format!("{}s", elapsed)
-        } else if elapsed < 3600 {
-            format!("{}m", elapsed / 60)
-        } else if elapsed < 86400 {
-            format!("{}h {}m", elapsed / 3600, (elapsed % 3600) / 60)
-        } else {
-            format!("{}d", elapsed / 86400)
-        }
-    }
 }
 
 /// The values a meta file declares. Each convention decides which of them it requires.
@@ -318,27 +292,12 @@ pub(crate) fn registry_dir(home: &Path) -> PathBuf {
     home.join(".dev-runner")
 }
 
-/// Returns the path to the dev-runner registry directory (~/.dev-runner/),
-/// or `None` if the home directory cannot be determined. It starts from the
-/// real home folder because inside the App Sandbox `$HOME` is the app's container.
-pub fn state_dir() -> Option<PathBuf> {
-    crate::home::real_home().map(|home| registry_dir(&home))
-}
-
 /// Returns true if a filename looks like a hex-only meta file (no dots, not hidden).
 fn is_meta_file(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with('.')
         && !name.contains('.')
         && name.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-/// Load all environment instances from the registry. The terminal UI has nowhere to say that the
-/// registry or part of it could not be read, so what cannot be read just does not show there.
-pub fn load_all() -> Vec<Environment> {
-    state_dir()
-        .and_then(|dir| load_registry(&dir, &mut Vec::new()).ok())
-        .unwrap_or_default()
 }
 
 /// Load every environment registered in `dir`, sorted by project directory. What cannot be read of
