@@ -12,12 +12,16 @@ use crate::map::Project;
 #[derive(Debug, Default)]
 pub(super) struct Hold {
     /// The pointer is over the list. Up to four snapshots a second arrive, and a card sliding
-    /// into place could take a click meant for the card that was there.
+    /// into place could take a click meant for the card that was there. The window tells only of
+    /// the pointer coming and going, over the list and over what stands in its place alike, so
+    /// this is kept apart from the map: a pointer that came while the first scan ran, or stayed
+    /// while an engine started afresh, is still there when the cards arrive.
     pointer_over: bool,
     /// The Disk sort was chosen before the first sizing finished, when each size that lands would
     /// move the cards.
     until_sized: bool,
-    /// The cards on screen, in their order, while anything holds the list.
+    /// The cards on screen, in their order, while anything holds the list: from the first map
+    /// that shows them, should the list be held before any map.
     order: Option<Order>,
 }
 
@@ -39,14 +43,15 @@ pub(super) enum Section {
 }
 
 impl Hold {
+    /// Whether anything holds the list still: the pointer over it, or the Disk sort waiting for
+    /// the first sizing.
     pub(super) fn is_held(&self) -> bool {
-        self.order.is_some()
+        self.pointer_over || self.until_sized
     }
 
-    /// The pointer came over the list while it showed `on_screen`.
-    pub(super) fn pointer_entered(&mut self, on_screen: Order) {
+    /// The pointer came over the list.
+    pub(super) fn pointer_entered(&mut self) {
         self.pointer_over = true;
-        self.order.get_or_insert(on_screen);
     }
 
     /// The pointer left the list, or the list is no longer drawn.
@@ -68,16 +73,24 @@ impl Hold {
     }
 
     /// While something holds the list, hold `order` from now on: what the list shows after a
-    /// change, so a card that arrived keeps the place it appeared in, or the order of a sort the
-    /// user just chose.
+    /// change, so a card that arrived keeps the place it appeared in, the order of a sort the user
+    /// just chose, or the first order a map gives a list held before it.
     pub(super) fn keep(&mut self, order: Order) {
-        if let Some(held) = &mut self.order {
-            *held = order;
+        if self.is_held() {
+            self.order = Some(order);
         }
     }
 
+    /// A new engine started, whose map is sorted from scratch: hold nothing of the old map's
+    /// order, and stop waiting for its sizes. The pointer has not moved, so it still holds the list
+    /// once the new map arrives.
+    pub(super) fn forget_map(&mut self) {
+        self.until_sized = false;
+        self.order = None;
+    }
+
     fn release_when_free(&mut self) {
-        if !self.pointer_over && !self.until_sized {
+        if !self.is_held() {
             self.order = None;
         }
     }
@@ -185,13 +198,13 @@ mod tests {
     fn the_pointer_and_the_disk_sort_each_keep_the_list_held_until_both_let_go() {
         let mut hold = Hold::default();
         hold.hold_until_sized(Order::default());
-        hold.pointer_entered(Order::default());
+        hold.pointer_entered();
         hold.stop_waiting_for_sizes();
         assert!(hold.is_held(), "the pointer still holds it");
         hold.pointer_left();
         assert!(!hold.is_held());
 
-        hold.pointer_entered(Order::default());
+        hold.pointer_entered();
         hold.hold_until_sized(Order::default());
         hold.pointer_left();
         assert!(hold.is_held(), "the first sizing still holds it");

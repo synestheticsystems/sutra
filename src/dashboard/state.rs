@@ -135,9 +135,8 @@ impl State {
                 self.arrangement.toggle_quiet(self.snapshot.as_deref(), now);
             }
             Action::PointerEnteredList => {
-                if let Some(map) = &self.snapshot {
-                    self.arrangement.pointer_entered(map, now);
-                }
+                let map = self.snapshot.as_deref();
+                self.arrangement.pointer_entered(map, now);
             }
             Action::PointerLeftList => self.arrangement.pointer_left(),
             Action::ToggleGlobalMute => self.notifier.toggle_global_mute(),

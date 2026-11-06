@@ -108,9 +108,15 @@ impl Arrangement {
         self.keep_on_screen(snapshot, now);
     }
 
-    pub(in crate::dashboard) fn pointer_entered(&mut self, snapshot: &Snapshot, now: SystemTime) {
-        let on_screen = Listing::new(snapshot, self, now).order();
-        self.hold.pointer_entered(on_screen);
+    /// The pointer came over the list, which shows `snapshot`, or no map yet while the first scan
+    /// runs.
+    pub(in crate::dashboard) fn pointer_entered(
+        &mut self,
+        snapshot: Option<&Snapshot>,
+        now: SystemTime,
+    ) {
+        self.hold.pointer_entered();
+        self.keep_on_screen(snapshot, now);
     }
 
     /// The pointer left the list, or the window no longer shows it.
@@ -118,14 +124,15 @@ impl Arrangement {
         self.hold.pointer_left();
     }
 
-    /// A new engine started: its map is sorted from scratch and sized from the start.
+    /// A new engine started: its map is sorted from scratch and sized from the start. A pointer
+    /// over the list stays there, and holds the new map's cards from the first that arrives.
     pub(in crate::dashboard) fn forget_map(&mut self) {
-        self.hold = Hold::default();
+        self.hold.forget_map();
         self.sized_once = false;
     }
 
     /// While the list is held, take what it shows now as the order to hold, so a card that just
-    /// appeared keeps its place too.
+    /// appeared keeps its place too. Held before any map, the list takes the order of the first.
     fn keep_on_screen(&mut self, snapshot: Option<&Snapshot>, now: SystemTime) {
         if let Some(snapshot) = snapshot.filter(|_| self.hold.is_held()) {
             let on_screen = Listing::new(snapshot, self, now).order();
@@ -151,7 +158,7 @@ mod tests {
     fn pointed_at(map: &Snapshot) -> Arrangement {
         let mut arrangement = Arrangement::default();
         arrangement.observe(map, now());
-        arrangement.pointer_entered(map, now());
+        arrangement.pointer_entered(Some(map), now());
         arrangement
     }
 
@@ -166,6 +173,35 @@ mod tests {
 
         arrangement.pointer_left();
         assert_eq!(listed(&b_active, &arrangement), ["b", "a"], "re-sorted");
+    }
+
+    #[test]
+    fn a_pointer_that_came_over_the_list_during_the_first_scan_holds_the_cards_that_arrive() {
+        let mut arrangement = Arrangement::default();
+        arrangement.pointer_entered(None, now());
+
+        let first = snapshot(vec![project("a", 10), project("b", 20)], vec![]);
+        arrangement.observe(&first, now());
+        assert_eq!(listed(&first, &arrangement), ["a", "b"]);
+
+        let b_active = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
+        arrangement.observe(&b_active, now());
+        assert_eq!(listed(&b_active, &arrangement), ["a", "b"], "held");
+    }
+
+    #[test]
+    fn a_pointer_over_the_list_as_the_engine_restarts_holds_the_new_engines_cards() {
+        let before = snapshot(vec![project("a", 10), project("b", 20)], vec![]);
+        let mut arrangement = pointed_at(&before);
+
+        arrangement.forget_map();
+        let first = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
+        arrangement.observe(&first, now());
+        assert_eq!(listed(&first, &arrangement), ["b", "a"], "sorted afresh");
+
+        let a_active = snapshot(vec![project("a", 0), project("b", 10)], vec![]);
+        arrangement.observe(&a_active, now());
+        assert_eq!(listed(&a_active, &arrangement), ["b", "a"], "held");
     }
 
     #[test]
