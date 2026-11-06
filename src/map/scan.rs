@@ -46,9 +46,9 @@ pub struct Worktree {
     /// Canonical path.
     pub path: PathBuf,
     pub repo: RepoInfo,
-    /// Whether Sutra reads the folder. A registered worktree may lie in a private folder this
-    /// edition keeps out of, outside the sandbox grant, or on a volume that is not mounted (a
-    /// locked worktree); the walk reads every worktree it finds.
+    /// Whether Sutra reads the folder. A registered worktree may lie in a private folder Settings
+    /// keeps Sutra out of, outside the sandbox grant, or on a volume that is not mounted (a locked
+    /// worktree); the walk reads every worktree it finds.
     pub access: FolderAccess,
 }
 
@@ -154,6 +154,7 @@ fn discover_on_current_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::PrivateFolder;
     use crate::map::test_support::{TempDir, git};
 
     /// Discover with the fixture's `home` folder as both the root and the home folder.
@@ -357,11 +358,12 @@ mod tests {
     }
 
     #[test]
-    fn discover_enters_private_folders_only_when_asked() {
+    fn discover_enters_only_the_private_folders_settings_let_in() {
         let fixture = TempDir::new("scan-discover-private");
         let notes = fixture.repo("home/Documents/notes");
-        let entering_them = ScanOptions {
-            include_private_folders: true,
+        fixture.repo("home/Desktop/draft");
+        let documents = ScanOptions {
+            private_folders: [PrivateFolder::Documents].into(),
         };
 
         assert!(
@@ -369,7 +371,7 @@ mod tests {
                 .worktrees
                 .is_empty()
         );
-        assert_eq!(paths(&discover_home(&fixture, &entering_them)), [notes]);
+        assert_eq!(paths(&discover_home(&fixture, &documents)), [notes]);
     }
 
     #[test]
@@ -388,17 +390,17 @@ mod tests {
                 private.to_str().unwrap(),
             ],
         );
-        let entering_them = ScanOptions {
-            include_private_folders: true,
+        let desktop = ScanOptions {
+            private_folders: [PrivateFolder::Desktop].into(),
         };
 
         let found = discover_home(&fixture, &ScanOptions::default());
         assert_eq!(
             worktree(&found, &private).access,
-            FolderAccess::PrivateFolder
+            FolderAccess::KeptOut(PrivateFolder::Desktop)
         );
         assert_eq!(
-            worktree(&discover_home(&fixture, &entering_them), &private).access,
+            worktree(&discover_home(&fixture, &desktop), &private).access,
             FolderAccess::Readable
         );
     }

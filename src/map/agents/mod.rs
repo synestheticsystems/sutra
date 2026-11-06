@@ -51,7 +51,7 @@ pub fn load(home: &Path, boundary: &Boundary, last_read: &mut LastRead) -> Loade
 }
 
 /// The canonical form of a recorded working directory, or the path as recorded when it may not or
-/// cannot be resolved. Resolving a folder inside a private folder this edition keeps out of
+/// cannot be resolved. Resolving a folder inside a private folder Settings keeps Sutra out of
 /// would raise the privacy prompt; a session can outlive its folder (agents delete worktrees); and
 /// inside the sandbox a folder outside the grant cannot be resolved. The recorded path is then
 /// still the best join key.
@@ -71,8 +71,8 @@ fn time_from_unix_ms(ms: u64) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::ScanOptions;
     use crate::map::test_support::TempDir;
+    use crate::map::{PrivateFolder, ScanOptions};
 
     #[test]
     fn missing_working_directory_keeps_its_recorded_path() {
@@ -98,20 +98,20 @@ mod tests {
     }
 
     #[test]
-    fn working_directory_in_a_private_folder_is_resolved_only_when_the_edition_enters_it() {
+    fn working_directory_in_a_private_folder_is_resolved_only_when_settings_let_it_in() {
         let home = TempDir::new("agents-cwd-private");
         let app = home.root().join("Desktop").join("app");
         fs::create_dir_all(&app).unwrap();
         let recorded = home.root().join("Desktop").join(".").join("app");
         let recorded = recorded.to_str().unwrap();
-        let entering_them = ScanOptions {
-            include_private_folders: true,
+        let desktop = ScanOptions {
+            private_folders: [PrivateFolder::Desktop].into(),
         };
 
         assert_eq!(
             resolve_cwd(recorded, &home.boundary(&ScanOptions::default())),
             PathBuf::from(recorded)
         );
-        assert_eq!(resolve_cwd(recorded, &home.boundary(&entering_them)), app);
+        assert_eq!(resolve_cwd(recorded, &home.boundary(&desktop)), app);
     }
 }

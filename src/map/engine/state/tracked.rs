@@ -44,7 +44,7 @@ impl Tracked {
     }
 
     /// A folder only environments name. Like a registered worktree, one that is gone, outside the
-    /// grant or in a private folder this edition keeps out of stays on the map, unreadable.
+    /// grant or in a private folder Settings keeps Sutra out of stays on the map, unreadable.
     pub(super) fn plain(folder: PathBuf, boundary: &Boundary) -> Tracked {
         let access = scan::folder_access(&folder, boundary);
         Tracked {

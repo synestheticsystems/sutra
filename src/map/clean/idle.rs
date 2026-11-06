@@ -197,7 +197,7 @@ mod tests {
         CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, measured,
         node_modules, project_at, snapshot_of,
     };
-    use crate::map::{AgentStatus, Harness, Measurement, Source, SourceProblem};
+    use crate::map::{AgentStatus, Harness, Measurement, PrivateFolder, Source, SourceProblem};
     use std::io;
 
     const DAY: u64 = 86_400;
@@ -307,7 +307,7 @@ mod tests {
                 ..quiet_project("unsized", 9, LARGE)
             },
             Project {
-                access: FolderAccess::PrivateFolder,
+                access: FolderAccess::KeptOut(PrivateFolder::Desktop),
                 ..quiet_project("private", 9, LARGE)
             },
             quiet_project("worth-it", 9, WORTH_CLEANING_BYTES),

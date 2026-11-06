@@ -91,9 +91,8 @@ fn nothing_shown(filter: Option<&str>, roots: &[PathBuf], cards: &CardContext) -
 fn no_folder(lost_grant: Option<&GrantError>) -> List {
     List::NoFolder {
         message:
-            "Sutra finds your worktrees, dev environments and build folders there, apart from \
-                  Desktop, Documents and Downloads. Your agents keep their sessions in ~/.claude \
-                  and ~/.codex, so a smaller folder hides them."
+            "Sutra finds your worktrees, dev environments and build folders there. Your agents \
+                  keep their sessions in ~/.claude and ~/.codex, so a smaller folder hides them."
                 .to_string(),
         lost: lost_grant
             .map(|lost| format!("The folder chosen before could not be reopened: {lost}.")),

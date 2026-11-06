@@ -159,7 +159,7 @@ pub struct Card {
     pub age: Option<String>,
     /// Why the folder cannot be read, above the agents and units that sources outside it still
     /// show.
-    pub unreadable: Option<String>,
+    pub unreadable: Option<Unreadable>,
     pub agents: Vec<AgentLozenge>,
     pub units: Vec<UnitLozenge>,
     pub tray: Option<Tray>,
@@ -194,6 +194,22 @@ pub struct ElsewhereAgent {
     pub lozenge: AgentLozenge,
     /// The folder it works in, with `~` for the home folder.
     pub folder: String,
+}
+
+/// Why a card shows nothing from inside its folder, as `in Desktop, not watched` reads.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Unreadable {
+    pub reason: String,
+    pub look: UnreadableLook,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UnreadableLook {
+    /// Kept out by the user's own choice, in Settings or in the folder granted: a quiet sign, since
+    /// nothing went wrong.
+    KeptOut,
+    /// Missing or refused: the warning sign.
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -339,9 +355,10 @@ pub enum Action {
     FolderGranted {
         folder: String,
     },
-    /// Walk the private folders (Desktop, Documents, Downloads) or keep out of them.
-    IncludePrivateFolders {
-        include: bool,
+    /// The user chose whether Sutra watches the private folder named `folder` (`Documents`).
+    WatchPrivateFolder {
+        folder: String,
+        watch: bool,
     },
 }
 
@@ -376,8 +393,16 @@ pub struct Settings {
     /// The free space Sutra keeps by cleaning by itself, and the choices.
     pub keep_free: Option<u64>,
     pub keep_free_choices: Vec<KeepFreeChoice>,
-    /// Whether Sutra walks Desktop, Documents and Downloads, which macOS asks about once each.
-    pub include_private_folders: bool,
+    /// The folders macOS guards with a privacy prompt, each with whether Sutra watches it.
+    pub private_folders: Vec<PrivateFolderSwitch>,
+}
+
+/// One of the folders macOS guards, and whether Sutra watches it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PrivateFolderSwitch {
+    /// `Documents`: the switch's label, and the folder `Action::WatchPrivateFolder` names.
+    pub folder: String,
+    pub watched: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]

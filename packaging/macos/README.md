@@ -7,9 +7,9 @@ App Store edition.
 ## Two editions
 
 - The **Developer ID edition**, which `bundle.sh` builds, runs outside the App
-  Sandbox. It reads the home folder with no grant to ask for (Desktop,
-  Documents and Downloads only once Settings turns them on, and macOS asks once
-  for each), and a card's menu can terminate a dev environment, which sends
+  Sandbox. It reads the home folder with no grant to ask for (Documents from
+  the start, Desktop and Downloads once Settings turns them on, and macOS asks
+  once for each), and a card's menu can terminate a dev environment, which sends
   `SIGTERM` to a supervisor PID Sutra did not start. Developer ID signing and
   notarization get it past Gatekeeper.
 - The **Mac App Store edition** will run inside the App Sandbox, which allows

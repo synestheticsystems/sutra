@@ -70,7 +70,14 @@ fn a_map_from_an_engine_since_replaced_and_word_of_its_end_are_dropped() {
         _ => panic!("the first engine's first map"),
     };
 
-    state.perform(Action::IncludePrivateFolders { include: true }, now());
+    let folder = "Desktop".to_string();
+    state.perform(
+        Action::WatchPrivateFolder {
+            folder,
+            watch: true,
+        },
+        now(),
+    );
     state.on_snapshot(old, old_map, now());
     assert!(
         state.snapshot.is_none(),

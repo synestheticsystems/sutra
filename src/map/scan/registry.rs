@@ -75,17 +75,16 @@ fn classify(admin_dir: &Path, boundary: &Boundary) -> Registration {
         // A `gitdir` file naming the root: git never writes one.
         return Registration::Unreadable((admin_dir.to_path_buf(), io::ErrorKind::InvalidData));
     };
-    let access = if boundary.may_read(folder) {
-        match fs::symlink_metadata(&dot_git) {
+    let access = match boundary.kept_out_by(folder) {
+        Some(private) => FolderAccess::KeptOut(private),
+        None => match fs::symlink_metadata(&dot_git) {
             // Inside the sandbox a folder outside the grant can be stat'ed but not listed, so the
             // `.git` file being there says nothing about whether the folder reads.
             Ok(_) => listing_access(folder),
             Err(err) if err.kind() == io::ErrorKind::PermissionDenied => FolderAccess::Denied,
             Err(_) if admin_dir.join("locked").is_file() => FolderAccess::Missing,
             Err(_) => return Registration::Stale,
-        }
-    } else {
-        FolderAccess::PrivateFolder
+        },
     };
     // An unreadable folder cannot be resolved either, so it keeps the path git recorded.
     let path = if access == FolderAccess::Readable {

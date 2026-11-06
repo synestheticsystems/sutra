@@ -25,9 +25,12 @@ pub mod scan;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+use serde::{Deserialize, Serialize};
 
 pub use agents::{AgentSession, AgentStatus, Harness, SessionHost};
 pub use disk::{DirUsage, Measurement};
@@ -35,13 +38,44 @@ pub use project::{
     ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, Project, RepoInfo,
 };
 
+/// A home folder macOS guards with a privacy prompt the first time an app reads anything inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum PrivateFolder {
+    Desktop,
+    Documents,
+    Downloads,
+}
+
+impl PrivateFolder {
+    pub const ALL: [PrivateFolder; 3] = [
+        PrivateFolder::Desktop,
+        PrivateFolder::Documents,
+        PrivateFolder::Downloads,
+    ];
+
+    /// Its name in the home folder.
+    pub fn name(self) -> &'static str {
+        match self {
+            PrivateFolder::Desktop => "Desktop",
+            PrivateFolder::Documents => "Documents",
+            PrivateFolder::Downloads => "Downloads",
+        }
+    }
+
+    /// The private folder called `name` in the home folder, if one is.
+    pub fn named(name: &str) -> Option<PrivateFolder> {
+        PrivateFolder::ALL
+            .into_iter()
+            .find(|folder| folder.name() == name)
+    }
+}
+
 /// What the scanner may enter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanOptions {
-    /// Enter `~/Desktop`, `~/Documents` and `~/Downloads`, which macOS asks the user about the first
-    /// time an app reads each of them. Off unless the user turns it on, so that nothing asks
-    /// before the user knows why.
-    pub include_private_folders: bool,
+    /// The private folders the scanner may enter, as the user chose them in Settings. macOS asks
+    /// the user about each the first time an app reads anything inside it.
+    pub private_folders: BTreeSet<PrivateFolder>,
 }
 
 /// One complete picture of the machine, published whole so a consumer never sees a half-updated map.
@@ -49,8 +83,8 @@ pub struct ScanOptions {
 pub struct Snapshot {
     /// The folders scanned and watched.
     pub roots: Vec<PathBuf>,
-    /// The private folders inside the roots that Sutra does not enter, only ever in the store
-    /// edition (see `ScanOptions`).
+    /// The private folders inside the roots that Settings keeps Sutra out of, which the walk skips
+    /// (see `ScanOptions`).
     pub skipped_private_folders: Vec<PathBuf>,
     /// Running inside the App Sandbox, where signals to other processes fail, so the UI offers no
     /// terminate button.

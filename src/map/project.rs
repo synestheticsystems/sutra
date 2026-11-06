@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use super::{AgentSession, Measurement};
+use super::{AgentSession, Measurement, PrivateFolder};
 use crate::model::Environment;
 
 /// One row of the map.
@@ -84,9 +84,9 @@ impl Project {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderAccess {
     Readable,
-    /// In Desktop, Documents or Downloads, which the store edition does not enter, as its open panel
-    /// promises.
-    PrivateFolder,
+    /// In a private folder Settings keeps Sutra out of, because reading anything inside it would
+    /// raise macOS's privacy prompt.
+    KeptOut(PrivateFolder),
     /// The folder no longer exists, or lies on a volume that is not mounted (a locked worktree).
     Missing,
     /// The folder exists but cannot be listed. Inside the App Sandbox every folder outside the

@@ -116,8 +116,8 @@ fn merge_folder(dir: PathBuf, mut group: Vec<Environment>) -> Environment {
 mod tests {
     use super::super::tests::units_of;
     use super::*;
-    use crate::map::ScanOptions;
     use crate::map::test_support::{DEAD_PID, LiveProcess, TempDir, environment_at};
+    use crate::map::{PrivateFolder, ScanOptions};
     use crate::model::{State, UnitStatus};
 
     /// Each folder's merged environment, with no folder off limits.
@@ -365,15 +365,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_the_published_folder_inside_a_private_folder_unless_the_edition_enters_it() {
+    fn merge_keeps_the_published_folder_inside_a_private_folder_unless_settings_let_it_in() {
         let fixture = TempDir::new("devrunner-merge-private");
         let app = fixture.root().to_path_buf().join("Desktop").join("app");
         fs::create_dir_all(&app).unwrap();
         let published = fixture.root().to_path_buf().join("Desktop").join("link");
         std::os::unix::fs::symlink(&app, &published).unwrap();
         let global = || env(published.clone(), false, DEAD_PID, 0, &[]);
-        let entering_them = ScanOptions {
-            include_private_folders: true,
+        let desktop = ScanOptions {
+            private_folders: [PrivateFolder::Desktop].into(),
         };
 
         let kept = merged(
@@ -381,11 +381,7 @@ mod tests {
             Vec::new(),
             &fixture.boundary(&ScanOptions::default()),
         );
-        let resolved = merged(
-            vec![global()],
-            Vec::new(),
-            &fixture.boundary(&entering_them),
-        );
+        let resolved = merged(vec![global()], Vec::new(), &fixture.boundary(&desktop));
 
         assert_eq!(kept[0].dir, published);
         assert_eq!(resolved[0].dir, app);

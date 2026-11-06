@@ -1,10 +1,10 @@
 import SutraCore
 import SwiftUI
 
-/// The Settings window: how much free space Sutra keeps by cleaning by itself, and whether it looks
-/// in the folders macOS guards. Each control sends the user's choice to the core and shows what the
-/// core holds, so a choice the core asks about first shows only once the user agrees; the question
-/// shows here, over this window.
+/// The Settings window: how much free space Sutra keeps by cleaning by itself, and which of the
+/// folders macOS guards it watches. Each control sends the user's choice to the core and shows what
+/// the core holds, so a choice the core asks about first shows only once the user agrees; the
+/// question shows here, over this window.
 public struct SettingsView: View {
     private let dashboard: DashboardModel
 
@@ -29,10 +29,14 @@ public struct SettingsView: View {
                     Text(choice.label).tag(choice.bytes)
                 }
             }
-            Toggle("Look in Desktop, Documents and Downloads too", isOn: Binding(
-                get: { settings.includePrivateFolders },
-                set: { send(.includePrivateFolders(include: $0)) }
-            ))
+            Section("Also watch") {
+                ForEach(settings.privateFolders, id: \.folder) { privateFolder in
+                    Toggle(privateFolder.folder, isOn: Binding(
+                        get: { privateFolder.watched },
+                        set: { send(.watchPrivateFolder(folder: privateFolder.folder, watch: $0)) }
+                    ))
+                }
+            }
         }
         .id(redrawn)
         .formStyle(.grouped)

@@ -31,8 +31,8 @@ enum Native {
         panel.directoryURL = home
         // The contract leaves the panel's words to the window, whose panel it is.
         panel.message = "Sutra watches the worktrees, dev environments and build folders in the "
-            + "folder you choose, apart from Desktop, Documents and Downloads. Choose your home "
-            + "folder: your agents keep their sessions in ~/.claude and ~/.codex."
+            + "folder you choose. Choose your home folder: your agents keep their sessions in "
+            + "~/.claude and ~/.codex."
         panel.prompt = "Grant Access"
         guard panel.runModal() == .OK, let folder = panel.url else { return nil }
         return folder.path(percentEncoded: false)

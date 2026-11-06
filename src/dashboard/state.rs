@@ -25,9 +25,9 @@ use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
 use super::contents::{CardContext, banner, card, footer, list, toolbar};
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
-use super::{Action, Settings, WindowContents, format};
+use super::{Action, PrivateFolderSwitch, Settings, WindowContents, format};
 use crate::map::grant::{self, GrantError, Roots};
-use crate::map::{Snapshot, clean};
+use crate::map::{PrivateFolder, Snapshot, clean};
 use crate::notifications::Notifier;
 use dialogs::Dialogs;
 use settings::SavedSettings;
@@ -151,7 +151,9 @@ impl State {
             Action::TerminateEnvironment { pid } => self.terminate(pid),
             Action::Answer { dialog, yes } => self.answer(dialog, yes, now),
             Action::FolderGranted { folder } => self.folder_granted(folder),
-            Action::IncludePrivateFolders { include } => self.include_private_folders(include),
+            Action::WatchPrivateFolder { folder, watch } => {
+                self.watch_private_folder(&folder, watch);
+            }
         }
         self.pass_on_clean_news();
     }
@@ -257,7 +259,13 @@ impl State {
             settings: Settings {
                 keep_free: self.cleaning.keep_free_floor(),
                 keep_free_choices: cleaning::keep_free_choices(),
-                include_private_folders: self.settings.include_private_folders,
+                private_folders: PrivateFolder::ALL
+                    .into_iter()
+                    .map(|folder| PrivateFolderSwitch {
+                        folder: folder.name().to_string(),
+                        watched: self.settings.watched_private_folders.contains(&folder),
+                    })
+                    .collect(),
             },
         }
     }
@@ -314,15 +322,23 @@ impl State {
         self.start_engine();
     }
 
-    /// The user chose whether Sutra walks Desktop, Documents and Downloads: keep it for the next
-    /// run, and start the engine afresh on what the scanner may now enter.
-    fn include_private_folders(&mut self, include: bool) {
-        if self.settings.include_private_folders == include {
+    /// The user chose whether Sutra watches the private folder named `folder`: keep it for the next
+    /// run, and start the engine afresh on what the scanner may now enter. A name the window could
+    /// only have made up changes nothing.
+    fn watch_private_folder(&mut self, folder: &str, watch: bool) {
+        let Some(folder) = PrivateFolder::named(folder) else {
             return;
+        };
+        let watched = &mut self.settings.watched_private_folders;
+        let changed = if watch {
+            watched.insert(folder)
+        } else {
+            watched.remove(&folder)
+        };
+        if changed {
+            self.save_settings();
+            self.start_engine();
         }
-        self.settings.include_private_folders = include;
-        self.save_settings();
-        self.start_engine();
     }
 
     /// The user chose how much free space Sutra keeps by cleaning by itself. Turning that off goes

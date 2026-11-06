@@ -53,12 +53,7 @@ private struct Happening: View {
         if card.unreadable != nil || !card.agents.isEmpty || !card.units.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 if let unreadable = card.unreadable {
-                    Label {
-                        Text(unreadable)
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .symbolRenderingMode(.multicolor)
-                    }
+                    UnreadableLine(unreadable: unreadable)
                 }
                 if !card.agents.isEmpty {
                     WrappingLine(spacing: 6) {
@@ -74,6 +69,31 @@ private struct Happening: View {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Why the folder cannot be read. A folder kept out by the user's own choice gets a quiet sign, so
+/// the warning sign stays for a folder that is missing or refused.
+private struct UnreadableLine: View {
+    let unreadable: Unreadable
+
+    var body: some View {
+        switch unreadable.look {
+        case .keptOut:
+            Label {
+                Text(unreadable.reason)
+            } icon: {
+                Image(systemName: "eye.slash")
+            }
+            .foregroundStyle(.secondary)
+        case .failed:
+            Label {
+                Text(unreadable.reason)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .symbolRenderingMode(.multicolor)
             }
         }
     }

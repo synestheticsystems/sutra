@@ -1,5 +1,5 @@
 //! The settings: keeping free space only after a yes, a setting that cannot be saved, and the
-//! private folders, whose change makes the map afresh.
+//! private folders to watch, whose change makes the map afresh.
 
 use super::*;
 use crate::map::test_support::snapshot_of;
@@ -53,22 +53,66 @@ fn a_setting_that_cannot_be_saved_is_kept_for_this_run_and_said_to_be() {
 }
 
 #[test]
-fn including_private_folders_is_kept_for_the_next_run_and_the_map_is_made_afresh() {
+fn documents_alone_is_watched_until_the_user_chooses_otherwise() {
+    let fixture = TempDir::new("state-private-folders-default");
+    let (state, _inbox) = dashboard(&fixture);
+    let switches: Vec<(String, bool)> = state
+        .contents(now())
+        .settings
+        .private_folders
+        .into_iter()
+        .map(|switch| (switch.folder, switch.watched))
+        .collect();
+    assert_eq!(
+        switches,
+        [
+            ("Desktop".to_string(), false),
+            ("Documents".to_string(), true),
+            ("Downloads".to_string(), false),
+        ]
+    );
+}
+
+#[test]
+fn watching_a_private_folder_is_kept_for_the_next_run_and_the_map_is_made_afresh() {
     let fixture = TempDir::new("state-private-folders");
     let (mut state, _inbox) = dashboard(&fixture);
     state.show(Arc::new(snapshot_of(Vec::new())), now());
+    let watch = |state: &mut State, folder: &str, watch| {
+        let folder = folder.to_string();
+        state.perform(Action::WatchPrivateFolder { folder, watch }, now());
+    };
+    let watched = |state: &State, name: &str| {
+        let switches = state.contents(now()).settings.private_folders;
+        switches
+            .into_iter()
+            .any(|switch| switch.folder == name && switch.watched)
+    };
 
-    state.perform(Action::IncludePrivateFolders { include: false }, now());
+    watch(&mut state, "Documents", true);
     assert!(
         state.snapshot.is_some(),
-        "the same choice again changes nothing"
+        "watching a folder already watched changes nothing"
+    );
+    watch(&mut state, "Pictures", true);
+    assert!(
+        state.snapshot.is_some(),
+        "nor does a folder that is not one"
     );
 
-    state.perform(Action::IncludePrivateFolders { include: true }, now());
-    let contents = state.contents(now());
-    assert!(contents.settings.include_private_folders);
-    assert_eq!(contents.list, List::Scanning, "the map is made afresh");
+    watch(&mut state, "Desktop", true);
+    assert!(watched(&state, "Desktop") && watched(&state, "Documents"));
+    assert_eq!(
+        state.contents(now()).list,
+        List::Scanning,
+        "the map is made afresh"
+    );
+    watch(&mut state, "Documents", false);
+    assert!(!watched(&state, "Documents"));
     let saved = SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
-    assert!(saved.include_private_folders);
+    assert_eq!(
+        saved.watched_private_folders,
+        [PrivateFolder::Desktop].into()
+    );
     state.stop();
 }

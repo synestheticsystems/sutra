@@ -1,6 +1,7 @@
-//! What the user set that outlasts a run: the free space to keep, and whether to look in the
-//! folders macOS guards.
+//! What the user set that outlasts a run: the free space to keep, and which of the folders macOS
+//! guards to watch.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -9,26 +10,37 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::home;
-use crate::map::ScanOptions;
+use crate::map::{PrivateFolder, ScanOptions};
 
 const SETTINGS_FILE: &str = "settings.json";
 
 /// The settings as saved. A setting missing from the file, as one saved before the setting
 /// existed, takes its default.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct SavedSettings {
     /// Below this much free space Sutra cleans by itself. `None` leaves cleaning to the user.
     pub(super) keep_free_bytes: Option<u64>,
-    /// Look in Desktop, Documents and Downloads too (see `ScanOptions`).
-    pub(super) include_private_folders: bool,
+    /// The private folders to watch (see `ScanOptions`).
+    pub(super) watched_private_folders: BTreeSet<PrivateFolder>,
+}
+
+impl Default for SavedSettings {
+    /// Documents is watched from the start, because Codex Desktop keeps each task's folder there,
+    /// with the worktree the task works in.
+    fn default() -> Self {
+        SavedSettings {
+            keep_free_bytes: None,
+            watched_private_folders: BTreeSet::from([PrivateFolder::Documents]),
+        }
+    }
 }
 
 impl SavedSettings {
     /// What the scanner may enter.
     pub(super) fn scan_options(&self) -> ScanOptions {
         ScanOptions {
-            include_private_folders: self.include_private_folders,
+            private_folders: self.watched_private_folders.clone(),
         }
     }
 }
@@ -89,7 +101,10 @@ mod tests {
         let path = fixture.path("Sutra/settings.json");
         let settings = SavedSettings {
             keep_free_bytes: Some(100_000_000_000),
-            include_private_folders: true,
+            watched_private_folders: BTreeSet::from([
+                PrivateFolder::Desktop,
+                PrivateFolder::Downloads,
+            ]),
         };
 
         settings.save(Some(&path)).unwrap();
@@ -98,13 +113,34 @@ mod tests {
     }
 
     #[test]
-    fn a_file_saved_before_a_setting_existed_gives_it_its_default_which_keeps_out_of_private_folders()
-     {
+    fn a_file_saved_before_a_setting_existed_gives_it_its_default_which_watches_documents_alone() {
         let fixture = TempDir::new("settings-older");
         let older = fixture.write("settings.json", r#"{"keep_free_bytes": 25000000000}"#);
         let settings = SavedSettings::load(Some(&older)).unwrap();
         assert_eq!(settings.keep_free_bytes, Some(25_000_000_000));
-        assert!(!settings.scan_options().include_private_folders);
+        assert_eq!(
+            settings.scan_options().private_folders,
+            BTreeSet::from([PrivateFolder::Documents])
+        );
+    }
+
+    #[test]
+    fn watching_no_private_folder_is_kept_rather_than_taken_for_the_default() {
+        let fixture = TempDir::new("settings-none-watched");
+        let path = fixture.path("settings.json");
+        let settings = SavedSettings {
+            watched_private_folders: BTreeSet::new(),
+            ..SavedSettings::default()
+        };
+
+        settings.save(Some(&path)).unwrap();
+
+        assert!(
+            SavedSettings::load(Some(&path))
+                .unwrap()
+                .watched_private_folders
+                .is_empty()
+        );
     }
 
     #[test]

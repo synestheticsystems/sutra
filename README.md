@@ -16,7 +16,7 @@ Sutra knows. It's a Mac app that maps every git worktree and project folder in y
 
 Then it cleans up. Sutra deletes a Rust build folder the way `cargo clean` would, and never while a build is still writing to it. Tell it how much free space to keep, and when the disk runs short it clears out the build folders that have been quiet the longest, all by itself, leaving alone anything an agent or a dev server is using. Your `node_modules` stay exactly where you left them. We would never.
 
-The folders that matter get a card: anything with an agent, a dev environment, recent activity or a hefty build folder. The quiet ones fold away, one click from view. Desktop, Documents and Downloads stay out of it until you invite them in from Settings. We have manners.
+The folders that matter get a card: anything with an agent, a dev environment, recent activity or a hefty build folder. The quiet ones fold away, one click from view. We look in Documents, because Codex keeps its worktrees there. Desktop and Downloads stay out of it until you invite them in from Settings. We have manners.
 
 ## Install
 

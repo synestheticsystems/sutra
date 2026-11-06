@@ -85,7 +85,7 @@ impl State {
         let forbidden = |folder: &Path| {
             matches!(
                 scan::folder_access(folder, &self.boundary),
-                FolderAccess::Denied | FolderAccess::PrivateFolder
+                FolderAccess::Denied | FolderAccess::KeptOut(_)
             )
         };
         let folders: BTreeSet<&Path> = self

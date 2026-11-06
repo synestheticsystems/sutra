@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::dashboard::cleaning::Cleaning;
-use crate::dashboard::{Card, Chip, format};
+use crate::dashboard::{Card, Chip, Unreadable, UnreadableLook, format};
 use crate::map::{FolderAccess, Project, Snapshot};
 use crate::notifications::Notifier;
 
@@ -41,7 +41,7 @@ pub(super) fn card(project: &Project, map: &Snapshot, ctx: &CardContext) -> Card
             tooltip: header::worktree(repo, ctx.home),
         }),
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
-        unreadable: unreadable_reason(project, &map.roots, map.sandboxed, ctx.home),
+        unreadable: unreadable(project, &map.roots, map.sandboxed),
         agents: agents::lozenges(&project.agents, ctx.now),
         units: project
             .environment
@@ -55,37 +55,28 @@ pub(super) fn card(project: &Project, map: &Snapshot, ctx: &CardContext) -> Card
     }
 }
 
-/// Why the card shows nothing from inside its folder: `folder missing`, `can't read this folder`,
-/// `in Documents, not watched`, or, in the store edition for a folder outside every root,
-/// `outside the granted folder`. `None` for a folder Sutra reads.
-fn unreadable_reason(
-    project: &Project,
-    roots: &[PathBuf],
-    sandboxed: bool,
-    home: &Path,
-) -> Option<String> {
-    let reason = match project.access {
+/// Why the card shows nothing from inside its folder. Kept out by the user's choice: `in Desktop,
+/// not watched`, or, in the store edition for a folder outside every root, `outside the granted
+/// folder`. Failed: `folder missing` or `can't read this folder`. `None` for a folder Sutra reads.
+fn unreadable(project: &Project, roots: &[PathBuf], sandboxed: bool) -> Option<Unreadable> {
+    let (reason, look) = match project.access {
         FolderAccess::Readable => return None,
-        FolderAccess::Missing => "folder missing".to_string(),
+        FolderAccess::KeptOut(private) => (
+            format!("in {}, not watched", private.name()),
+            UnreadableLook::KeptOut,
+        ),
         FolderAccess::Denied
             if sandboxed && !roots.iter().any(|root| project.path.starts_with(root)) =>
         {
-            "outside the granted folder".to_string()
+            (
+                "outside the granted folder".to_string(),
+                UnreadableLook::KeptOut,
+            )
         }
-        FolderAccess::Denied => "can't read this folder".to_string(),
-        FolderAccess::PrivateFolder => {
-            let private_folder = project
-                .path
-                .strip_prefix(home)
-                .ok()
-                .and_then(|inside| inside.components().next());
-            match private_folder {
-                Some(folder) => format!("in {}, not watched", folder.as_os_str().to_string_lossy()),
-                None => "in a private folder, not watched".to_string(),
-            }
-        }
+        FolderAccess::Denied => ("can't read this folder".to_string(), UnreadableLook::Failed),
+        FolderAccess::Missing => ("folder missing".to_string(), UnreadableLook::Failed),
     };
-    Some(reason)
+    Some(Unreadable { reason, look })
 }
 
 #[cfg(test)]
@@ -93,6 +84,7 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::{agent, now, project, snapshot};
+    use crate::map::PrivateFolder;
     use crate::map::test_support::{environment_at, project_at};
     use crate::model::{Environment, UnitStatus};
 
@@ -100,47 +92,48 @@ mod tests {
 
     #[test]
     fn a_folder_that_reads_needs_no_label() {
-        let home = Path::new(HOME);
         let readable = project_at("/Users/dev/code/app");
-        assert_eq!(unreadable_reason(&readable, &[], true, home), None);
+        assert_eq!(unreadable(&readable, &[], true), None);
     }
 
     #[test]
-    fn an_unreadable_folder_says_why_in_true_words() {
-        let home = Path::new(HOME);
+    fn an_unreadable_folder_says_why_in_true_words_and_looks_quiet_when_kept_out_by_choice() {
         let grant = [PathBuf::from("/Users/dev/code")];
         let label = |path, access, sandboxed| {
             let project = Project {
                 access,
                 ..project_at(path)
             };
-            unreadable_reason(&project, &grant, sandboxed, home).unwrap()
+            let unreadable = unreadable(&project, &grant, sandboxed).unwrap();
+            (unreadable.reason, unreadable.look)
         };
+        let failed = |reason: &str| (reason.to_string(), UnreadableLook::Failed);
+        let kept_out = |reason: &str| (reason.to_string(), UnreadableLook::KeptOut);
         assert_eq!(
             label("/Users/dev/code/gone", FolderAccess::Missing, false),
-            "folder missing"
+            failed("folder missing")
         );
         assert_eq!(
             label("/private/tmp/wt", FolderAccess::Denied, true),
-            "outside the granted folder"
+            kept_out("outside the granted folder")
         );
         assert_eq!(
             label("/private/tmp/wt", FolderAccess::Denied, false),
-            "can't read this folder",
+            failed("can't read this folder"),
             "the direct edition has no grant"
         );
         assert_eq!(
             label("/Users/dev/code/sealed", FolderAccess::Denied, true),
-            "can't read this folder",
+            failed("can't read this folder"),
             "inside the grant, the grant is not why"
         );
         assert_eq!(
             label(
-                "/Users/dev/Documents/app",
-                FolderAccess::PrivateFolder,
+                "/Users/dev/Desktop/app",
+                FolderAccess::KeptOut(PrivateFolder::Desktop),
                 false
             ),
-            "in Documents, not watched"
+            kept_out("in Desktop, not watched")
         );
     }
 

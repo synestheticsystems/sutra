@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::map::{FolderAccess, ScanOptions};
+use crate::map::{FolderAccess, PrivateFolder, ScanOptions};
 
 /// Build output: thousands of directories each, and never a project of its own.
 const BUILD_OUTPUT_NAMES: [&str; 2] = ["target", "node_modules"];
@@ -21,9 +21,6 @@ const SYSTEM_FOLDERS: [&str; 6] = [
     "Movies",
     "Applications",
 ];
-
-/// Home folders macOS guards with a privacy prompt the first time an app reads anything inside.
-const PRIVATE_FOLDERS: [&str; 3] = ["Desktop", "Documents", "Downloads"];
 
 /// Tool caches, toolchains and VM images under the home folder. On Daniel's M4 Max (2026-10-31)
 /// they held about 120k of the 146k directories a home walk visits, and their only repositories
@@ -71,8 +68,8 @@ pub struct Boundary {
     roots: Vec<PathBuf>,
     /// For each parent folder, the names of its children the walk skips.
     skipped_children: HashMap<PathBuf, HashSet<OsString>>,
-    /// Private folders this edition keeps out of.
-    forbidden: Vec<PathBuf>,
+    /// The private folders Settings keeps Sutra out of, each with its path.
+    kept_out: Vec<(PrivateFolder, PathBuf)>,
     /// Canonical.
     home: PathBuf,
 }
@@ -82,17 +79,17 @@ impl Boundary {
         // A root that cannot be resolved is kept as given; the walk then counts it as unreadable.
         let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let home = canonical(home);
-        let forbidden: Vec<PathBuf> = if opts.include_private_folders {
-            Vec::new()
-        } else {
-            PRIVATE_FOLDERS.iter().map(|name| home.join(name)).collect()
-        };
+        let kept_out: Vec<(PrivateFolder, PathBuf)> = PrivateFolder::ALL
+            .into_iter()
+            .filter(|folder| !opts.private_folders.contains(folder))
+            .map(|folder| (folder, home.join(folder.name())))
+            .collect();
         let mut skipped_children: HashMap<PathBuf, HashSet<OsString>> = HashMap::new();
         let skipped = SYSTEM_FOLDERS
             .iter()
             .chain(&TOOL_CACHES)
             .map(|rel| home.join(rel))
-            .chain(forbidden.iter().cloned());
+            .chain(kept_out.iter().map(|(_, path)| path.clone()));
         for path in skipped {
             if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
                 skipped_children
@@ -104,7 +101,7 @@ impl Boundary {
         Boundary {
             roots: roots.iter().map(|root| canonical(root)).collect(),
             skipped_children,
-            forbidden,
+            kept_out,
             home,
         }
     }
@@ -128,17 +125,25 @@ impl Boundary {
         BUILD_OUTPUT_NAMES.iter().any(|skipped| name == *skipped)
     }
 
-    /// Whether Sutra may touch `path` at all, even to `stat` or resolve it. A path inside a private
-    /// folder this edition keeps out of is off limits, because reading it raises the privacy
-    /// prompt, unless a root lies inside that folder and holds the path: the user chose that root.
+    /// Whether Sutra may touch `path` at all, even to `stat` or resolve it (see `kept_out_by`).
     pub fn may_read(&self, path: &Path) -> bool {
-        self.forbidden.iter().all(|folder| {
-            !path.starts_with(folder)
-                || self
-                    .roots
-                    .iter()
-                    .any(|root| root.starts_with(folder) && path.starts_with(root))
-        })
+        self.kept_out_by(path).is_none()
+    }
+
+    /// The private folder Settings keeps Sutra out of that holds `path`, if one does. Touching such
+    /// a path, even to `stat` or resolve it, raises the privacy prompt. A root that lies inside the
+    /// folder lets in what it holds: the user chose that root.
+    pub fn kept_out_by(&self, path: &Path) -> Option<PrivateFolder> {
+        self.kept_out
+            .iter()
+            .find(|(_, folder)| {
+                path.starts_with(folder)
+                    && !self
+                        .roots
+                        .iter()
+                        .any(|root| root.starts_with(folder) && path.starts_with(root))
+            })
+            .map(|(private, _)| *private)
     }
 
     /// The folders strictly inside `dir` that the walk skips. Sizing a folder skips them too, so a
@@ -151,11 +156,12 @@ impl Boundary {
             .collect()
     }
 
-    /// The private folders this edition keeps out of that lie inside a root, so the walk skips
+    /// The private folders Settings keeps Sutra out of that lie inside a root, so the walk skips
     /// them.
     pub fn skipped_private_folders(&self) -> Vec<PathBuf> {
-        self.forbidden
+        self.kept_out
             .iter()
+            .map(|(_, folder)| folder)
             .filter(|folder| self.roots.iter().any(|root| folder.starts_with(root)))
             .cloned()
             .collect()
@@ -164,10 +170,9 @@ impl Boundary {
 
 /// Whether Sutra reads `folder`: one it may not touch is never probed, and any other is listed.
 pub fn folder_access(folder: &Path, boundary: &Boundary) -> FolderAccess {
-    if boundary.may_read(folder) {
-        listing_access(folder)
-    } else {
-        FolderAccess::PrivateFolder
+    match boundary.kept_out_by(folder) {
+        Some(private) => FolderAccess::KeptOut(private),
+        None => listing_access(folder),
     }
 }
 
@@ -209,21 +214,51 @@ mod tests {
     }
 
     #[test]
-    fn skipped_private_folders_are_those_inside_a_root_unless_the_edition_enters_them() {
+    fn skipped_private_folders_are_those_inside_a_root_that_settings_keep_out() {
         let home = PathBuf::from("/Users/me");
-        let private: Vec<PathBuf> = ["Desktop", "Documents", "Downloads"]
-            .iter()
-            .map(|name| home.join(name))
-            .collect();
         let rooted_at = |root: &Path, opts| {
             Boundary::new(&[root.to_path_buf()], &home, &opts).skipped_private_folders()
         };
-        assert_eq!(rooted_at(&home, ScanOptions::default()), private);
+        let all_three: Vec<PathBuf> = ["Desktop", "Documents", "Downloads"]
+            .iter()
+            .map(|name| home.join(name))
+            .collect();
+        assert_eq!(rooted_at(&home, ScanOptions::default()), all_three);
         assert!(rooted_at(&home.join("code"), ScanOptions::default()).is_empty());
-        let entering_them = ScanOptions {
-            include_private_folders: true,
+        let documents = ScanOptions {
+            private_folders: [PrivateFolder::Documents].into(),
         };
-        assert!(rooted_at(&home, entering_them).is_empty());
+        assert_eq!(
+            rooted_at(&home, documents),
+            [home.join("Desktop"), home.join("Downloads")]
+        );
+    }
+
+    #[test]
+    fn each_private_folder_is_kept_out_on_its_own_and_a_root_inside_one_lets_in_what_it_holds() {
+        let home = PathBuf::from("/Users/me");
+        let documents = ScanOptions {
+            private_folders: [PrivateFolder::Documents].into(),
+        };
+        let boundary = Boundary::new(std::slice::from_ref(&home), &home, &documents);
+        assert_eq!(boundary.kept_out_by(&home.join("Documents/app")), None);
+        assert_eq!(
+            boundary.kept_out_by(&home.join("Desktop/app")),
+            Some(PrivateFolder::Desktop)
+        );
+        assert_eq!(
+            boundary.kept_out_by(&home.join("Downloads")),
+            Some(PrivateFolder::Downloads)
+        );
+        assert_eq!(boundary.kept_out_by(&home.join("DesktopTools")), None);
+
+        let chosen = home.join("Desktop/code");
+        let inside = Boundary::new(std::slice::from_ref(&chosen), &home, &documents);
+        assert_eq!(inside.kept_out_by(&chosen.join("app")), None);
+        assert_eq!(
+            inside.kept_out_by(&home.join("Desktop/other")),
+            Some(PrivateFolder::Desktop)
+        );
     }
 
     #[test]
@@ -245,7 +280,7 @@ mod tests {
         let documents = fixture.dir("Documents/app");
         assert_eq!(
             folder_access(&documents, &boundary),
-            FolderAccess::PrivateFolder
+            FolderAccess::KeptOut(PrivateFolder::Documents)
         );
     }
 }

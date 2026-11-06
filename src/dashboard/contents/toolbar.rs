@@ -115,8 +115,8 @@ fn clean_menu(offer: Option<IdleOffer>, floor: Option<u64>) -> Vec<MenuEntry> {
     menu
 }
 
-/// `Watching ~ (not Desktop, Documents or Downloads)`: the roots, and the private folders inside
-/// them the scan skips.
+/// `Watching ~ (not Desktop or Downloads)`: the roots, and the private folders inside them that
+/// Settings keeps the scan out of.
 fn watching(roots: &[PathBuf], skipped: &[PathBuf], home: &Path) -> String {
     let watched = format::roots(roots, home);
     let names: Vec<String> = skipped
