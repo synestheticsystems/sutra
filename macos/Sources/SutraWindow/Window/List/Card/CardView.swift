@@ -29,7 +29,7 @@ public struct CardView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             if let tray = card.tray {
-                TrayView(tray: tray)
+                TrayView(tray: tray, location: card.location, hovered: forcedHover ?? pointerOver)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

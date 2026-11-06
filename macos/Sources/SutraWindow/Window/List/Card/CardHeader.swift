@@ -1,8 +1,8 @@
 import SutraCore
 import SwiftUI
 
-/// A card's identity: the name, the branch chip, and the age at the right. While the pointer is
-/// over the card, the folder's full path and the buttons that open it take the age's place.
+/// A card's identity: the name, the branch chip, and the age at the right, whose place the buttons
+/// that open the folder take while the pointer is over the card.
 struct CardHeader: View {
     let card: Card
     let hovered: Bool
@@ -15,20 +15,20 @@ struct CardHeader: View {
                 VStack(alignment: .leading, spacing: 4) { name; chip }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let age = card.age {
-                Text(age)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .opacity(hovered ? 0 : 1)
-            }
-        }
-        // Drawn over the line rather than in it, so a hovered card keeps its size: a card that
-        // grew under the pointer would push the cards below it away as the pointer moved down the
-        // list. The path covers what it needs of the name or branch instead of reflowing them.
-        .overlay(alignment: Alignment(horizontal: .trailing, vertical: .firstTextBaseline)) {
-            if hovered {
-                HoveredLocation(card: card)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+            // The age and the buttons share one place as wide as the wider of them, so the name
+            // and the branch never reflow when the pointer comes or goes, and a card never grows
+            // under the pointer and pushes the cards below it away.
+            ZStack(alignment: .trailing) {
+                if let age = card.age {
+                    Text(age)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .opacity(hovered ? 0 : 1)
+                }
+                OpenButtons(path: card.path)
+                    .opacity(hovered ? 1 : 0)
+                    .allowsHitTesting(hovered)
+                    .accessibilityHidden(!hovered)
             }
         }
     }
@@ -57,44 +57,21 @@ struct CardHeader: View {
     }
 }
 
-/// Where the folder is, as its full path, and a button for each app that opens it: Visual Studio
-/// Code when it is installed, and Finder. It lies on the card's own surface, which fades in over
-/// whatever of the name or branch it covers.
-private struct HoveredLocation: View {
-    let card: Card
+/// A button for each app that opens the folder: Visual Studio Code when it is installed, and
+/// Finder.
+private struct OpenButtons: View {
+    let path: String
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(card.location)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(card.location)
+        HStack(spacing: 4) {
             if let vsCode = Native.vsCode {
-                OpenButton(app: vsCode) { Native.open(card.path, in: vsCode) }
+                OpenButton(app: vsCode) { Native.open(path, in: vsCode) }
             }
             if let finder = Native.finder {
-                OpenButton(app: finder) { Native.openInFinder(card.path) }
+                OpenButton(app: finder) { Native.openInFinder(path) }
             }
         }
-        .padding(.leading, Self.fade + 4)
-        // Tall enough to hide the name's ascenders and descenders where it covers them.
-        .padding(.vertical, 4)
-        .background {
-            CardFill(waiting: card.waiting)
-                .mask {
-                    HStack(spacing: 0) {
-                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: Self.fade)
-                        Rectangle()
-                    }
-                }
-        }
     }
-
-    /// How far the surface takes to fade in over what it covers.
-    private static let fade: CGFloat = 20
 }
 
 /// A button showing an app's icon, which opens the card's folder in that app.
@@ -107,6 +84,9 @@ private struct OpenButton: View {
             Image(nsImage: app.icon)
                 .resizable()
                 .frame(width: 16, height: 16)
+                // A target a little larger than the icon, within the line's own height.
+                .frame(width: 20, height: 20)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .help("Open in \(app.name)")

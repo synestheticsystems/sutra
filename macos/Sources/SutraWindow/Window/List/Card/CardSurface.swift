@@ -29,18 +29,3 @@ struct CardSurface: View {
         }
     }
 }
-
-/// The card's surface as it shows at this moment, wash and all, under what is drawn over the
-/// card's contents and must look like part of the card.
-struct CardFill: View {
-    let waiting: Bool
-
-    var body: some View {
-        ZStack {
-            Surface.card
-            if waiting {
-                SwellLayer(swell: Surface.wash, shape: .rectangle(cornerRadius: 0))
-            }
-        }
-    }
-}
