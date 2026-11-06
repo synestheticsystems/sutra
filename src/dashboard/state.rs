@@ -396,7 +396,8 @@ impl State {
         }
     }
 
-    /// The user chose Clean on the build folder at `folder`, as a card named it.
+    /// The user chose Clean on the build folder at `folder`, as a card named it with
+    /// `format::path_text`.
     fn clean(&mut self, folder: &str) {
         let Some(map) = self.snapshot.clone() else {
             return;
@@ -405,7 +406,7 @@ impl State {
             let dir = project
                 .artifacts
                 .iter()
-                .find(|dir| dir.path.as_os_str() == folder)?;
+                .find(|dir| format::path_text(&dir.path) == folder)?;
             Some((project, dir))
         });
         // The folder left the map since the card showed it.

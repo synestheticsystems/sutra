@@ -46,6 +46,37 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
 }
 
 #[test]
+fn a_clean_chosen_on_a_folder_whose_name_is_not_text_starts_on_it_and_not_on_one_shown_alike() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    // Neither folder is made, as APFS refuses a name that is not text: the clean only begins.
+    let fixture = TempDir::new("state-clean-not-text");
+    let odd = fixture.root().join(OsStr::from_bytes(b"\xffapp"));
+    let shown_alike = fixture.path("\u{fffd}app");
+    let (mut state, _inbox) = dashboard(&fixture);
+    let with_target = |project: &Path| {
+        let target = cargo_target(project.join("target"), measured(5_000));
+        active_at(project.to_path_buf(), vec![target])
+    };
+    let map = snapshot_of(vec![with_target(&shown_alike), with_target(&odd)]);
+    state.show(Arc::new(map), now());
+
+    clean(&mut state, &odd.join("target"));
+    let contents = state.contents(now());
+    let progress = |project: &Path| {
+        let tray = card_at(&contents, project).tray.as_ref();
+        tray.and_then(|tray| tray.progress)
+    };
+    assert_eq!(progress(&odd), Some(0.0), "the folder the card named");
+    assert_eq!(
+        progress(&shown_alike),
+        None,
+        "nor the one whose name shows alike"
+    );
+}
+
+#[test]
 fn a_clean_reaching_other_projects_asks_once_and_the_answer_decides_it() {
     let fixture = TempDir::new("state-clean-asks");
     fixture.write("app/target/debug/big", [1; 64 * 1024]);

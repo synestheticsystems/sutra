@@ -7,11 +7,23 @@ use std::time::{Duration, SystemTime};
 
 use crate::map::{ArtifactDir, DirUsage};
 
-/// `path` as the window receives it, which an action on it names back: text, as every path on APFS
-/// is. A path that is not text, which only a volume of another format holds, loses its odd bytes
-/// here, so an action naming it finds nothing on the map.
+/// `path` as the window receives it: what the window knows a folder by, and what an action on the
+/// folder names it back by, so no two folders may read the same. A path that is text reads as
+/// itself, as every path does on a volume macOS formats: APFS and ExFAT refuse a name that is not
+/// text, and HFS+ and FAT keep its odd bytes as `%FF`. A volume that passes names through as they
+/// are, such as an NFS share, can hold one, and each byte of it that is not text reads as a NUL
+/// and two hex digits. No path on disk holds a NUL, so that text names no other folder, and an
+/// action naming it finds the folder again. Finder and the editors, which take the text as a path,
+/// find nothing there.
 pub(super) fn path_text(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    let mut text = String::new();
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        text.push_str(chunk.valid());
+        for byte in chunk.invalid() {
+            text.push_str(&format!("\0{byte:02x}"));
+        }
+    }
+    text
 }
 
 /// `path` with a leading home folder written `~`.
@@ -180,15 +192,15 @@ mod tests {
     const HOME: &str = "/Users/dev";
 
     #[test]
-    fn a_path_that_is_not_text_loses_its_odd_bytes_and_so_names_no_folder_back() {
+    fn a_path_that_is_not_text_keeps_its_odd_bytes_so_no_other_folder_reads_the_same() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
         assert_eq!(path_text(Path::new("/code/app")), "/code/app");
         let odd = Path::new(OsStr::from_bytes(b"/code/\xffapp"));
-        let text = path_text(odd);
-        assert_eq!(text, "/code/\u{fffd}app");
-        assert_ne!(odd.as_os_str(), OsStr::new(&text));
+        assert_eq!(path_text(odd), "/code/\0ffapp");
+        let shown_alike = Path::new("/code/\u{fffd}app");
+        assert_eq!(path_text(shown_alike), "/code/\u{fffd}app");
     }
 
     #[test]

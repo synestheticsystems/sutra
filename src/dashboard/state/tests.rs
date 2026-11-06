@@ -79,14 +79,15 @@ fn active_at(path: PathBuf, artifacts: Vec<crate::map::ArtifactDir>) -> Project 
     }
 }
 
-/// The card `contents` shows for the project at `path`.
+/// The card `contents` shows for the project at `path`, which the window knows by its text.
 fn card_at<'a>(contents: &'a WindowContents, path: &Path) -> &'a Card {
     let List::Rows { rows } = &contents.list else {
         panic!("no rows: {:?}", contents.list);
     };
+    let path = format::path_text(path);
     rows.iter()
         .find_map(|row| match row {
-            ListRow::Card { card } if Path::new(&card.path) == path => Some(card.as_ref()),
+            ListRow::Card { card } if card.path == path => Some(card.as_ref()),
             _ => None,
         })
         .expect("a card for the project")
