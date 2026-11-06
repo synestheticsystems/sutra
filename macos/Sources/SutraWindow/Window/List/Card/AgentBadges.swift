@@ -17,6 +17,24 @@ struct AgentBadges: View {
     }
 }
 
+/// The agents on a card's tray, or on a folded repository's line: the sessions, whose faces move,
+/// then past a divider the subagents, whose faces hold still.
+struct TrayAgents: View {
+    let sessions: [AgentBadge]
+    let subagents: [AgentBadge]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            AgentBadges(badges: sessions, moves: true)
+            if !sessions.isEmpty && !subagents.isEmpty {
+                Divider()
+                    .frame(height: 12)
+            }
+            AgentBadges(badges: subagents, moves: false)
+        }
+    }
+}
+
 /// One agent's robot: its tip says in words what the robot shows, and who the agent is, and a click
 /// opens its session.
 struct AgentBadgeView: View {

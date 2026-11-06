@@ -95,7 +95,10 @@ private struct RepositoryGroup: View {
         case .open(let cards):
             VStack(alignment: .leading, spacing: 8) {
                 header(open: true)
-                    .padding(.horizontal, 4)
+                    // The chevron where it stands on a folded group's surface, so it turns in
+                    // place.
+                    .padding(.leading, 15)
+                    .padding(.trailing, 4)
                     // A little more room above the line than below, so it reads as its cards'
                     // heading.
                     .padding(.top, 4)
@@ -109,7 +112,7 @@ private struct RepositoryGroup: View {
                 header(open: false)
                 if !sessions.isEmpty || !subagents.isEmpty {
                     // Laid out first and never cut, as on a card's tray.
-                    FoldedAgents(sessions: sessions, subagents: subagents)
+                    TrayAgents(sessions: sessions, subagents: subagents)
                         .fixedSize()
                         .layoutPriority(1)
                 }
@@ -152,24 +155,6 @@ private struct RepositoryGroup: View {
         .hoverTip(tooltip)
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(open ? "Open" : "Folded")
-    }
-}
-
-/// The agents in a folded group's worktrees, at its line's end as on a card's tray: the sessions,
-/// whose faces move, then past a divider the subagents, whose faces hold still.
-private struct FoldedAgents: View {
-    let sessions: [AgentBadge]
-    let subagents: [AgentBadge]
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AgentBadges(badges: sessions, moves: true)
-            if !sessions.isEmpty && !subagents.isEmpty {
-                Divider()
-                    .frame(height: 12)
-            }
-            AgentBadges(badges: subagents, moves: false)
-        }
     }
 }
 

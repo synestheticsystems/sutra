@@ -50,24 +50,6 @@ struct TrayView: View {
     }
 }
 
-/// The agents on the tray: the sessions, whose faces move, then past a divider the subagents, whose
-/// faces hold still.
-private struct TrayAgents: View {
-    let sessions: [AgentBadge]
-    let subagents: [AgentBadge]
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AgentBadges(badges: sessions, moves: true)
-            if !sessions.isEmpty && !subagents.isEmpty {
-                Divider()
-                    .frame(height: 12)
-            }
-            AgentBadges(badges: subagents, moves: false)
-        }
-    }
-}
-
 /// The folder's disk use: an alert sign when it could not be sized, its total, then its build
 /// folders, wrapping where the tray runs out of width.
 private struct DiskUseLine: View {
