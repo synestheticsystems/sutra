@@ -202,9 +202,11 @@ impl Cleaning {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
-    use crate::dashboard::cleaning::CleanState;
     use crate::dashboard::cleaning::tests::{cleaning, prepared_at};
+    use crate::dashboard::cleaning::{CleanState, IdleOffer};
     use crate::map::clean::{Sharing, WORTH_CLEANING_BYTES};
     use crate::map::test_support::{TempDir, at, cargo_target, measured, project_at, snapshot_of};
 
@@ -288,8 +290,6 @@ mod tests {
             }),
             "the card shows the clean while the question is open"
         );
-        let map_now = snapshot_of(vec![project_at(fixture.path("app"))]);
-        assert!(cleaning.idle_offer(&map_now, at(100)).is_none());
         cleaning.start(
             &project_at(fixture.path("app")),
             &dir,
@@ -314,6 +314,51 @@ mod tests {
             fixture.root(),
         );
         assert_eq!(cleaning.running[0].clicked, folder, "a yes starts it");
+    }
+
+    #[test]
+    fn a_folder_asked_about_leaves_the_offer_and_cleaning_by_itself_until_the_answer() {
+        let fixture = TempDir::new("asking-off-the-offer");
+        let folder = fixture.dir("app/target");
+        let dir = cargo_target(folder.clone(), measured(5 * WORTH_CLEANING_BYTES));
+        // An idle project, so the toolbar offers its folder and cleaning by itself would pick it.
+        let app = Project {
+            artifacts: vec![dir.clone()],
+            ..project_at(fixture.path("app"))
+        };
+        let map = Arc::new(snapshot_of(vec![app.clone()]));
+        let mut cleaning = cleaning();
+        // No volume holds this much, so room is always short.
+        cleaning.set_keep_free_floor(Some(u64::MAX));
+        let offered = Some(IdleOffer {
+            folders: 1,
+            bytes: 5 * WORTH_CLEANING_BYTES,
+        });
+        assert_eq!(cleaning.idle_offer(&map, at(100)), offered);
+
+        cleaning.start(&app, &dir, Arc::clone(&map), fixture.root());
+        let prepared = Some(Ok(reaching(&folder, "fwd")));
+        cleaning.asking(&folder, prepared, None, at(100), fixture.root());
+        assert_eq!(cleaning.idle_offer(&map, at(100)), None);
+        let looked = Instant::now();
+        cleaning.keep_free_space(&map, looked, at(100), fixture.root());
+        assert!(
+            !cleaning.preparing_unasked,
+            "cleaning by itself passes it by"
+        );
+
+        cleaning.answered_clean(folder.clone(), None, None, at(200), fixture.root());
+        assert_eq!(
+            cleaning.idle_offer(&map, at(200)),
+            offered,
+            "a no offers it again"
+        );
+        let next_look = looked + Duration::from_secs(60);
+        cleaning.keep_free_space(&map, next_look, at(200), fixture.root());
+        assert!(
+            cleaning.preparing_unasked,
+            "and cleaning by itself may pick it"
+        );
     }
 
     #[test]
