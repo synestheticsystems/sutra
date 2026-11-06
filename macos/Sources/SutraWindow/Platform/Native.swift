@@ -1,8 +1,10 @@
 import AppKit
 import os
+import ServiceManagement
 
 /// The macOS services the window reaches itself: Finder, the pasteboard, the open panel, links,
-/// and the apps a folder opens in. All are public API that works inside the App Sandbox.
+/// the apps a folder opens in, and the login item. All are public API that works inside the App
+/// Sandbox.
 @MainActor
 enum Native {
     private nonisolated static let log = Logger(
@@ -77,8 +79,9 @@ enum Native {
         }
     }
 
-    /// An app a card's folder opens in, with its name and icon for the button.
+    /// An app a card's folder opens in, with its name and icon for the button and the menu.
     struct FolderApp {
+        let bundleIdentifier: String
         let url: URL
         let name: String
         let icon: NSImage
@@ -86,14 +89,77 @@ enum Native {
         init?(bundleIdentifier: String) {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
             else { return nil }
+            self.bundleIdentifier = bundleIdentifier
             self.url = url
-            name = FileManager.default.displayName(atPath: url.path(percentEncoded: false))
+            // The name carries `.app` when the user has Finder show every extension; the app's
+            // name reads without it.
+            let shown = FileManager.default.displayName(atPath: url.path(percentEncoded: false))
+            name = shown.hasSuffix(".app") ? String(shown.dropLast(4)) : shown
             icon = NSWorkspace.shared.icon(forFile: url.path(percentEncoded: false))
         }
     }
 
-    /// Each looked for once, the first time a card is hovered; Visual Studio Code only when it is
-    /// installed.
-    static let vsCode = FolderApp(bundleIdentifier: "com.microsoft.VSCode")
+    /// Finder, looked for once, the first time a card is hovered.
     static let finder = FolderApp(bundleIdentifier: "com.apple.finder")
+
+    /// The editors on this Mac that open a folder as a project, in the order Settings lists them.
+    /// Looked for once, the first time they are needed, so an editor installed while Sutra runs
+    /// shows from its next launch.
+    static let editors: [FolderApp] = [
+        "com.microsoft.VSCode",
+        "com.todesktop.230313mzl4w4u92", // Cursor
+        "com.exafunction.windsurf",
+        "dev.zed.Zed",
+        "com.apple.dt.Xcode",
+        "com.jetbrains.rustrover",
+        "com.jetbrains.intellij",
+        "com.jetbrains.intellij.ce",
+        "com.jetbrains.WebStorm",
+        "com.jetbrains.goland",
+        "com.jetbrains.pycharm",
+        "com.jetbrains.pycharm.ce",
+        "com.jetbrains.CLion",
+        "com.google.android.studio",
+        "com.sublimetext.4",
+        "com.panic.Nova",
+        "com.barebones.bbedit",
+        "com.macromates.TextMate",
+        "org.vim.MacVim",
+        "com.microsoft.VSCodeInsiders",
+        "dev.zed.Zed-Preview",
+    ].compactMap(FolderApp.init(bundleIdentifier:))
+
+    /// Where the editor chosen in Settings is kept, by its bundle identifier.
+    static let editorChoiceKey = "openFoldersIn"
+
+    /// The editor a card's folder opens in: the one chosen in Settings while it is installed,
+    /// otherwise the first installed, which is Visual Studio Code where it is. `nil` on a Mac with
+    /// none.
+    static func editor(chosen: String) -> FolderApp? {
+        editors.first { $0.bundleIdentifier == chosen } ?? editors.first
+    }
+
+    /// Whether Sutra opens when the user logs in. macOS keeps this, and the user can change it in
+    /// System Settings too.
+    static var opensAtLogin: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    /// Ask macOS to open Sutra at login, or to stop, and say whether it now will. macOS may hold a
+    /// new login item until the user approves it, so System Settings then opens at Login Items.
+    static func setOpensAtLogin(_ open: Bool) -> Bool {
+        do {
+            if open {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            log.error("Changing the login item failed: \(error, privacy: .public)")
+        }
+        if open, SMAppService.mainApp.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+        return opensAtLogin
+    }
 }

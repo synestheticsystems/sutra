@@ -1,14 +1,18 @@
 import SutraCore
 import SwiftUI
 
-/// The Settings window: how much free space Sutra keeps by cleaning by itself, and which of the
-/// folders macOS guards it watches. Each control sends the user's choice to the core and shows what
-/// the core holds, so a choice the core asks about first shows only once the user agrees; the
-/// question shows here, over this window.
+/// The Settings window. The window keeps two settings itself: whether Sutra opens at login, which
+/// macOS keeps for it, and the editor a card's folder opens in. The core keeps the rest: how much
+/// free space Sutra keeps by cleaning by itself, and which of the folders macOS guards it watches.
+/// Each of the core's controls sends the user's choice to the core and shows what the core holds,
+/// so a choice the core asks about first shows only once the user agrees; the question shows here,
+/// over this window.
 public struct SettingsView: View {
     private let dashboard: DashboardModel
 
     @Environment(\.controlActiveState) private var activeState
+    @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
+    @State private var opensAtLogin = Native.opensAtLogin
     /// Flipped with each choice sent, which draws the controls again from what the core holds. A
     /// pop-up or a switch shows the user's choice as soon as it is made, and would go on showing it
     /// while the core holds another, as it does while it asks first.
@@ -21,6 +25,20 @@ public struct SettingsView: View {
     public var body: some View {
         let settings = dashboard.settings
         Form {
+            Toggle("Open at login", isOn: Binding(
+                get: { opensAtLogin },
+                set: { opensAtLogin = Native.setOpensAtLogin($0) }
+            ))
+            if !Native.editors.isEmpty {
+                Picker("Open folders in", selection: Binding(
+                    get: { Native.editor(chosen: chosenEditor)?.bundleIdentifier ?? "" },
+                    set: { chosenEditor = $0 }
+                )) {
+                    ForEach(Native.editors, id: \.bundleIdentifier) { editor in
+                        Text(editor.name).tag(editor.bundleIdentifier)
+                    }
+                }
+            }
             Picker("Cleaning", selection: Binding(
                 get: { settings.keepFree },
                 set: { send(.keepFree(bytes: $0)) }
@@ -45,6 +63,8 @@ public struct SettingsView: View {
         .dialogAlert(dashboard, in: .settings)
         .onChange(of: activeState, initial: true) {
             dashboard.settingsInFront = activeState == .key
+            // The user may have changed it in System Settings meanwhile.
+            opensAtLogin = Native.opensAtLogin
         }
         .onDisappear { dashboard.settingsClosed() }
     }

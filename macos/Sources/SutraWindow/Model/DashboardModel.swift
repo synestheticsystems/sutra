@@ -124,10 +124,6 @@ public final class DashboardModel {
     /// Carry out a menu line: the platform services are the window's, the rest the core's.
     func choose(_ action: MenuAction) {
         switch action {
-        case .openInVisualStudioCode(let path):
-            if let vsCode = Native.vsCode {
-                Native.open(path, in: vsCode)
-            }
         case .revealInFinder(let path):
             Native.revealInFinder(path)
         case .copyPath(let path):

@@ -18,10 +18,6 @@ pub(super) fn entries(
     let path = format::path_text(&project.path);
     let mut sections: Vec<Vec<MenuEntry>> = vec![vec![
         item(
-            "Open in Visual Studio Code",
-            MenuAction::OpenInVisualStudioCode { path: path.clone() },
-        ),
-        item(
             "Reveal in Finder",
             MenuAction::RevealInFinder { path: path.clone() },
         ),
@@ -150,27 +146,11 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_folder_offers_to_open_reveal_and_copy_and_no_stray_separator() {
+    fn a_plain_folder_offers_reveal_and_copy_and_no_stray_separator() {
         let entries = entries(&app(), &cleaning(), &notifier(), false);
-        assert_eq!(
-            titles(&entries),
-            [
-                "Open in Visual Studio Code",
-                "Reveal in Finder",
-                "Copy Path"
-            ]
-        );
+        assert_eq!(titles(&entries), ["Reveal in Finder", "Copy Path"]);
         assert_eq!(
             entries[0],
-            item(
-                "Open in Visual Studio Code",
-                MenuAction::OpenInVisualStudioCode {
-                    path: "/code/app".to_string()
-                }
-            )
-        );
-        assert_eq!(
-            entries[1],
             item(
                 "Reveal in Finder",
                 MenuAction::RevealInFinder {
@@ -191,7 +171,6 @@ mod tests {
         assert_eq!(
             titles(&entries),
             [
-                "Open in Visual Studio Code",
                 "Reveal in Finder",
                 "Copy Path",
                 "-",
@@ -211,19 +190,19 @@ mod tests {
             entry => panic!("not the dashboard's: {entry:?}"),
         };
         assert_eq!(
-            action(4),
+            action(3),
             Action::Clean {
                 folder: "/code/app/target".to_string()
             }
         );
         assert_eq!(
-            action(6),
+            action(5),
             Action::ToggleUnitMute {
                 environment: "env".to_string(),
                 unit: "web".to_string()
             }
         );
-        assert_eq!(action(9), Action::TerminateEnvironment { pid: 4242 });
+        assert_eq!(action(8), Action::TerminateEnvironment { pid: 4242 });
     }
 
     #[test]

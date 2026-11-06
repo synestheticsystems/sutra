@@ -296,10 +296,6 @@ pub enum MenuEntry {
 /// What a menu line does: the window's own platform services, or something the dashboard does.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum MenuAction {
-    /// The window leaves this entry out where Visual Studio Code is not installed.
-    OpenInVisualStudioCode {
-        path: String,
-    },
     RevealInFinder {
         path: String,
     },

@@ -57,15 +57,17 @@ struct CardHeader: View {
     }
 }
 
-/// A button for each app that opens the folder: Visual Studio Code when it is installed, and
-/// Finder.
+/// A button for each app that opens the folder: the editor chosen in Settings, when this Mac has
+/// one, and Finder.
 private struct OpenButtons: View {
     let path: String
 
+    @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
+
     var body: some View {
         HStack(spacing: 4) {
-            if let vsCode = Native.vsCode {
-                OpenButton(app: vsCode) { Native.open(path, in: vsCode) }
+            if let editor = Native.editor(chosen: chosenEditor) {
+                OpenButton(app: editor) { Native.open(path, in: editor) }
             }
             if let finder = Native.finder {
                 OpenButton(app: finder) { Native.openInFinder(path) }

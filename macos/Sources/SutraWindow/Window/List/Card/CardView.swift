@@ -37,7 +37,7 @@ public struct CardView: View {
         // Inside the edge, so the tray and the seam bar never cover it.
         .padding(1)
         .background { CardSurface(waiting: card.waiting) }
-        .contextMenu { MenuEntries(entries: card.menu, dashboard: dashboard) }
+        .contextMenu { MenuEntries(entries: card.menu, dashboard: dashboard, folder: card.path) }
         .onHover { over in
             withAnimation(.easeOut(duration: 0.15)) { pointerOver = over }
         }
