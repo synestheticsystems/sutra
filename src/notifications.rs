@@ -1,22 +1,15 @@
 //! Sounds, speech and banners for the transitions the user wants to hear about: a dev-runner unit
 //! changing state, and a coding agent that has been waiting on the user for a while.
 
+mod speaker;
 mod transitions;
 
 use std::collections::HashSet;
-use std::mem;
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
 use crate::map::Snapshot;
+use speaker::Speaker;
 use transitions::{Announcement, Transitions};
-
-/// Action sent to the background audio/speech thread.
-enum Action {
-    SoundAndSpeak { sound: Sound, text: String },
-    Shutdown,
-}
 
 /// The macOS system sounds Sutra plays, in rising priority, because a batch of transitions plays
 /// only its highest: bad news first, then a request for the user, then good news, then progress.
@@ -56,8 +49,7 @@ type PostBanner = Box<dyn Fn(&str, &str) + Send>;
 
 /// Notifier detects state transitions and plays sounds/speech/notifications.
 pub struct Notifier {
-    tx: mpsc::Sender<Action>,
-    thread: Option<JoinHandle<()>>,
+    speaker: Speaker,
     post_banner: PostBanner,
     pub global_mute: bool,
     pub muted_units: HashSet<String>,
@@ -70,72 +62,14 @@ impl Notifier {
     /// A notifier that sends its banners to `post_banner`, and speaks and plays its sounds on a
     /// thread of its own.
     pub fn new(post_banner: impl Fn(&str, &str) + Send + 'static) -> Self {
-        let (tx, rx) = mpsc::channel();
-
-        let thread = thread::spawn(move || {
-            Self::audio_thread(rx);
-        });
-
         Notifier {
-            tx,
-            thread: Some(thread),
+            speaker: Speaker::new(),
             post_banner: Box::new(post_banner),
             global_mute: false,
             muted_units: HashSet::new(),
             global_notifications_off: false,
             notifications_off_units: HashSet::new(),
             transitions: Transitions::default(),
-        }
-    }
-
-    fn audio_thread(rx: mpsc::Receiver<Action>) {
-        // Init rodio (optional — skip if unavailable)
-        #[cfg(target_os = "macos")]
-        let audio_stream = rodio::OutputStreamBuilder::open_default_stream().ok();
-
-        // Init TTS via AppKit backend (NSSpeechSynthesizer) — uses the same
-        // voice as `say`, which is the system default from System Preferences.
-        #[cfg(target_os = "macos")]
-        let mut tts_engine = tts::Tts::new(tts::Backends::AppKit).ok();
-
-        for action in rx {
-            match action {
-                Action::SoundAndSpeak {
-                    #[cfg(target_os = "macos")]
-                    sound,
-                    #[cfg(not(target_os = "macos"))]
-                        sound: _,
-                    #[cfg(target_os = "macos")]
-                    text,
-                    #[cfg(not(target_os = "macos"))]
-                        text: _,
-                } => {
-                    // Play system sound
-                    #[cfg(target_os = "macos")]
-                    if let Some(ref stream) = audio_stream {
-                        let sound_path =
-                            format!("/System/Library/Sounds/{}.aiff", sound.system_name());
-                        if let Ok(file) = std::fs::File::open(&sound_path) {
-                            if let Ok(source) = rodio::Decoder::new(std::io::BufReader::new(file)) {
-                                let sink = rodio::Sink::connect_new(stream.mixer());
-                                sink.append(source);
-                                sink.sleep_until_end();
-                            }
-                        }
-                    }
-
-                    // Speak — poll is_speaking() since AppKit backend has no callbacks
-                    #[cfg(target_os = "macos")]
-                    if let Some(ref mut tts) = tts_engine {
-                        if tts.speak(&text, false).is_ok() {
-                            while tts.is_speaking().unwrap_or(false) {
-                                std::thread::sleep(std::time::Duration::from_millis(50));
-                            }
-                        }
-                    }
-                }
-                Action::Shutdown => break,
-            }
         }
     }
 
@@ -204,7 +138,7 @@ impl Notifier {
             }
         }
         if let Some((sound, text)) = utterance(audible) {
-            let _ = self.tx.send(Action::SoundAndSpeak { sound, text });
+            self.speaker.say(sound, text);
         }
     }
 
@@ -244,15 +178,6 @@ impl Notifier {
     pub fn is_unit_notifications_off(&self, env_id: &str, unit_name: &str) -> bool {
         self.notifications_off_units
             .contains(&unit_key(env_id, unit_name))
-    }
-}
-
-impl Drop for Notifier {
-    fn drop(&mut self) {
-        let _ = self.tx.send(Action::Shutdown);
-        if let Some(thread) = mem::take(&mut self.thread) {
-            let _ = thread.join();
-        }
     }
 }
 
