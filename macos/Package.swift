@@ -29,6 +29,11 @@ let package = Package(
             ]
         ),
         .target(name: "SutraWindow", dependencies: ["SutraCore"], path: "Sources/SutraWindow"),
+        .testTarget(
+            name: "SutraWindowTests",
+            dependencies: ["SutraCore", "SutraWindow"],
+            path: "Tests/SutraWindowTests"
+        ),
         .executableTarget(
             name: "Sutra",
             dependencies: ["SutraCore", "SutraWindow"],

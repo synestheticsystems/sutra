@@ -1,7 +1,8 @@
 # Robo Sutra splash artwork
 
-The welcome screen uses the candidate title **Robo Sutra**. Continue opens the
-dashboard; Help → Welcome to Sutra reopens the introduction. The preference is
+The welcome screen uses the candidate title **Robo Sutra**. It stands in front
+of the dashboard on the first launch; Continue opens the dashboard, and Help →
+Welcome to Robo Sutra brings the screen back. The preference is
 `hasSeenIntroduction`. The app bundle and project remain Sutra.
 
 This is native SwiftUI Canvas / Core Graphics artwork, intended for the splash

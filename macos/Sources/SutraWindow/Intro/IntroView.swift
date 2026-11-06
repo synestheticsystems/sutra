@@ -16,6 +16,7 @@ public struct IntroView: View {
                         .font(.system(size: 36, weight: .semibold, design: .rounded))
                         .tracking(-1.4)
                         .padding(.top, 18)
+                        .accessibilityAddTraits(.isHeader)
                     Text("A little coordination.")
                         .font(.title3)
                         .foregroundStyle(.secondary)

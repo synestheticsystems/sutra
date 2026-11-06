@@ -106,11 +106,11 @@ open -n "dist/Sutra Sandbox.app"
   bookmark and resolving it on the next launch). The script fails if the
   signature carries anything other than exactly these. Keep the file
   comment-free, like `sutra.entitlements`.
-- The first launch opens the window, which explains why the home folder matters
-  and offers Choose Folder…, which shows the panel. Choosing a folder saves the
-  grant, and later launches restore it without asking. Cancelling saves
-  nothing, so the window asks again. The folder icon in the window's toolbar chooses
-  another folder later.
+- The first launch opens the window on the welcome screen. Past it, the window
+  explains why the home folder matters and offers Choose Folder…, which shows
+  the panel. Choosing a folder saves the grant, and later launches restore it
+  without asking. Cancelling saves nothing, so the window asks again. The folder
+  icon in the window's toolbar chooses another folder later.
 - To be asked again after choosing, delete the saved grant and relaunch:
   ```sh
   rm ~/Library/Containers/systems.synesthetic.sutra.sandbox/Data/Library/Application\ Support/Sutra/root.bookmark

@@ -10,13 +10,13 @@ struct SutraApp: App {
 
     var body: some Scene {
         Window("Sutra", id: "dashboard") {
-            DashboardView(dashboard: delegate.dashboard)
+            DashboardView(dashboard: delegate.dashboard, welcome: delegate.welcome)
                 .onChange(of: delegate.dashboard.dockBadge, initial: true) { _, badge in
                     NSApp.dockTile.badgeLabel = badge
                 }
         }
         .defaultSize(width: 520, height: 640)
-        .commands { DashboardCommands() }
+        .commands { DashboardCommands(welcome: delegate.welcome) }
 
         Settings {
             SettingsView(dashboard: delegate.dashboard)
@@ -24,10 +24,12 @@ struct SutraApp: App {
     }
 }
 
-/// Starts the core as the app launches and stops it as the app quits.
+/// Starts the core as the app launches and stops it as the app quits, and holds what the window
+/// shows: the core's dashboard, and the welcome screen in front of it.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let dashboard: DashboardModel
+    let welcome = Welcome(memory: UserDefaults.standard)
     private let core: Dashboard
 
     override init() {
