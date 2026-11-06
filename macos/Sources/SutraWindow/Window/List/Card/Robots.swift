@@ -28,16 +28,20 @@ struct RobotView: View {
         .frame(width: size.width, height: size.height)
         // At rest, the robot steps back.
         .opacity(look == .still ? 0.6 : 1)
+        // Drawn taller than the line it stands on, into the tray's margins, so a tray with robots
+        // is as tall as one without and no card moves when an agent comes or goes.
+        .frame(height: RobotFigure.lineHeight)
     }
 }
 
 /// The robots of Sutra's art: a pale helmet with ear muffs and a thick dark outline, and a black
 /// visor with the face of the AI on it.
 struct RobotFigure: Equatable {
-    /// The robot's height on a card's tray: no taller than the tray's line, so a tray with robots
-    /// is as tall as one without.
-    static let height: CGFloat = 15
-    static let aspect: CGFloat = 1.21
+    /// The robot's height as drawn: nearly the height of a card's tray, so it reads at a glance.
+    static let height: CGFloat = 21
+    /// The height it takes on its line, the height of the tray's text.
+    static let lineHeight: CGFloat = 15
+    static let aspect: CGFloat = 1.2
 
     let head: Color
     let ears: Color
@@ -63,18 +67,19 @@ struct RobotFigure: Equatable {
     private static let visor = Color.rgb(0x1C1C1E)
 
     /// The ears, the head and the visor, each outlined, in a frame `size` big. The drawing is in
-    /// units of the frame's height, after the proportions of the art.
+    /// units of the frame's height, after the proportions of the art, simplified to read when
+    /// small: a thick outline, a visor across most of the face, short ear muffs.
     func drawBody(in context: inout GraphicsContext, size: CGSize) {
         let unit = size.height
-        let line = 0.06 * unit
+        let line = 0.085 * unit
         let place = Placement(unit: unit)
-        let ears = place.roundedRect(x: 0.03, y: 0.32, width: 1.15, height: 0.42, radius: 0.16)
+        let ears = place.roundedRect(x: 0.045, y: 0.36, width: 1.11, height: 0.34, radius: 0.12)
         context.fill(ears, with: .color(self.ears))
         context.stroke(ears, with: .color(Self.outline), lineWidth: line)
-        let head = place.roundedRect(x: 0.18, y: 0.035, width: 0.85, height: 0.93, radius: 0.3)
+        let head = place.roundedRect(x: 0.12, y: 0.045, width: 0.96, height: 0.91, radius: 0.27)
         context.fill(head, with: .color(self.head))
         context.stroke(head, with: .color(Self.outline), lineWidth: line)
-        let visor = place.roundedRect(x: 0.28, y: 0.34, width: 0.65, height: 0.37, radius: 0.13)
+        let visor = place.roundedRect(x: 0.21, y: 0.29, width: 0.78, height: 0.46, radius: 0.17)
         context.fill(visor, with: .color(Self.visor))
     }
 
@@ -84,18 +89,18 @@ struct RobotFigure: Equatable {
         let path = CGMutablePath()
         switch face {
         case .asterisks:
-            for x in [0.455, 0.755] {
-                path.addPath(place.asterisk(x: x, y: 0.525, radius: 0.105, width: 0.04))
+            for x in [0.415, 0.785] {
+                path.addPath(place.asterisk(x: x, y: 0.52, radius: 0.135, width: 0.065))
             }
         case .prompt:
-            path.addPath(place.chevron(x: 0.4, y: 0.525, size: 0.1, width: 0.06))
-            path.addPath(place.roundedRect(x: 0.56, y: 0.585, width: 0.24, height: 0.045, radius: 0.02).cgPath)
+            path.addPath(place.chevron(x: 0.33, y: 0.52, size: 0.14, width: 0.085))
+            path.addPath(place.roundedRect(x: 0.56, y: 0.6, width: 0.3, height: 0.07, radius: 0.035).cgPath)
         case .sparkles:
-            path.addPath(place.sparkle(x: 0.47, y: 0.555, radius: 0.12))
-            path.addPath(place.sparkle(x: 0.745, y: 0.48, radius: 0.095))
+            path.addPath(place.sparkle(x: 0.43, y: 0.55, radius: 0.16))
+            path.addPath(place.sparkle(x: 0.78, y: 0.45, radius: 0.12))
         case .eyes:
-            for x in [0.455, 0.755] {
-                path.addPath(place.circle(x: x, y: 0.525, radius: 0.06))
+            for x in [0.415, 0.785] {
+                path.addPath(place.circle(x: x, y: 0.52, radius: 0.085))
             }
         }
         return path

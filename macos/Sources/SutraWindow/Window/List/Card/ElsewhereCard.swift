@@ -15,7 +15,8 @@ struct ElsewhereCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(heading)
                 .font(.title3.weight(.semibold))
-            VStack(alignment: .leading, spacing: 4) {
+            // Room between the lines for robots drawn taller than the text.
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     // The folder gives way to the robots, which it never cuts short.
                     HStack(spacing: 8) {
