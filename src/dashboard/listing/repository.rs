@@ -17,8 +17,10 @@ pub(in crate::dashboard) struct Group<'a> {
     pub(in crate::dashboard) common_dir: &'a Path,
     /// What the header calls the repository (see `name`).
     pub(in crate::dashboard) name: String,
-    /// The worktrees the list shows: the main worktree first, then the linked ones in the
-    /// Activity order.
+    /// The folder the repository goes by (`RepoInfo::folder`), which the header's tooltip names.
+    pub(in crate::dashboard) folder: &'a Path,
+    /// The worktrees the list shows: the main worktree first, then the linked ones by their
+    /// five-minute slice, each slice in the order of the branches they go by on the list.
     pub(in crate::dashboard) cards: Vec<&'a Project>,
     /// Every worktree of the repository on the map, listed or not, whose sizes the header adds up.
     pub(in crate::dashboard) worktrees: Vec<&'a Project>,
@@ -91,12 +93,25 @@ impl<'a> Gathering<'a> {
             .iter()
             .copied()
             .find(|worktree| is_main_worktree(worktree));
-        let mut cards = SortOrder::Activity.arrange(self.cards);
-        // Stable, so the linked worktrees keep the Activity order behind the main one.
-        cards.sort_by_key(|card| !is_main_worktree(card));
+        let mut cards = self.cards;
+        // As the Activity sort orders them, except that a nested card goes by its branch, so
+        // within a slice the cards stand in the order of the branches they show.
+        cards.sort_by_cached_key(|card| {
+            let branch = card
+                .repo
+                .as_ref()
+                .and_then(|repo| repo.branch.as_deref().or(repo.head.as_deref()));
+            (
+                !is_main_worktree(card),
+                Reverse(activity_slice(card)),
+                branch.unwrap_or_default().to_lowercase(),
+                card.path.clone(),
+            )
+        });
         Group {
             common_dir: &self.repo.common_dir,
             name: name(main, self.repo),
+            folder: self.repo.folder(),
             cards,
             worktrees: self.worktrees,
         }
@@ -156,6 +171,19 @@ mod tests {
             vec![],
         );
         assert_eq!(grouped(&map), ["app: app, app-docs, app-fix, app-old"]);
+    }
+
+    #[test]
+    fn linked_worktrees_in_one_slice_stand_in_the_order_of_the_branches_they_show() {
+        let app = "/code/app/.git";
+        let map = snapshot(
+            vec![
+                linked_worktree(app, "zeta", project("app-a", 1)),
+                linked_worktree(app, "alpha", project("app-b", 1)),
+            ],
+            vec![],
+        );
+        assert_eq!(grouped(&map), ["app: app-b, app-a"]);
     }
 
     #[test]

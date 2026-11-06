@@ -53,6 +53,7 @@ fn list_row(row: &Row, map: &Snapshot, cards: &CardContext) -> ListRow {
         Row::Repository(group) => ListRow::Repository {
             common_dir: format::path_text(group.common_dir),
             name: group.name.clone(),
+            tooltip: format::tilde(group.folder, cards.home),
             total: total_of(&group.worktrees, cards),
             cards: group
                 .cards
@@ -253,6 +254,7 @@ mod tests {
             ListRow::Repository {
                 common_dir,
                 name,
+                tooltip,
                 total,
                 cards,
             },
@@ -262,6 +264,7 @@ mod tests {
             panic!("the group, then the quiet row: {rows:?}");
         };
         assert_eq!((common_dir.as_str(), name.as_str()), (app, "app"));
+        assert_eq!(tooltip, "/code/app", "where the repository is");
         assert_eq!(
             total.as_deref(),
             Some("2.5 GB"),

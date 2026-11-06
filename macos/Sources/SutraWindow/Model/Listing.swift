@@ -15,7 +15,9 @@ public enum Listing: Equatable {
 public enum Row: Identifiable, Equatable {
     case card(CardModel)
     /// One repository's worktrees under its header, in the Repository sort.
-    case repository(commonDir: String, name: String, total: String?, cards: [CardModel])
+    case repository(
+        commonDir: String, name: String, tooltip: String, total: String?, cards: [CardModel]
+    )
     case elsewhere(heading: String, agents: [ElsewhereAgent], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
 
@@ -29,7 +31,7 @@ public enum Row: Identifiable, Equatable {
     public var id: ID {
         switch self {
         case .card(let model): .card(path: model.path)
-        case .repository(let commonDir, _, _, _): .repository(commonDir: commonDir)
+        case .repository(let commonDir, _, _, _, _): .repository(commonDir: commonDir)
         case .elsewhere: .elsewhere
         case .quietProjects: .quietProjects
         }
@@ -40,10 +42,10 @@ public enum Row: Identifiable, Equatable {
         // The same model is the same row, whatever its card now says: the card redraws itself.
         case (.card(let lhs), .card(let rhs)): lhs === rhs
         // A group is the same while its header reads the same over the same card models.
-        case (.repository(let lhsDir, let lhsName, let lhsTotal, let lhsCards),
-              .repository(let rhsDir, let rhsName, let rhsTotal, let rhsCards)):
-            lhsDir == rhsDir && lhsName == rhsName && lhsTotal == rhsTotal
-                && lhsCards.elementsEqual(rhsCards, by: ===)
+        case (.repository(let lhsDir, let lhsName, let lhsTooltip, let lhsTotal, let lhsCards),
+              .repository(let rhsDir, let rhsName, let rhsTooltip, let rhsTotal, let rhsCards)):
+            lhsDir == rhsDir && lhsName == rhsName && lhsTooltip == rhsTooltip
+                && lhsTotal == rhsTotal && lhsCards.elementsEqual(rhsCards, by: ===)
         case (.elsewhere(let lhsHeading, let lhsAgents, let lhsWaiting),
               .elsewhere(let rhsHeading, let rhsAgents, let rhsWaiting)):
             lhsHeading == rhsHeading && lhsAgents == rhsAgents && lhsWaiting == rhsWaiting
@@ -107,9 +109,10 @@ struct CardModels {
                 switch row {
                 case .card(let card):
                     return .card(model(of: card))
-                case .repository(let commonDir, let name, let total, let cards):
+                case .repository(let commonDir, let name, let tooltip, let total, let cards):
                     return .repository(
-                        commonDir: commonDir, name: name, total: total, cards: cards.map(model(of:))
+                        commonDir: commonDir, name: name, tooltip: tooltip, total: total,
+                        cards: cards.map(model(of:))
                     )
                 case .elsewhere(let heading, let agents, let waiting):
                     return .elsewhere(heading: heading, agents: agents, waiting: waiting)

@@ -206,6 +206,7 @@ mod tests {
         Group {
             common_dir: Path::new(name),
             name: name.to_string(),
+            folder: Path::new(name),
             cards,
             worktrees: Vec::new(),
         }

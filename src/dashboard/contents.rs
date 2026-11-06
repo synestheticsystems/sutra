@@ -142,6 +142,9 @@ pub enum ListRow {
         common_dir: String,
         /// The main worktree's folder name, or a bare repository's own, less `.git`.
         name: String,
+        /// Where the repository is, as `~/code/app` reads, which tells two clones of one remote
+        /// apart.
+        tooltip: String,
         /// The disk its worktrees on the map take between them, listed or not, as their trays
         /// write it: the sizes measured so far, added up, and `None` before the first.
         total: Option<String>,
