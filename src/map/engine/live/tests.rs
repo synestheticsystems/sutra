@@ -59,7 +59,7 @@ fn engine_with_a_worktree_outside_the_root<'a>(
 }
 
 fn watched_outside<'a>(engine: &'a Engine) -> Vec<&'a PathBuf> {
-    engine.watches.outside.keys().collect()
+    engine.watches.watched_outside()
 }
 
 /// Report `walks` finished measurements to `engine`.
