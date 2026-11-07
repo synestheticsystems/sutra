@@ -89,11 +89,17 @@ extension UnitLook {
     }
 }
 
-/// How Claude Code's scratch space is drawn: in dashes, the way a placeholder is, as scratch is
+/// How Claude Code's scratch space is drawn: broken, the way a placeholder is, as scratch is
 /// thrown away where the projects around it are kept.
 enum Scratch {
-    /// The dash of an outline or a guide, as long as a gap and a half.
+    /// The dash of the mark's outline, as long as a gap and a half.
     static let dash: [CGFloat] = [3, 2]
+    /// The guide a session's opened scratch hangs from: round dots 2 pt across, every 5 pt. Dashes
+    /// as faint as a repository's guide read as the same unbroken hairline at a glance; dots stay
+    /// dots.
+    static let guide = StrokeStyle(lineWidth: 2, lineCap: .round, dash: [0, 5])
+    /// The dots' grey, darker than a repository's hairline, so the dots read as dots.
+    static let guideInk = Color(nsColor: .secondaryLabelColor)
 }
 
 /// The surfaces a card is made of.

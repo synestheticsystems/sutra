@@ -249,7 +249,8 @@ pub(super) mod fixtures {
     }
 
     /// `project` as the scratch folder `folder` of the session `session_id`, which started in
-    /// `/code/app` and has ended, going by the name the engine gives it, as `app e26ca359` reads.
+    /// `/code/app` and has ended, never named, so it goes by the name the engine gives it, as
+    /// `app e26ca359` reads.
     pub(in crate::dashboard) fn scratch_folder(
         session_id: &str,
         folder: &str,
@@ -265,14 +266,13 @@ pub(super) mod fixtures {
         };
         Project {
             path: space.session_folder.join("scratchpad").join(folder),
-            name: space.name(),
+            name: folder.to_string(),
             scratch: Some(space),
             ..project
         }
     }
 
-    /// `scratch`, a scratch folder, while its session runs under the name `label`, which the
-    /// folder goes by then.
+    /// `scratch`, a scratch folder, while its session runs under the name `label`.
     pub(in crate::dashboard) fn running_as(label: &str, scratch: Project) -> Project {
         let mut space = scratch.scratch.expect("a scratch folder");
         space.session = Some(AgentSession {
@@ -281,7 +281,6 @@ pub(super) mod fixtures {
         });
         space.session_name = Some(label.to_string());
         Project {
-            name: space.name(),
             scratch: Some(space),
             ..scratch
         }
@@ -435,12 +434,12 @@ mod tests {
         };
         assert_eq!(
             listed(SortOrder::Activity),
-            ["Foundry: r567", "quiet:2", "app d5fa0639", "forgotten"],
+            ["Foundry: r567", "quiet:2", "sim-target", "forgotten"],
             "its activity a minute ago, and its size, are disk news"
         );
         assert_eq!(
             listed(SortOrder::Disk),
-            ["app d5fa0639", "forgotten", "Foundry"],
+            ["sim-target", "forgotten", "r567"],
             "in focus by size where the sort is for disk"
         );
     }

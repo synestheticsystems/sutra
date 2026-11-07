@@ -33,7 +33,7 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
         }
         listing::Parent::Session(space) => (
             session_tooltip(space, &group.name, cards),
-            Some(card::scratch_mark(space, None)),
+            Some(card::scratch_mark(space)),
             clean_all(space, &group.members, cards.cleaning),
         ),
     };
@@ -267,11 +267,10 @@ mod tests {
         assert_eq!(
             line.scratch,
             Some(ScratchMark {
-                place: None,
                 tooltip: "Claude Code's scratch space\nSession e26ca359".to_string(),
                 session_runs: true,
             }),
-            "the mark of the whole space"
+            "the mark of the whole space, which the window draws around the total"
         );
         assert_eq!(line.total.as_deref(), Some("100 GB"));
         assert!(matches!(fold, GroupFold::Folded { .. }), "{fold:?}");

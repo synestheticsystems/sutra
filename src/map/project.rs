@@ -18,7 +18,7 @@ pub const LARGE_FOLDER_BYTES: u64 = 1 << 30;
 pub struct Project {
     /// Canonical path (symlinks resolved), the key every source is joined on.
     pub path: PathBuf,
-    /// The folder's own name; a scratch folder goes by its session (see `ScratchSpace::name`).
+    /// The folder's own name. A scratch folder's session goes by its own (see `ScratchSpace::name`).
     pub name: String,
     /// `None` for a plain project folder that only a dev-runner environment names, and for a
     /// scratch folder.

@@ -54,10 +54,16 @@ struct CardHeader: View {
                 .padding(.vertical, 1)
                 .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
                 .hoverTip(tooltip)
-        case .scratch(let mark):
-            // Once its session has ended, the scratch steps back as a robot at rest does.
-            ScratchMarkView(mark: mark)
+        case .scratch(let session, let mark):
+            // The session's name is the mark's own words, so once the session has ended it steps
+            // back with the outline, as a robot at rest does; the card's own words stay.
+            Text(session)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
                 .opacity(mark.sessionRuns ? 1 : Still.opacity)
+                .scratchMarked(mark)
         case nil:
             EmptyView()
         }

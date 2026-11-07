@@ -462,13 +462,10 @@ fn new_project(
     access: FolderAccess,
     boundary: &Boundary,
 ) -> Project {
-    let name = match &scratch {
-        Some(space) => space.name(),
-        None => path.file_name().map_or_else(
-            || path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        ),
-    };
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     let mut project = Project {
         path,
         name,

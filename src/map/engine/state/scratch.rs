@@ -66,14 +66,11 @@ impl State {
         failures: &mut Vec<(PathBuf, io::ErrorKind)>,
     ) {
         let mut names: HashMap<PathBuf, Option<String>> = HashMap::new();
-        for (_, tracked) in tracked.iter_mut() {
-            let project = &mut tracked.project;
-            let Some(space) = project.scratch.as_mut() else {
-                continue;
-            };
-            if space.session_name.is_some() || space.session.is_some() {
-                continue;
-            }
+        let spaces = tracked
+            .iter_mut()
+            .filter_map(|(_, t)| t.project.scratch.as_mut());
+        for space in spaces.filter(|space| space.session_name.is_none() && space.session.is_none())
+        {
             let recorded = || {
                 // The session's folder is `<scratch root>/<project key>/<session id>`.
                 let key = space.session_folder.parent()?.file_name()?.to_str()?;
@@ -81,7 +78,6 @@ impl State {
             };
             let name = names.entry(space.session_folder.clone());
             space.session_name.clone_from(name.or_insert_with(recorded));
-            project.name = space.name();
         }
     }
 
@@ -212,8 +208,8 @@ impl State {
             .collect();
         let mut changed = false;
         for tracked in self.projects.values_mut() {
-            let project = &mut tracked.project;
-            let Some(space) = &mut project.scratch else {
+            let has_a_card = earns_a_card(&tracked.project);
+            let Some(space) = &mut tracked.project.scratch else {
                 continue;
             };
             let session = running.get(space.session_id.as_str()).copied();
@@ -222,8 +218,7 @@ impl State {
                 if let Some(label) = session.and_then(|session| session.label.as_ref()) {
                     space.session_name = Some(label.clone());
                 }
-                project.name = space.name();
-                changed |= earns_a_card(project);
+                changed |= has_a_card;
             }
         }
         changed
@@ -476,8 +471,18 @@ mod tests {
         path.replace(|c: char| !c.is_ascii_alphanumeric(), "-")
     }
 
+    /// The names the sessions of `state`'s scratch cards go by, in the snapshot's order.
+    fn session_names(state: &State) -> Vec<String> {
+        let snapshot = state.snapshot();
+        let spaces = snapshot
+            .projects
+            .iter()
+            .filter_map(|card| card.scratch.as_ref());
+        spaces.map(ScratchSpace::name).collect()
+    }
+
     #[test]
-    fn a_scratch_folder_goes_by_the_folder_its_session_started_in_and_its_id() {
+    fn an_unnamed_sessions_scratch_goes_by_where_the_session_started_and_its_id() {
         let fixture = TempDir::new("engine-scratch-names");
         let key = key_of(&fixture.dir("home/vt/greyorange-foundry"));
         fixture.write(
@@ -492,7 +497,8 @@ mod tests {
         let [card] = snapshot.projects.as_slice() else {
             panic!("one card: {:?}", snapshot.projects);
         };
-        assert_eq!(card.name, "greyorange-foundry e26ca359");
+        assert_eq!(card.name, "target-567");
+        assert_eq!(session_names(&state), ["greyorange-foundry e26ca359"]);
         let space = card.scratch.as_ref().expect("a scratch folder");
         assert_eq!(
             space.place_of(&card.path),
@@ -605,20 +611,15 @@ mod tests {
         };
         fixture.write(&transcript, named("Foundry Agent Studio architecture"));
         let mut state = state_over(&fixture);
-        let names = |state: &State| {
-            let snapshot = state.snapshot();
-            let cards = snapshot.projects.into_iter();
-            cards.map(|card| card.name).collect::<Vec<_>>()
-        };
 
         state.rediscover(None);
-        assert_eq!(names(&state), ["Foundry Agent Studio architecture"]);
+        assert_eq!(session_names(&state), ["Foundry Agent Studio architecture"]);
 
         fixture.write(&transcript, named("Renamed after it ended"));
         fixture.write(&format!("{scratchpad}/r593/CACHEDIR.TAG"), CACHEDIR_TAG);
         state.rediscover(None);
         assert_eq!(
-            names(&state),
+            session_names(&state),
             ["Foundry Agent Studio architecture"; 2],
             "a new folder takes the name its session's folders already go by"
         );
@@ -638,8 +639,8 @@ mod tests {
 
         state.rediscover(None);
 
+        assert_eq!(session_names(&state), ["foundry e26ca359"]);
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.projects[0].name, "foundry e26ca359");
         let unread = snapshot
             .problems
             .iter()
@@ -663,11 +664,6 @@ mod tests {
         let registry = register_session(&fixture, "Foundry Agent Studio architecture");
         let mut state = state_over(&fixture);
         state.rediscover(None);
-        let names = |state: &State| {
-            let snapshot = state.snapshot();
-            let cards = snapshot.projects.into_iter();
-            cards.map(|card| card.name).collect::<Vec<_>>()
-        };
         let snapshot = state.snapshot();
         for card in &snapshot.projects {
             let session = card
@@ -680,7 +676,10 @@ mod tests {
             );
             assert_eq!(card.agents, [], "it counts where it works");
         }
-        assert_eq!(names(&state), ["Foundry Agent Studio architecture"; 2]);
+        assert_eq!(
+            session_names(&state),
+            ["Foundry Agent Studio architecture"; 2]
+        );
 
         std::fs::remove_file(registry).unwrap();
         assert!(state.refresh_agents(), "the session ended");
@@ -692,7 +691,7 @@ mod tests {
                 .is_some_and(|space| space.session.is_none())
         }));
         assert_eq!(
-            names(&state),
+            session_names(&state),
             ["Foundry Agent Studio architecture"; 2],
             "the name it went by outlasts it"
         );
@@ -721,10 +720,10 @@ mod tests {
         let r593 = session.join("scratchpad/r593");
         assert_eq!(paths(&state), std::slice::from_ref(&r593));
         assert_eq!(build_folders(&state, &r593), [r593.join("target")]);
-        let snapshot = state.snapshot();
         assert_eq!(
-            snapshot.projects[0].name, "Foundry Agent Studio architecture",
-            "a new folder goes by its running session at once"
+            session_names(&state),
+            ["Foundry Agent Studio architecture"],
+            "a new folder knows its running session at once"
         );
         assert!(
             state.index().artifact_owner(&r593.join("target")).is_some(),

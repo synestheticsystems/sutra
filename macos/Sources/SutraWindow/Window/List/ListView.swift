@@ -98,12 +98,12 @@ private struct Chevron: View {
 }
 
 /// The cards that share a parent, a repository's worktrees or a session's scratch folders: the
-/// parent's line, with a disclosure chevron, its name, the mark of a session's scratch, and the
-/// disk its cards take, then the cards, set in from the list's edge and hung from a guide that runs
-/// down from the chevron, so they read as the parent's at a glance. A click on the line folds the
-/// cards away, and another shows them again. Folded, the line holds the robots of the agents in
-/// its cards at its end, and throbs as their cards would while one of them waits on the user. A
-/// right click on a session's line offers to clean all its scratch.
+/// parent's line, with a disclosure chevron, its name, and the disk its cards take, inside the
+/// mark of scratch on a session's line, then the cards, set in from the list's edge and hung from
+/// a guide that runs down from the chevron, so they read as the parent's at a glance. A click on
+/// the line folds the cards away, and another shows them again. Folded, the line holds the robots
+/// of the agents in its cards at its end, and throbs as their cards would while one of them waits
+/// on the user. A right click on a session's line offers to clean all its scratch.
 private struct CardGroup: View {
     let line: GroupLine
     let fold: Fold
@@ -164,8 +164,8 @@ private struct CardGroup: View {
             .accessibilityHidden(true)
     }
 
-    /// Unbroken under a repository, whose worktrees are kept; in dashes under a session's scratch,
-    /// as its mark is drawn, so cards whose line has scrolled away still read as scratch.
+    /// Unbroken under a repository, whose worktrees are kept; in dots under a session's scratch,
+    /// broken as its mark is, so cards whose line has scrolled away still read as scratch.
     @ViewBuilder
     private var hairline: some View {
         if line.scratch == nil {
@@ -173,7 +173,7 @@ private struct CardGroup: View {
                 .fill(Surface.guide)
         } else {
             DownTheMiddle()
-                .stroke(Surface.guide, style: StrokeStyle(lineWidth: 1, dash: Scratch.dash))
+                .stroke(Scratch.guideInk, style: Scratch.guide)
         }
     }
 
@@ -190,14 +190,14 @@ private struct CardGroup: View {
                         .fontWeight(.semibold)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if let scratch = line.scratch {
-                        // Once its session has ended, the mark steps back as a robot at rest does;
-                        // the line's words stay, as what the scratch holds is still there.
-                        ScratchMarkView(mark: scratch)
-                            .opacity(scratch.sessionRuns ? 1 : Still.opacity)
-                    }
                     if let total = line.total {
-                        Text(total)
+                        if let scratch = line.scratch {
+                            // On a session's line the mark goes around the total, which is
+                            // exactly what is throwaway.
+                            Text(total).scratchMarked(scratch)
+                        } else {
+                            Text(total)
+                        }
                     }
                 }
             }

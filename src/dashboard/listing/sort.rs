@@ -196,11 +196,12 @@ mod tests {
         );
         assert_eq!(
             laid_out(SortOrder::Name),
-            ["app", "app-fix", "Foundry", "Foundry"]
+            ["app", "app-fix", "r567", "r593"],
+            "each scratch folder by its own name, as no line names its session"
         );
         assert_eq!(
             laid_out(SortOrder::Disk),
-            ["app", "app-fix", "Foundry", "Foundry"]
+            ["app", "app-fix", "r567", "r593"]
         );
     }
 

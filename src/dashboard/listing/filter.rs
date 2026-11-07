@@ -3,9 +3,10 @@
 
 use std::path::Path;
 
-use crate::map::Project;
+use crate::map::{Project, ScratchSpace};
 
-/// Typed text matched against a project's name, branch and path, ignoring case.
+/// Typed text matched against a project's name, the name its card's chip or its parent's line
+/// shows beside it (a worktree's branch, a scratch folder's session), and its path, ignoring case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Query {
     /// Lowercase, without the spaces around it.
@@ -24,8 +25,10 @@ impl Query {
             .repo
             .as_ref()
             .and_then(|repo| repo.branch.as_deref());
+        let session = project.scratch.as_ref().map(ScratchSpace::name);
         self.matches(&project.name)
             || branch.is_some_and(|branch| self.matches(branch))
+            || session.is_some_and(|session| self.matches(&session))
             || self.admits_folder(&project.path)
     }
 

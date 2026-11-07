@@ -1,8 +1,8 @@
 //! A card's identity: its name, the name's tooltip (the folder and its last activity), and the
 //! chip beside the name and its tooltip: a worktree's branch (the branch in full, and which
-//! worktree this is), or a scratch folder's place in its session's scratch (whose session it is).
-//! A card nested under its parent's line, which names what the cards there share, goes by what
-//! sets it apart instead: a worktree by its branch, a scratch folder by its folder's own name.
+//! worktree this is), or a scratch folder's session, in the mark of scratch (its whole id). A card
+//! nested under its parent's line, which names what the cards there share, goes by what sets it
+//! apart instead: a worktree by its branch, a scratch folder by its folder's own name.
 
 use std::path::Path;
 
@@ -54,7 +54,8 @@ pub(super) fn identity(
                     tooltip: branch_tooltip(repo, home),
                 }),
                 (None, Some(space)) => Some(Chip::Scratch {
-                    mark: scratch_mark(space, Some(&project.path)),
+                    session: space.name(),
+                    mark: scratch_mark(space),
                 }),
                 (None, None) => None,
             },
@@ -62,17 +63,12 @@ pub(super) fn identity(
     }
 }
 
-/// The mark of `space`, one session's scratch: on its scratch folder at `folder`, where the folder
-/// lies in the session's folder, beside the session's name the card goes by; on the session's
-/// line, with no folder, the mark of the whole space. Its tooltip says whose session it is, by its
-/// whole id. The mark fades once the session has ended, which says whether the session may still
-/// build there.
-pub(in crate::dashboard::contents) fn scratch_mark(
-    space: &ScratchSpace,
-    folder: Option<&Path>,
-) -> ScratchMark {
+/// The mark of `space`, one session's scratch, around the session's name on its scratch folders'
+/// cards and around the total on its line. Its tooltip says whose session it is, by its whole id.
+/// The mark fades once the session has ended, which says whether the session may still build
+/// there.
+pub(in crate::dashboard::contents) fn scratch_mark(space: &ScratchSpace) -> ScratchMark {
     ScratchMark {
-        place: folder.map(|folder| space.place_of(folder).display().to_string()),
         tooltip: format!("Claude Code's scratch space\nSession {}", space.session_id),
         session_runs: space.session.is_some(),
     }
@@ -243,24 +239,23 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_folder_goes_by_its_sessions_name_its_mark_saying_where_it_lies_and_whose_it_is() {
+    fn a_scratch_folder_alone_goes_by_its_own_name_and_wears_its_sessions_in_the_mark() {
         let session = "/private/tmp/claude-501/-Users-dev-sk/d5fa0639-441e-4722-b044-080d70c0b04f";
         let path = format!("{session}/scratchpad/r567fixture");
         let scratch = |running: Option<crate::map::AgentSession>| Project {
-            name: "sk d5fa0639".to_string(),
             scratch: Some(ScratchSpace {
                 session_folder: PathBuf::from(session),
                 session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
                 started_in: "sk".to_string(),
                 session: running,
-                session_name: None,
+                session_name: Some("Simulator review".to_string()),
             }),
             ..project_at(&path)
         };
         let mark = |session_runs| {
             Some(Chip::Scratch {
+                session: "Simulator review".to_string(),
                 mark: ScratchMark {
-                    place: Some("scratchpad/r567fixture".to_string()),
                     tooltip: "Claude Code's scratch space\n\
                               Session d5fa0639-441e-4722-b044-080d70c0b04f"
                         .to_string(),
@@ -271,7 +266,7 @@ mod tests {
 
         let ended = identity(&scratch(None), Naming::Alone, Path::new(HOME), None);
 
-        assert_eq!(ended.name, "sk d5fa0639");
+        assert_eq!(ended.name, "r567fixture");
         assert_eq!(ended.name_tooltip, path, "the folder in full");
         assert_eq!(ended.chip, mark(false));
         let running = crate::map::test_support::agent_session(

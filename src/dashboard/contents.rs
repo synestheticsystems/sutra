@@ -195,14 +195,15 @@ pub struct GroupLine {
     /// What the cards share, which the window knows the group by, and a click on the line names.
     pub parent: Parent,
     /// A repository's main worktree's folder name, or a bare repository's own, less `.git`; a
-    /// session's name, as its scratch folders go by alone.
+    /// session's name, as the mark on its scratch folders' cards gives it.
     pub name: String,
     /// Where a repository is, as `~/code/app` reads, which tells two clones of one remote apart;
     /// a session's name and whether it still runs, then its folder.
     pub tooltip: String,
-    /// On a session's line, the mark of its scratch, beside its name. Once the session has ended,
-    /// the mark steps back as a robot at rest does, and the line's words do not: what the scratch
-    /// holds is still there to clean.
+    /// On a session's line, the mark of its scratch, which the window draws around the total, as
+    /// the total is exactly what is throwaway. Once the session has ended, the mark steps back as
+    /// a robot at rest does, and the total does not: what the scratch holds is still there to
+    /// clean.
     pub scratch: Option<ScratchMark>,
     /// The disk the parent's cards on the map take between them, listed or not, as their trays
     /// write it: the sizes measured so far, added up, and `None` before the first.
@@ -244,15 +245,13 @@ pub struct Card {
     pub path: String,
     /// The folder in full, with `~` for the home folder: shown while the pointer is over the card.
     pub location: String,
-    /// The folder's name, or a scratch folder's session's; nested under its parent's line, a
-    /// worktree's branch, or a scratch folder's own name.
+    /// The folder's name; nested under its repository's line, a worktree's branch.
     pub name: String,
     /// The folder, then when its last activity was and where it came from; nested, a worktree's
     /// branch in full before them.
     pub name_tooltip: String,
-    /// The chip beside the name: a worktree's branch, or a scratch folder's place in its session's
-    /// scratch. `None` for a plain folder, and for a card nested under its parent's line, which
-    /// says what the chip would.
+    /// The chip beside the name: a worktree's branch, or a scratch folder's session. `None` for a
+    /// plain folder, and for a card nested under its parent's line, which says what the chip would.
     pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
@@ -274,18 +273,18 @@ pub enum Chip {
     /// A worktree's branch, a filled label: the branch, `detached abc1234` or `no commits`, and in
     /// its tooltip the branch in full and which worktree of which repository this is.
     Branch { text: String, tooltip: String },
-    /// A scratch folder's place in its session's scratch.
-    Scratch { mark: ScratchMark },
+    /// A scratch folder's session, by its name, in the mark of scratch. The session's name is the
+    /// mark's own words, so it steps back with the mark once the session has ended.
+    Scratch { session: String, mark: ScratchMark },
 }
 
-/// The mark of Claude Code's scratch space: outlined in dashes, behind a scribble, so that nothing
-/// about it reads as a branch, which is kept, where scratch is thrown away. It fades, as a still
-/// robot does, once its session has ended and will build there no more.
+/// The mark of Claude Code's scratch space: an outline of dashes around what it marks, the
+/// session's name on a scratch folder's card and the total on the session's line, drawn the way a
+/// placeholder is, so that nothing about it reads as a branch, which is kept, where scratch is
+/// thrown away. It fades, as a still robot does, once its session has ended and will build there
+/// no more.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ScratchMark {
-    /// Where the folder it marks lies in its session's folder, as `scratchpad/r567fixture` reads;
-    /// `None` on the session's line, which marks the whole space.
-    pub place: Option<String>,
     /// `Claude Code's scratch space`, and the session's whole id.
     pub tooltip: String,
     /// The session runs, and may build in its scratch again.
