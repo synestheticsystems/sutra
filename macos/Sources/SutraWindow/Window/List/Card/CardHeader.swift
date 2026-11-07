@@ -19,12 +19,14 @@ struct CardHeader: View {
             // and the chip never reflow when the pointer comes or goes, and a card never grows
             // under the pointer and pushes the cards below it away.
             ZStack(alignment: .trailing) {
-                if let age = card.age {
-                    Text(age)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .opacity(hovered ? 0 : 1)
-                }
+                // With no age, a blank stands in its place: the row then still aligns on a line
+                // of text rather than on the buttons' taller frame, which would lower the name and
+                // stand the card taller than the rest.
+                Text(card.age ?? " ")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .opacity(hovered ? 0 : 1)
+                    .accessibilityHidden(card.age == nil)
                 OpenButtons(path: card.path)
                     .opacity(hovered ? 1 : 0)
                     .allowsHitTesting(hovered)
