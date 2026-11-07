@@ -11,7 +11,7 @@ use super::{
     CargoEnv, CheckedPlan, CleanError, CleanPlan, ItsProject, Plan, PlanError, Reach, cargo_rules,
     plan,
 };
-use crate::map::{ArtifactKind, DirUsage, FolderAccess, Project, Snapshot, disk};
+use crate::map::{ArtifactDir, ArtifactKind, DirUsage, FolderAccess, Project, Snapshot, disk};
 
 /// A clean worked out and ready to go. It holds no lock: a build that starts while a question is
 /// open or the clean waits its turn must not wait for it, so `Prepared::lock` takes them when the
@@ -65,8 +65,9 @@ pub enum PrepareError {
 /// The other projects on the map a clean may reach into, by the name the map gives them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sharing {
-    /// Those whose bare `cargo clean` deletes one of the clean's folders, a folder inside one or a
-    /// folder holding one, so their builds go with it. Sorted, each once.
+    /// Those whose builds go with the clean: whose bare `cargo clean` deletes one of the clean's
+    /// folders, a folder inside one or a folder holding one, or that the map shows building in
+    /// one (see `building_in`). Sorted, each once.
     pub projects: Vec<String>,
     /// Those whose workspace could not be worked out, because a file cargo reads for them cannot
     /// be read: any of them may build in these folders, or none. Sorted, each once.
@@ -228,11 +229,10 @@ fn sharing(plan: &Plan, project: &Path, map: &Snapshot, builds: &Builds) -> Shar
     for build in &builds.of_projects {
         match &build.clean {
             Ok(clean) => {
-                let overlaps = clean.folders.iter().any(|folder| {
-                    folders
-                        .iter()
-                        .any(|ours| folder.path.starts_with(ours) || ours.starts_with(&folder.path))
-                });
+                let overlaps = clean
+                    .folders
+                    .iter()
+                    .any(|folder| folders.iter().any(|ours| overlap(&folder.path, ours)));
                 if overlaps {
                     if own_workspace != Some(clean.workspace.as_path()) {
                         found.projects.push(name_on(map, &clean.workspace));
@@ -251,6 +251,10 @@ fn sharing(plan: &Plan, project: &Path, map: &Snapshot, builds: &Builds) -> Shar
             }
         }
     }
+    for builder in building_in(plan, project, map) {
+        found.projects.push(builder.name.clone());
+        found.project_folders.push(builder.path.clone());
+    }
     found.projects.sort();
     found.projects.dedup();
     found.project_folders.sort();
@@ -258,6 +262,27 @@ fn sharing(plan: &Plan, project: &Path, map: &Snapshot, builds: &Builds) -> Shar
     found.unknown.sort();
     found.unknown.dedup();
     found
+}
+
+/// The projects on `map`, but the one at `project`, that the map shows building in `plan`'s folders:
+/// each holding a build folder that is one of them, inside one or holding one, whatever cargo's
+/// settings say. A scratch folder has no workspace that cargo's settings could find it by, as
+/// `CARGO_TARGET_DIR` named its build folder, but its builds go with a clean all the same.
+pub(super) fn building_in<'a>(
+    plan: &'a Plan,
+    project: &'a Path,
+    map: &'a Snapshot,
+) -> impl Iterator<Item = &'a Project> {
+    let folders = plan.folders();
+    map.projects.iter().filter(move |builder| {
+        let builds_there = |dir: &ArtifactDir| folders.iter().any(|ours| overlap(&dir.path, ours));
+        builder.path != project && builder.artifacts.iter().any(builds_there)
+    })
+}
+
+/// Whether one of the folders `a` and `b` is, or holds, the other.
+fn overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
 }
 
 /// The folders of `project` a workspace can be worked out from. One whose `Cargo.toml` cannot be
@@ -761,5 +786,38 @@ mod tests {
         );
 
         assert_eq!(found, Sharing::default());
+    }
+
+    #[test]
+    fn a_project_the_map_shows_building_in_a_folder_shares_it_though_no_workspace_says_so() {
+        let fixture = TempDir::new("prepare-sharing-on-map");
+        let shared = shared_folder(&fixture);
+        let elsewhere = fixture.write("elsewhere/CACHEDIR.TAG", CACHEDIR_TAG);
+        let elsewhere = elsewhere.parent().unwrap().to_path_buf();
+        // Scratch folders `CARGO_TARGET_DIR` named, with no `Cargo.toml` around for cargo to find.
+        let cache_of = |folder: &PathBuf, name: &str| Project {
+            name: name.to_string(),
+            artifacts: vec![cargo_target(folder.clone(), Measurement::Pending)],
+            ..project_at(folder)
+        };
+        let map = snapshot_of(vec![
+            cache_of(&shared, "foundry e26ca359"),
+            cache_of(&elsewhere, "foundry d5fa0639"),
+        ]);
+
+        let found = sharing_with(
+            &cleaning(shared.clone(), fixture.path("one")),
+            &map,
+            &fixture,
+        );
+
+        assert_eq!(
+            found,
+            Sharing {
+                projects: vec!["foundry e26ca359".to_string()],
+                project_folders: vec![shared],
+                unknown: Vec::new(),
+            }
+        );
     }
 }

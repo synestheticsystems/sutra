@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::prepare::{Builds, prepare_among};
+use super::prepare::{Builds, building_in, prepare_among};
 use super::{CargoEnv, PrepareError, Prepared};
 use crate::map::{ArtifactDir, ArtifactKind, FolderAccess, Project, Snapshot};
 
@@ -94,20 +94,22 @@ pub fn idle_folders(map: &Snapshot, now: SystemTime, at_least: Duration) -> Vec<
 }
 
 /// The name of a project that shares `prepared`'s folders and is not idle, whose builds must not go
-/// with an idle one's clean.
+/// with the clean of an idle one's folder: one that shared them as the clean was worked out for the
+/// project at `project`, or one `map` shows building in them now.
 pub fn is_blocked_by_a_sharer(
     prepared: &Prepared,
+    project: &Path,
     map: &Snapshot,
     now: SystemTime,
     at_least: Duration,
 ) -> Option<String> {
-    prepared.sharing.project_folders.iter().find_map(|folder| {
-        let sharer = map
-            .projects
-            .iter()
-            .find(|project| project.path == *folder)?;
-        (!is_idle(sharer, now, at_least)).then(|| sharer.name.clone())
-    })
+    let found_then = (prepared.sharing.project_folders.iter())
+        .filter_map(|folder| map.projects.iter().find(|sharer| sharer.path == *folder));
+    let building_now = building_in(&prepared.plan, project, map);
+    let busy = found_then
+        .chain(building_now)
+        .find(|sharer| !is_idle(sharer, now, at_least))?;
+    Some(busy.name.clone())
 }
 
 /// Whether `prepared`, worked out for a build folder of the idle project at `project`, may still go
@@ -126,7 +128,7 @@ pub fn is_still_idle(
             .iter()
             .find(|candidate| candidate.path == project)
             .is_some_and(|project| is_idle(project, now, at_least))
-        && is_blocked_by_a_sharer(prepared, map, now, at_least).is_none()
+        && is_blocked_by_a_sharer(prepared, project, map, now, at_least).is_none()
 }
 
 /// One idle folder's clean, ready to ask about.
@@ -183,15 +185,17 @@ pub fn prepare_idle(
         };
         match prepare_among(&folder.dir.path, &project.path, map, env, &builds) {
             Err(err) => found.left_out.push(left_out(Why::Refused(err))),
-            Ok(prepared) => match is_blocked_by_a_sharer(&prepared, map, now, at_least) {
-                Some(sharer) => found.left_out.push(left_out(Why::SharedWith(sharer))),
-                None => found.cleans.push(IdleClean {
-                    clicked: folder.dir.path.clone(),
-                    project_name: project.name.clone(),
-                    project_path: project.path.clone(),
-                    prepared,
-                }),
-            },
+            Ok(prepared) => {
+                match is_blocked_by_a_sharer(&prepared, &project.path, map, now, at_least) {
+                    Some(sharer) => found.left_out.push(left_out(Why::SharedWith(sharer))),
+                    None => found.cleans.push(IdleClean {
+                        clicked: folder.dir.path.clone(),
+                        project_name: project.name.clone(),
+                        project_path: project.path.clone(),
+                        prepared,
+                    }),
+                }
+            }
         }
     }
     found
@@ -207,8 +211,8 @@ mod tests {
         node_modules, project_at, snapshot_of, subagent_at_work,
     };
     use crate::map::{
-        AgentStatus, Harness, KeptOutBy, Measurement, PrivateFolder, Source, SourceProblem,
-        SubagentWithParent,
+        AgentSession, AgentStatus, Harness, KeptOutBy, Measurement, PrivateFolder, ScratchSpace,
+        Source, SourceProblem, SubagentWithParent,
     };
     use std::io;
 
@@ -642,5 +646,119 @@ mod tests {
                 }]
             );
         }
+    }
+
+    /// An idle package `app` whose build-dir is a session's scratch folder, which `CARGO_TARGET_DIR`
+    /// named: the session builds there too, and the scratch folder, quiet as long as `app`, is on
+    /// the map with `session` running, or none.
+    fn app_building_in_a_scratch_folder(
+        fixture: &TempDir,
+        session: Option<AgentSession>,
+    ) -> (Project, Project) {
+        let app = idle_package(fixture, "app");
+        let session_folder = fixture.path("claude-501/-Users-me/e26ca359");
+        let tag = session_folder.join("scratchpad/target-567-fix/CACHEDIR.TAG");
+        let scratch = tag.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(&tag, CACHEDIR_TAG).unwrap();
+        fixture.write(
+            "app/.cargo/config.toml",
+            format!("[build]\nbuild-dir = \"{}\"\n", scratch.display()),
+        );
+        let space = ScratchSpace {
+            session_folder,
+            session_id: "e26ca359".to_string(),
+            started_in: "foundry".to_string(),
+            session,
+        };
+        let builder = Project {
+            name: space.name(),
+            scratch: Some(space),
+            last_activity: Some(at((1_000 - 9) * DAY)),
+            own_files: measured(0),
+            artifacts: vec![cargo_target(scratch.clone(), measured(LARGE))],
+            ..project_at(&scratch)
+        };
+        (app, builder)
+    }
+
+    #[test]
+    fn a_folder_a_running_sessions_scratch_folder_builds_in_is_left_out_though_no_workspace_says_so()
+     {
+        let fixture = TempDir::new("idle-shared-scratch");
+        let running = agent_session("e26ca359", AgentStatus::Idle);
+        let (app, live) = app_building_in_a_scratch_folder(&fixture, Some(running));
+        let env = fixture.cargo_env();
+        let prepared_with = |builder: &Project| {
+            let map = snapshot_of(vec![app.clone(), builder.clone()]);
+            prepare_idle(&map, now(), THREE_DAYS, &HashSet::new(), &env)
+        };
+
+        let found = prepared_with(&live);
+        assert!(found.cleans.is_empty(), "{:?}", found.cleans);
+        assert_eq!(
+            found.left_out,
+            [LeftOut {
+                project_name: "app".to_string(),
+                why: Why::SharedWith(live.name.clone()),
+            }]
+        );
+
+        let ended = Project {
+            scratch: live.scratch.clone().map(|space| ScratchSpace {
+                session: None,
+                ..space
+            }),
+            ..live.clone()
+        };
+        let found = prepared_with(&ended);
+        let of_app = found
+            .cleans
+            .iter()
+            .find(|clean| clean.project_path == app.path)
+            .expect("the session ended, so the clean of app goes");
+        assert_eq!(of_app.prepared.sharing.projects, [ended.name.as_str()]);
+        assert!(
+            !is_still_idle(
+                &of_app.prepared,
+                &app.path,
+                &snapshot_of(vec![app.clone(), live.clone()]),
+                now(),
+                THREE_DAYS
+            ),
+            "a session running there again by its turn keeps it"
+        );
+    }
+
+    #[test]
+    fn a_session_building_in_an_idle_folder_since_its_clean_was_worked_out_keeps_it() {
+        let fixture = TempDir::new("idle-shared-scratch-later");
+        let running = agent_session("e26ca359", AgentStatus::Idle);
+        let (app, live) = app_building_in_a_scratch_folder(&fixture, Some(running));
+        let before = snapshot_of(vec![app.clone()]);
+        let found = prepare_idle(
+            &before,
+            now(),
+            THREE_DAYS,
+            &HashSet::new(),
+            &fixture.cargo_env(),
+        );
+        let prepared = &found.cleans[0].prepared;
+
+        assert!(is_still_idle(
+            prepared,
+            &app.path,
+            &before,
+            now(),
+            THREE_DAYS
+        ));
+        let now_on_map = snapshot_of(vec![app.clone(), live]);
+        assert!(!is_still_idle(
+            prepared,
+            &app.path,
+            &now_on_map,
+            now(),
+            THREE_DAYS
+        ));
     }
 }
