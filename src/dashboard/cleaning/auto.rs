@@ -107,7 +107,7 @@ pub(super) fn is_all_on_volume_of(prepared: &Prepared, path: &Path) -> bool {
         return false;
     };
     prepared
-        .plan
+        .plan()
         .folders()
         .into_iter()
         .all(|folder| volume_of(folder).is_ok_and(|its_volume| its_volume == volume))

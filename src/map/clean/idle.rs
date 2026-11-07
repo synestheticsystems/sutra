@@ -108,7 +108,7 @@ pub fn is_blocked_by_a_sharer(
 ) -> Option<String> {
     let found_then = (prepared.sharing.project_folders.iter())
         .filter_map(|folder| map.projects.iter().find(|sharer| sharer.path == *folder));
-    let building_now = building_in(&prepared.plan, project, map);
+    let building_now = building_in(prepared.plan(), project, map);
     let busy = found_then
         .chain(building_now)
         .find(|sharer| !is_idle(sharer, now, at_least))?;
@@ -454,7 +454,7 @@ mod tests {
         found
             .cleans
             .iter()
-            .flat_map(|clean| clean.prepared.plan.folders())
+            .flat_map(|clean| clean.prepared.plan().folders())
             .map(std::path::Path::to_path_buf)
             .collect()
     }

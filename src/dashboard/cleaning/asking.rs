@@ -77,7 +77,7 @@ impl OpenQuestions {
 /// The folders the clean started from `clicked` deletes: that one, as the map shows it, and each
 /// that `prepared` deletes.
 fn folders_of<'a>(clicked: &'a Path, prepared: &'a Prepared) -> impl Iterator<Item = &'a Path> {
-    std::iter::once(clicked).chain(prepared.plan.folders())
+    std::iter::once(clicked).chain(prepared.plan().folders())
 }
 
 /// The card a click on Clean came from, which whatever is said about the clean speaks of even if
@@ -200,7 +200,7 @@ impl Cleaning {
             return;
         }
         if prepared.sharing.reaches_other_projects() {
-            let question = words.question(&prepared.plan, &prepared.sizes, &prepared.sharing);
+            let question = words.question(prepared.plan(), &prepared.sizes, &prepared.sharing);
             let asked = Asked::Clean(clicked.to_path_buf());
             self.questions.open(&asked, clicked, &prepared);
             let proposal = Proposal::Clean {

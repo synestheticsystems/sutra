@@ -56,7 +56,7 @@ pub(super) struct Running {
 impl Cleaning {
     /// Show `prepared`'s folders as being cleaned, and line it up behind what is running.
     pub(super) fn queue(&mut self, clicked: PathBuf, prepared: Prepared, by: By) {
-        for (folder, size) in prepared.plan.folders().into_iter().zip(&prepared.sizes) {
+        for (folder, size) in prepared.plan().folders().into_iter().zip(&prepared.sizes) {
             let before = size.map(|usage| usage.bytes);
             self.folders
                 .insert(folder.to_path_buf(), Stage::Deleting { before });
@@ -123,7 +123,7 @@ impl Cleaning {
                 continue;
             }
             if !self.may_start(&waiting, map, now, home) {
-                self.show_sizes_again(waiting.prepared.plan.folders());
+                self.show_sizes_again(waiting.prepared.plan().folders());
                 continue;
             }
             self.begin(waiting, home);
@@ -144,7 +144,7 @@ impl Cleaning {
             .iter()
             .flat_map(|running| &running.folders)
             .collect();
-        waiting.prepared.plan.folders().into_iter().any(|folder| {
+        waiting.prepared.plan().folders().into_iter().any(|folder| {
             running_folders
                 .iter()
                 .any(|running| overlap(folder, running))
@@ -160,7 +160,7 @@ impl Cleaning {
             by,
         } = waiting;
         let folders: Vec<PathBuf> = prepared
-            .plan
+            .plan()
             .folders()
             .into_iter()
             .map(Path::to_path_buf)
@@ -200,7 +200,7 @@ impl Cleaning {
             let waits = self
                 .waiting
                 .iter()
-                .any(|waiting| waiting.prepared.plan.folders().contains(&folder));
+                .any(|waiting| waiting.prepared.plan().folders().contains(&folder));
             let runs = self
                 .running
                 .iter()

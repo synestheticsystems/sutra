@@ -5,8 +5,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::open_folder::Identity;
-use super::run::{self, LockedPlan};
+use super::run::LockedPlan;
 use super::{
     CargoEnv, CheckedPlan, CleanError, CleanPlan, ItsProject, Plan, PlanError, Reach, cargo_rules,
     plan,
@@ -18,14 +17,12 @@ use crate::map::{ArtifactDir, ArtifactKind, DirUsage, FolderAccess, Project, Sna
 /// clean starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
-    pub plan: Plan,
-    /// The size of each folder `plan` deletes, in the same order: the map's, else measured now,
+    checked: CheckedPlan,
+    /// The size of each folder the plan deletes, in the same order: the map's, else measured now,
     /// which takes a moment for a large folder the map does not show (a build-dir outside every
     /// project); `None` when even that fails.
     pub sizes: Vec<Option<DirUsage>>,
     pub sharing: Sharing,
-    /// Which folder each of `plan`'s paths led to as it passed its checks.
-    identities: Vec<Identity>,
 }
 
 impl Prepared {
@@ -34,22 +31,30 @@ impl Prepared {
     /// it refuses one whose folder went.
     #[cfg(test)]
     pub(crate) fn for_test(plan: Plan, sizes: Vec<Option<DirUsage>>, sharing: Sharing) -> Prepared {
-        use super::open_folder::OpenFolder;
+        use super::open_folder::{Identity, OpenFolder};
         let identity = |folder: &Path| OpenFolder::at(folder)?.identity();
         let identities: std::io::Result<Vec<Identity>> =
             plan.folders().into_iter().map(identity).collect();
-        Prepared {
+        let checked = CheckedPlan {
             plan,
+            identities: identities.unwrap_or_default(),
+        };
+        Prepared {
+            checked,
             sizes,
             sharing,
-            identities: identities.unwrap_or_default(),
         }
+    }
+
+    /// What the clean deletes.
+    pub fn plan(&self) -> &Plan {
+        &self.checked.plan
     }
 
     /// Take the locks for the delete, or refuse because a build holds one or a folder is no longer
     /// the one this was worked out for.
     pub fn lock(&self) -> Result<LockedPlan, CleanError> {
-        run::lock(&self.plan, &self.identities)
+        self.checked.lock()
     }
 }
 
@@ -161,12 +166,10 @@ fn its_project<'a>(clicked: &Path, project: &'a Path, map: &Snapshot) -> ItsProj
 }
 
 fn prepared(checked: CheckedPlan, project: &Path, map: &Snapshot, builds: &Builds) -> Prepared {
-    let CheckedPlan { plan, identities } = checked;
     Prepared {
-        sizes: sizes(&plan, map),
-        sharing: sharing(&plan, project, map, builds),
-        plan,
-        identities,
+        sizes: sizes(&checked.plan, map),
+        sharing: sharing(&checked.plan, project, map, builds),
+        checked,
     }
 }
 
@@ -369,7 +372,7 @@ mod tests {
         let prepared = prepare(&target, &fixture.path("app"), &map, &fixture.cargo_env()).unwrap();
 
         assert_eq!(
-            prepared.plan,
+            *prepared.plan(),
             cleaning(target.clone(), fixture.path("app")),
             "the clean of the clicked folder"
         );
@@ -407,7 +410,7 @@ mod tests {
         let worked_out = |prepared: &Result<Prepared, PrepareError>| {
             let found = prepared.as_ref();
             found
-                .map(|it| (it.plan.clone(), it.sharing.clone()))
+                .map(|it| (it.plan().clone(), it.sharing.clone()))
                 .map_err(Clone::clone)
         };
         assert_eq!(

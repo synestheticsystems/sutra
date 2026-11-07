@@ -119,7 +119,7 @@ fn bytes_of_each(cleans: &[IdleClean]) -> Vec<u64> {
     cleans
         .iter()
         .map(|clean| {
-            let folders = clean.prepared.plan.folders();
+            let folders = clean.prepared.plan().folders();
             folders
                 .into_iter()
                 .zip(&clean.prepared.sizes)
