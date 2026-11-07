@@ -363,13 +363,16 @@ struct TrackedFolders {
     searched: Vec<(PathBuf, Tracked)>,
 }
 
-/// Whether `project` has a card on the map. A scratch folder earns one while an agent stands on it,
-/// a session or a subagent at work there (see `Place`), and by holding a build folder outside every
-/// worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES` without one; every other
-/// project has one. The session whose scratch it is earns it none by running: the session stands
-/// where it works.
+/// Whether `project` has a card on the map. A scratch folder earns one while something works in it:
+/// an agent standing on it, a session or a subagent at work there (see `Place`), or a dev-runner
+/// environment describing it, whose servers would show nowhere else. It earns one too by holding a
+/// build folder outside every worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES`
+/// without one; every other project has one. The session whose scratch it is earns it none by
+/// running: the session stands where it works.
 pub(super) fn earns_a_card(project: &Project) -> bool {
-    let at_work = || !project.agents.is_empty() || !project.subagents.is_empty();
+    let at_work = || {
+        !project.agents.is_empty() || !project.subagents.is_empty() || project.environment.is_some()
+    };
     let large = || {
         project
             .own_files
@@ -385,8 +388,8 @@ mod tests {
     use crate::map::engine::sizing::Job;
     use crate::map::grant::Roots;
     use crate::map::test_support::{
-        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, git, measured, project_at,
-        subagent_at_work, usage,
+        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, git, measured,
+        project_at, subagent_at_work, usage,
     };
     use crate::map::{AgentStatus, Measurement, ScanOptions, SubagentWithParent};
 
@@ -424,6 +427,17 @@ mod tests {
         ] {
             assert!(!earns_a_card(&scratch(&[], small)), "{small:?}");
         }
+    }
+
+    #[test]
+    fn a_scratch_folder_earns_a_card_while_a_dev_environment_runs_in_it() {
+        let small = scratch(&[], measured(4096));
+        let serving = Project {
+            environment: Some(environment_at(&small.path)),
+            ..small.clone()
+        };
+        assert!(!earns_a_card(&small));
+        assert!(earns_a_card(&serving), "its servers show on its card");
     }
 
     #[test]
