@@ -5,18 +5,20 @@
 //! checks every folder before deleting it:
 //!   - A folder that config or the environment named must hold the `CACHEDIR.TAG` cargo writes
 //!     into a build folder it creates, so a setting that points at the wrong folder deletes
-//!     nothing. Cargo's default `target` beside the root manifest needs no tag.
+//!     nothing. Cargo's own check reads only the tag's signature (`src/ops/cargo_clean.rs:156-185`,
+//!     `crates/cargo-util/src/paths.rs:802-815`), which every tool's tag starts with; Sutra asks
+//!     also for the words that say cargo wrote it (`scan::holds_cargo_tag`). Cargo's default
+//!     `target` beside the root manifest needs no tag.
 //!   - No folder may hold the workspace, the project, the home folder or `CARGO_HOME`.
 //!   - A symlink is refused: cargo would remove the link alone, which frees nothing.
 //!   - In the store edition, a folder outside the granted folders is refused before anything is
 //!     tried, rather than failing halfway.
 //!
 //! A folder deleted alone, which no `cargo clean` of its workspace deletes, must be a folder cargo
-//! made: beside a `Cargo.toml`, or holding a `CACHEDIR.TAG`, as the scan requires of a build
-//! folder.
+//! made: a `target` beside a `Cargo.toml`, or holding cargo's `CACHEDIR.TAG`, as the scan requires
+//! of a build folder (`scan::is_cargo_target`).
 
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{CargoEnv, Origin, PlanError, PlannedFolder};
@@ -88,7 +90,7 @@ pub(super) fn check_planned(
     reach: &Reach,
 ) -> Result<(), PlanError> {
     check_any(&folder.path, protected, reach)?;
-    if folder.origin != Origin::Default && !has_cargo_tag(&folder.path) {
+    if folder.origin != Origin::Default && !scan::holds_cargo_tag(&folder.path) {
         let origin = folder.origin.clone();
         return Err(refused(&folder.path, Refusal::Untagged { origin }));
     }
@@ -143,21 +145,6 @@ fn check_any(folder: &Path, protected: &Protected, reach: &Reach) -> Result<(), 
     Ok(())
 }
 
-/// Whether `folder` holds the `CACHEDIR.TAG` cargo writes: a regular file, not a link, that
-/// starts with cargo's signature (`src/ops/cargo_clean.rs:156-185`,
-/// `crates/cargo-util/src/paths.rs:802-815`).
-fn has_cargo_tag(folder: &Path) -> bool {
-    const SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
-    let tag = folder.join("CACHEDIR.TAG");
-    if !fs::symlink_metadata(&tag).is_ok_and(|meta| meta.is_file()) {
-        return false;
-    }
-    let mut start = [0; SIGNATURE.len()];
-    File::open(&tag)
-        .and_then(|mut file| file.read_exact(&mut start))
-        .is_ok_and(|()| start == SIGNATURE)
-}
-
 fn refused(folder: &Path, reason: Refusal) -> PlanError {
     PlanError::Refused {
         folder: folder.to_path_buf(),
@@ -168,9 +155,7 @@ fn refused(folder: &Path, reason: Refusal) -> PlanError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::test_support::TempDir;
-
-    const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# cargo";
+    use crate::map::test_support::{CACHEDIR_TAG, PYTEST_TAG, TempDir};
 
     fn from_config(fixture: &TempDir, path: PathBuf) -> PlannedFolder {
         PlannedFolder {
@@ -199,19 +184,21 @@ mod tests {
             &fixture.cargo_env(),
         );
         let tagged = fixture
-            .write("out/CACHEDIR.TAG", TAG)
+            .write("out/CACHEDIR.TAG", CACHEDIR_TAG)
             .parent()
             .unwrap()
             .to_path_buf();
         let untagged = fixture.dir("bare");
         let lookalike = fixture.write("fake/CACHEDIR.TAG", "Signature: something else");
         let lookalike = lookalike.parent().unwrap().to_path_buf();
+        let pytests = fixture.write("pytest/CACHEDIR.TAG", PYTEST_TAG);
+        let pytests = pytests.parent().unwrap().to_path_buf();
 
         assert_eq!(
             check_planned(&from_config(&fixture, tagged), &protected, &Reach::Anywhere),
             Ok(())
         );
-        for folder in [untagged.clone(), lookalike] {
+        for folder in [untagged.clone(), lookalike, pytests] {
             assert!(matches!(
                 reason(check_planned(
                     &from_config(&fixture, folder),
@@ -310,7 +297,7 @@ mod tests {
         let protected = Protected::new(None, &fixture.path("app"), &fixture.cargo_env());
         fixture.write("app/crates/a/Cargo.toml", "");
         let beside_manifest = fixture.dir("app/crates/a/target");
-        let tagged = fixture.write("app/tools/target/CACHEDIR.TAG", TAG);
+        let tagged = fixture.write("app/tools/target/CACHEDIR.TAG", CACHEDIR_TAG);
         let tagged = tagged.parent().unwrap().to_path_buf();
         let site = fixture.dir("app/site/target");
 

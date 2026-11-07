@@ -11,9 +11,7 @@ use rayon::prelude::*;
 use super::CleanError;
 use super::locks::{self, HeldLocks};
 use super::run::FolderProgress;
-
-/// The tag cargo writes in the root of every build folder it creates.
-const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
+use crate::map::scan::CACHEDIR_TAG_FILE;
 
 /// Delete everything in `folder` but what cargo's locks need: the lock files held, the folders
 /// holding them, and `folder`'s `CACHEDIR.TAG` (cargo writes the tag, and excludes the folder
@@ -25,7 +23,7 @@ pub(super) fn clear(
     locks: &mut HeldLocks,
     progress: &FolderProgress,
 ) -> Result<(), CleanError> {
-    clear_around(folder, &folder.join(CACHEDIR_TAG), locks, progress)
+    clear_around(folder, &folder.join(CACHEDIR_TAG_FILE), locks, progress)
 }
 
 /// `clear` of `dir`, which is the build folder or a folder in it. `tag` is the build folder's own.

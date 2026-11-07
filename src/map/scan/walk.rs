@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::Failure;
 use super::boundary::Boundary;
+use super::cargo_target::{CACHEDIR_TAG_FILE, holds_cargo_tag};
 use crate::map::devrunner::PROJECT_STATE_DIR;
 
 /// What the walk found.
@@ -109,7 +110,8 @@ impl<'a> Walker<'a> {
     }
 
     /// What `dir` holds, or why it cannot be fully listed. A folder half-listed could hide its
-    /// `.git` entry, so it is skipped whole.
+    /// `.git` entry, so it is skipped whole. A folder cargo tagged as its cache holds no project,
+    /// whatever its name, so the walk goes no further into it.
     fn list(&self, dir: &Path, depth: Depth) -> io::Result<Listing> {
         let skipped = self.boundary.skipped_children_of(dir);
         let mut listing = Listing {
@@ -117,9 +119,11 @@ impl<'a> Walker<'a> {
             has_state_folder: false,
             subdirs: Vec::new(),
         };
+        let mut holds_tag = false;
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name();
+            holds_tag |= name == CACHEDIR_TAG_FILE;
             if name == ".git" {
                 if depth == Depth::BelowRoot {
                     // A repository is a project whatever it holds.
@@ -144,6 +148,13 @@ impl<'a> Walker<'a> {
                 continue;
             }
             listing.subdirs.push(name);
+        }
+        if holds_tag && depth == Depth::BelowRoot && holds_cargo_tag(dir) {
+            return Ok(Listing {
+                is_repo: false,
+                has_state_folder: false,
+                subdirs: Vec::new(),
+            });
         }
         Ok(listing)
     }

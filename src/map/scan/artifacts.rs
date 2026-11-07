@@ -1,9 +1,12 @@
 //! Build-artifact directories inside one worktree.
 
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::boundary::Boundary;
+use super::cargo_target::{CACHEDIR_TAG_FILE, is_tagged_build_folder};
 use crate::map::ArtifactKind;
 
 /// How many folder levels below the worktree's top are searched: deep enough for workspace members
@@ -11,9 +14,10 @@ use crate::map::ArtifactKind;
 /// enough to stay out of source trees.
 const SEARCH_DEPTH: usize = 2;
 
-/// Build-artifact directories inside one worktree: each `node_modules/`, and each `target/` that
-/// Cargo made (its parent holds a `Cargo.toml`, or it holds Cargo's `CACHEDIR.TAG`), at the top and
-/// up to two levels down. Sorted by path. The search enters no folder the walk skips, so a home
+/// Build-artifact directories inside one worktree: each `node_modules/`, and each Cargo build
+/// folder (see `is_cargo_target`), at the top and up to two levels down. Below the top, a folder
+/// cargo tagged is one whatever its name, as `CARGO_TARGET_DIR` names it; two levels down only a
+/// `target` is looked for. Sorted by path. The search enters no folder the walk skips, so a home
 /// folder kept in git never has its private folders or `Library` searched.
 pub fn find_artifacts(worktree: &Path, boundary: &Boundary) -> Vec<(PathBuf, ArtifactKind)> {
     let mut found = Vec::new();
@@ -28,38 +32,23 @@ fn search(dir: &Path, depth: usize, boundary: &Boundary, found: &mut Vec<(PathBu
     if depth == SEARCH_DEPTH {
         return probe(dir, found);
     }
-    let skipped = boundary.skipped_children_of(dir);
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Some(listed) = Listed::read(dir, boundary.skipped_children_of(dir)) else {
         return;
     };
-    let mut target = None;
-    let mut node_modules = None;
-    let mut has_cargo_manifest = false;
-    let mut subdirs = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
+    if depth > 0 {
         // A repository or linked worktree nested here reports its own artifacts.
-        if name == ".git" && depth > 0 {
+        if listed.is_repo {
             return;
         }
-        if name == "Cargo.toml" {
-            has_cargo_manifest = true;
-        }
-        // `DirEntry::file_type` does not follow symlinks, so a symlinked folder is never entered.
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || name == ".git" {
-            continue;
-        }
-        if name == "target" {
-            target = Some(entry.path());
-        } else if name == "node_modules" {
-            node_modules = Some(entry.path());
-        } else if !skipped.is_some_and(|names| names.contains(&name)) {
-            subdirs.push(entry.path());
+        if listed.is_cargo_target(dir) {
+            found.push((dir.to_path_buf(), ArtifactKind::CargoTarget));
+            return;
         }
     }
-    record(found, target, node_modules, has_cargo_manifest);
-    for subdir in subdirs {
-        search(&subdir, depth + 1, boundary, found);
+    let (build_folders, subfolders) = listed.into_parts();
+    found.extend(build_folders);
+    for subfolder in subfolders {
+        search(&subfolder, depth + 1, boundary, found);
     }
 }
 
@@ -73,38 +62,87 @@ fn probe(dir: &Path, found: &mut Vec<(PathBuf, ArtifactKind)>) {
     if (target.is_none() && node_modules.is_none()) || exists(&dir.join(".git")) {
         return;
     }
-    record(found, target, node_modules, exists(&dir.join("Cargo.toml")));
+    let listed = Listed {
+        holds_tag: false,
+        holds_manifest: exists(&dir.join("Cargo.toml")),
+        is_repo: false,
+        target,
+        node_modules,
+        subfolders: Vec::new(),
+    };
+    found.extend(listed.into_parts().0);
 }
 
-/// Keep a folder's `node_modules`, and its `target` when Cargo made it.
-fn record(
-    found: &mut Vec<(PathBuf, ArtifactKind)>,
+/// What one listing of a folder tells a search for build folders.
+struct Listed {
+    /// The folder holds a `CACHEDIR.TAG`, which may be cargo's.
+    holds_tag: bool,
+    holds_manifest: bool,
+    /// The folder holds a `.git` entry: a repository or a linked worktree.
+    is_repo: bool,
+    /// Its subfolders named for build output, which a search never enters.
     target: Option<PathBuf>,
     node_modules: Option<PathBuf>,
-    has_cargo_manifest: bool,
-) {
-    if let Some(target) = target {
-        if made_by_cargo(&target, has_cargo_manifest) {
-            found.push((target, ArtifactKind::CargoTarget));
+    /// Its other subfolders, but `.git` and those `skipped` names.
+    subfolders: Vec<PathBuf>,
+}
+
+impl Listed {
+    /// `None` when `dir` cannot be listed. `DirEntry::file_type` does not follow symlinks, so a
+    /// symlinked folder is never entered.
+    fn read(dir: &Path, skipped: Option<&HashSet<OsString>>) -> Option<Listed> {
+        let entries = fs::read_dir(dir).ok()?;
+        let mut listed = Listed {
+            holds_tag: false,
+            holds_manifest: false,
+            is_repo: false,
+            target: None,
+            node_modules: None,
+            subfolders: Vec::new(),
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            listed.holds_tag |= name == CACHEDIR_TAG_FILE;
+            listed.holds_manifest |= name == "Cargo.toml";
+            if name == ".git" {
+                listed.is_repo = true;
+                continue;
+            }
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            if name == "target" {
+                listed.target = Some(entry.path());
+            } else if name == "node_modules" {
+                listed.node_modules = Some(entry.path());
+            } else if !skipped.is_some_and(|names| names.contains(&name)) {
+                listed.subfolders.push(entry.path());
+            }
         }
+        Some(listed)
     }
-    if let Some(node_modules) = node_modules {
-        found.push((node_modules, ArtifactKind::NodeModules));
+
+    /// Whether `dir`, the folder listed, is itself a Cargo build folder, by cargo's tag in it.
+    fn is_cargo_target(&self, dir: &Path) -> bool {
+        self.holds_tag && is_tagged_build_folder(dir)
     }
-}
 
-/// Whether Cargo made the folder `target`: it sits beside a `Cargo.toml`, or holds the
-/// `CACHEDIR.TAG` Cargo writes into every target folder.
-pub fn is_cargo_target(target: &Path) -> bool {
-    let beside_manifest = target
-        .parent()
-        .is_some_and(|parent| exists(&parent.join("Cargo.toml")));
-    made_by_cargo(target, beside_manifest)
-}
-
-/// `is_cargo_target`, for a search that has already listed the folder `target` sits in.
-fn made_by_cargo(target: &Path, beside_manifest: bool) -> bool {
-    beside_manifest || exists(&target.join("CACHEDIR.TAG"))
+    /// Its build folders, `node_modules` and a `target` cargo made, and the subfolders a search
+    /// goes on into.
+    fn into_parts(self) -> (Vec<(PathBuf, ArtifactKind)>, Vec<PathBuf>) {
+        let holds_manifest = self.holds_manifest;
+        let target = self
+            .target
+            .filter(|target| holds_manifest || is_tagged_build_folder(target))
+            .map(|target| (target, ArtifactKind::CargoTarget));
+        let node_modules = self
+            .node_modules
+            .map(|node_modules| (node_modules, ArtifactKind::NodeModules));
+        (
+            target.into_iter().chain(node_modules).collect(),
+            self.subfolders,
+        )
+    }
 }
 
 fn exists(path: &Path) -> bool {
@@ -115,7 +153,7 @@ fn exists(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::map::ScanOptions;
-    use crate::map::test_support::TempDir;
+    use crate::map::test_support::{CACHEDIR_TAG, PYTEST_TAG, TempDir};
 
     /// `find_artifacts` in a worktree that is its own scan root and home folder.
     fn find_in(worktree: &Path) -> Vec<(PathBuf, ArtifactKind)> {
@@ -157,13 +195,14 @@ mod tests {
     }
 
     #[test]
-    fn find_artifacts_takes_a_target_only_when_cargo_made_it() {
+    fn find_artifacts_takes_a_target_with_no_manifest_beside_it_only_when_cargo_tagged_it() {
         let fixture = TempDir::new("scan-artifacts-cargo-made");
         let worktree = fixture.dir("app");
-        fixture.write("app/shared/target/CACHEDIR.TAG", "");
+        fixture.write("app/shared/target/CACHEDIR.TAG", CACHEDIR_TAG);
         fixture.dir("app/docs/target");
-        fixture.write("app/tools/gen/target/CACHEDIR.TAG", "");
+        fixture.write("app/tools/gen/target/CACHEDIR.TAG", CACHEDIR_TAG);
         fixture.dir("app/tools/site/target");
+        fixture.write("app/tools/empty/target/CACHEDIR.TAG", "");
 
         assert_eq!(
             find_in(&worktree),
@@ -174,6 +213,22 @@ mod tests {
                     ArtifactKind::CargoTarget
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn find_artifacts_takes_a_folder_cargo_tagged_below_the_top_whatever_its_name() {
+        let fixture = TempDir::new("scan-artifacts-any-name");
+        let worktree = fixture.dir("app");
+        fixture.write("app/target-mas/CACHEDIR.TAG", CACHEDIR_TAG);
+        fixture.dir("app/target-mas/release/deps");
+        fixture.write("app/.pytest_cache/CACHEDIR.TAG", PYTEST_TAG);
+        fixture.write("app/CACHEDIR.TAG", CACHEDIR_TAG);
+
+        assert_eq!(
+            find_in(&worktree),
+            [(fixture.path("app/target-mas"), ArtifactKind::CargoTarget)],
+            "neither another tool's cache nor the worktree itself"
         );
     }
 

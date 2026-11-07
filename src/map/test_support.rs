@@ -19,8 +19,14 @@ use super::{
 };
 use crate::model::{EnvSources, Environment};
 
-/// Cargo's signature, as it writes it into a build folder it creates.
-pub(crate) const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n";
+/// Cargo's tag, as it writes it into a build folder it creates.
+pub(crate) const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+    # This file is a cache directory tag created by cargo.\n\
+    # For information about cache directory tags see https://bford.info/cachedir/\n";
+
+/// The tag pytest writes into the cache folder it makes: a cache directory tag, but not cargo's.
+pub(crate) const PYTEST_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+    # This file is a cache directory tag created by pytest.\n";
 
 /// A pid no process holds: above every pid limit macOS and Linux allow.
 pub(crate) const DEAD_PID: u32 = i32::MAX as u32;

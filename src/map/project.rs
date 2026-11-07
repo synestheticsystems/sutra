@@ -160,8 +160,9 @@ pub struct ArtifactDir {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArtifactKind {
-    /// A `target` folder Cargo made: a `Cargo.toml` lies beside it, or it holds Cargo's
-    /// `CACHEDIR.TAG`. What cleaning it deletes is for `clean` to work out.
+    /// A folder Cargo builds in: a `target` beside a `Cargo.toml`, or any folder holding Cargo's
+    /// `CACHEDIR.TAG`, whatever `CARGO_TARGET_DIR` named it (see `scan::is_cargo_target`). What
+    /// cleaning it deletes is for `clean` to work out.
     CargoTarget,
     NodeModules,
 }

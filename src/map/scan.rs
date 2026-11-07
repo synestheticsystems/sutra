@@ -6,6 +6,7 @@
 
 mod artifacts;
 mod boundary;
+mod cargo_target;
 mod git;
 mod registry;
 mod walk;
@@ -17,8 +18,9 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-pub use artifacts::{find_artifacts, is_cargo_target};
+pub use artifacts::find_artifacts;
 pub use boundary::{Boundary, MacOsAnswer, folder_access};
+pub use cargo_target::{CACHEDIR_TAG_FILE, holds_cargo_tag, is_cargo_target};
 pub use git::{git_activity, repo_info};
 
 use super::{FolderAccess, RepoInfo, ScanStats, Source, SourceProblem};
@@ -148,7 +150,7 @@ fn discover_on_current_pool(boundary: &Boundary, started: Instant) -> Discovery 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::test_support::{TempDir, git};
+    use crate::map::test_support::{CACHEDIR_TAG, TempDir, git};
     use crate::map::{KeptOutBy, PrivateFolder, ScanOptions};
 
     /// The boundary of a scan with the fixture's `home` folder as both the root and the home folder.
@@ -346,6 +348,9 @@ mod tests {
         }
         // Go keeps module downloads in `~/go/pkg`, but GOPATH projects live in `~/go/src`.
         fixture.repo("home/go/pkg/mod/dep");
+        // Cargo builds where `CARGO_TARGET_DIR` says, under any name, and tags the folder.
+        fixture.write("home/plain/out-567/CACHEDIR.TAG", CACHEDIR_TAG);
+        fixture.repo("home/plain/out-567/debug/build/dep");
         let kept = [
             fixture.repo("home/.local/state/tool"),
             fixture.repo("home/code/app"),

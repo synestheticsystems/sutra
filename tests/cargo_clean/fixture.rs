@@ -10,8 +10,10 @@ use std::time::{Duration, Instant};
 
 use sutra::map::clean::{self, CargoEnv, CleanPlan, Plan, Reach};
 
-/// Cargo's signature, as it writes it into a build folder it creates.
-pub const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n";
+/// Cargo's tag, as it writes it into a build folder it creates.
+pub const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+    # This file is a cache directory tag created by cargo.\n\
+    # For information about cache directory tags see https://bford.info/cachedir/\n";
 
 /// A fresh folder under the system temp dir for one test, removed when dropped. Its
 /// `cargo-home` is the `CARGO_HOME` of every cargo it starts.
