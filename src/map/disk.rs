@@ -1,6 +1,6 @@
 //! Disk use of directory trees (build folders and whole project folders), with hard links counted
-//! once; where a tree's measurement stands; and a cheap stamp of a tree's top that tells whether it
-//! may have changed.
+//! once, and when the newest file in each was written; where a tree's measurement stands; and a
+//! cheap stamp of a tree's top that tells whether it may have changed.
 //!
 //! Each regular file contributes its allocated bytes divided by its link count. Rustc's incremental
 //! cache hard-links most of the files in a `target/`, and every link stays inside that tree, so the
@@ -32,6 +32,9 @@ pub struct DirUsage {
     /// rustc's hard-linked incremental cache is not double-counted.
     pub bytes: u64,
     pub files: u64,
+    /// The newest modification time of the files counted: when the newest of them was last
+    /// written. `None` when the tree holds no file.
+    pub newest_write: Option<SystemTime>,
     /// Subdirectories that could not be listed and were skipped, so `bytes` is a lower bound when
     /// this is non-zero.
     pub unreadable_dirs: u64,
@@ -96,6 +99,7 @@ pub fn measure_pruned(dir: &Path, pruned: Pruned) -> io::Result<DirUsage> {
     Ok(DirUsage {
         bytes: tally.bytes,
         files: tally.files,
+        newest_write: tally.newest_write,
         unreadable_dirs: tally.unreadable_dirs,
         measured_at,
         elapsed: started.elapsed(),
@@ -139,6 +143,7 @@ pub(crate) fn top_stamp(dir: &Path, pruned: &dyn Fn(&Path) -> bool) -> io::Resul
 struct Tally {
     bytes: u64,
     files: u64,
+    newest_write: Option<SystemTime>,
     unreadable_dirs: u64,
 }
 
@@ -147,14 +152,17 @@ impl Tally {
         Tally {
             bytes: self.bytes + other.bytes,
             files: self.files + other.files,
+            newest_write: self.newest_write.max(other.newest_write),
             unreadable_dirs: self.unreadable_dirs + other.unreadable_dirs,
         }
     }
 
-    /// Count one regular file holding `share` of the disk.
-    fn add_file(&mut self, share: u64) {
+    /// Count one regular file holding `share` of the disk, last written at `written` when the file
+    /// system says. A file with no time still counts its share.
+    fn add_file(&mut self, share: u64, written: Option<SystemTime>) {
         self.bytes += share;
         self.files += 1;
+        self.newest_write = self.newest_write.max(written);
     }
 }
 
@@ -186,7 +194,7 @@ fn tally_below(listing: Listing, pruned: Pruned) -> Tally {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::test_support::TempDir;
+    use crate::map::test_support::{TempDir, at, set_mtime};
     use std::path::PathBuf;
 
     /// APFS allocates whole 4 KiB blocks, so a file's allocated size exceeds its length by less
@@ -282,6 +290,23 @@ mod tests {
             measure_pruned(fixture.root(), &|dir| left_out.iter().any(|p| p == dir)).unwrap();
         assert_eq!(usage.files, 1);
         assert_within_block_rounding(&usage, &[5_000]);
+    }
+
+    #[test]
+    fn the_newest_write_is_the_latest_file_time_of_the_files_counted() {
+        let fixture = TempDir::new("disk-newest-write");
+        let dated = |rel: &str, secs: u64| set_mtime(&file(&fixture, rel, 10), at(secs));
+        dated("old.txt", 1_000);
+        dated("deep/down/newest.txt", 3_000);
+        dated("target/debug/built-later.rlib", 9_000);
+        let target = fixture.path("target");
+
+        let usage = measure_pruned(fixture.root(), &|dir| dir == target).unwrap();
+
+        assert_eq!(usage.newest_write, Some(at(3_000)), "not the pruned build");
+        let empty = TempDir::new("disk-newest-write-empty");
+        fs::create_dir(empty.path("folder")).unwrap();
+        assert_eq!(measure(empty.root()).unwrap().newest_write, None);
     }
 
     #[test]

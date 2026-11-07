@@ -1,9 +1,9 @@
-//! Listing a directory on macOS with `getattrlistbulk`, which returns the type, link count and
-//! allocated size of every entry along with its name. The alternative, `read_dir` and an `lstat`
-//! of each file, has the kernel look up each file, and build it a vnode once a walk has met more
-//! files than its cache holds (`kern.maxvnodes` is 263,168 on Daniel's M4 Max; his home holds
-//! millions). On 613,000 of those files (2026-11-04) this took 3 to 4.5 CPU-seconds where that
-//! took 6 to 12, in less wall time, and found the same bytes to the digit.
+//! Listing a directory on macOS with `getattrlistbulk`, which returns the type, modification time,
+//! link count and allocated size of every entry along with its name. The alternative, `read_dir`
+//! and an `lstat` of each file, has the kernel look up each file, and build it a vnode once a walk
+//! has met more files than its cache holds (`kern.maxvnodes` is 263,168 on Daniel's M4 Max; his
+//! home holds millions). On 613,000 of those files (2026-11-04) this took 3 to 4.5 CPU-seconds
+//! where that took 6 to 12, in less wall time, and found the same bytes to the digit.
 
 use std::cell::RefCell;
 use std::ffi::OsStr;
@@ -13,6 +13,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
 
@@ -40,6 +41,7 @@ struct Entry<'a> {
     error: u32,
     name: Option<&'a [u8]>,
     kind: Option<u32>,
+    modified: Option<SystemTime>,
     links: Option<u32>,
     allocated: Option<u64>,
 }
@@ -97,7 +99,8 @@ fn requested_attributes() -> libc::attrlist {
         commonattr: libc::ATTR_CMN_RETURNED_ATTRS
             | ATTR_CMN_ERROR
             | libc::ATTR_CMN_NAME
-            | libc::ATTR_CMN_OBJTYPE,
+            | libc::ATTR_CMN_OBJTYPE
+            | libc::ATTR_CMN_MODTIME,
         volattr: 0,
         dirattr: 0,
         fileattr: libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE,
@@ -149,7 +152,8 @@ fn add_entry(entry: &Entry, dir: &Path, pruned: Pruned, listing: &mut Listing) -
         (Some(VREG), _, Some(links), Some(allocated)) => {
             // A file that was just listed has at least one link; `max` only keeps the division
             // total.
-            listing.tally.add_file(allocated / u64::from(links.max(1)));
+            let share = allocated / u64::from(links.max(1));
+            listing.tally.add_file(share, entry.modified);
             true
         }
         // A file without the sizes it was asked for.
@@ -184,6 +188,12 @@ fn read_entry(packed: &[u8]) -> Option<Entry<'_>> {
     if common & libc::ATTR_CMN_OBJTYPE != 0 {
         entry.kind = Some(next_u32(&mut fields)?);
     }
+    if common & libc::ATTR_CMN_MODTIME != 0 {
+        // A `struct timespec`: whole seconds since the epoch, then nanoseconds.
+        let seconds = i64::from_ne_bytes(next_chunk(&mut fields)?);
+        let nanoseconds = i64::from_ne_bytes(next_chunk(&mut fields)?);
+        entry.modified = time_of(seconds, nanoseconds);
+    }
     if file & libc::ATTR_FILE_LINKCOUNT != 0 {
         entry.links = Some(next_u32(&mut fields)?);
     }
@@ -195,9 +205,30 @@ fn read_entry(packed: &[u8]) -> Option<Entry<'_>> {
 }
 
 fn next_u32(fields: &mut &[u8]) -> Option<u32> {
+    next_chunk(fields).map(u32::from_ne_bytes)
+}
+
+fn next_chunk<const N: usize>(fields: &mut &[u8]) -> Option<[u8; N]> {
     let (bytes, rest) = fields.split_first_chunk()?;
     *fields = rest;
-    Some(u32::from_ne_bytes(*bytes))
+    Some(*bytes)
+}
+
+/// The moment a `struct timespec` names, or `None` for nanoseconds out of their range, which no
+/// file system writes.
+fn time_of(seconds: i64, nanoseconds: i64) -> Option<SystemTime> {
+    let nanoseconds = Duration::from_nanos(
+        u64::try_from(nanoseconds)
+            .ok()
+            .filter(|n| *n < 1_000_000_000)?,
+    );
+    let whole = Duration::from_secs(seconds.unsigned_abs());
+    let at = if seconds >= 0 {
+        UNIX_EPOCH.checked_add(whole)
+    } else {
+        UNIX_EPOCH.checked_sub(whole)
+    };
+    at?.checked_add(nanoseconds)
 }
 
 #[cfg(test)]
@@ -221,17 +252,20 @@ mod tests {
 
     #[test]
     fn an_entry_reads_only_the_fields_its_returned_set_names() {
-        let common = ATTR_CMN_ERROR | libc::ATTR_CMN_NAME | libc::ATTR_CMN_OBJTYPE;
+        let common =
+            ATTR_CMN_ERROR | libc::ATTR_CMN_NAME | libc::ATTR_CMN_OBJTYPE | libc::ATTR_CMN_MODTIME;
         let file = libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE;
-        // The name follows every fixed field, 24 bytes after its reference starts.
+        // The name follows every fixed field, 40 bytes after its reference starts.
         let whole = packed(
             common,
             file,
             &[
                 &field(0),
-                &field(24),
+                &field(40),
                 &field(4),
                 &field(VREG),
+                &1_762_400_000i64.to_ne_bytes(),
+                &250_000_000i64.to_ne_bytes(),
                 &field(2),
                 &8192u64.to_ne_bytes(),
                 b"abc\0",
@@ -243,6 +277,7 @@ mod tests {
                 error: 0,
                 name: Some(b"abc".as_slice()),
                 kind: Some(VREG),
+                modified: Some(UNIX_EPOCH + Duration::from_millis(1_762_400_000_250)),
                 links: Some(2),
                 allocated: Some(8192),
             })
@@ -264,5 +299,33 @@ mod tests {
         assert_eq!(read_entry(&truncated), None);
         let name_past_the_end = packed(libc::ATTR_CMN_NAME, 0, &[&field(100), &field(4)]);
         assert_eq!(read_entry(&name_past_the_end), None);
+    }
+
+    #[test]
+    fn a_file_with_no_time_or_one_out_of_range_still_counts_its_bytes() {
+        let file = libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE;
+        let sizes: [&[u8]; 3] = [&field(VREG), &field(1), &4096u64.to_ne_bytes()];
+        let undated = packed(libc::ATTR_CMN_OBJTYPE, file, &sizes);
+        let past_a_second = 1_000_000_000i64.to_ne_bytes();
+        let out_of_range = packed(
+            libc::ATTR_CMN_OBJTYPE | libc::ATTR_CMN_MODTIME,
+            file,
+            &[
+                sizes[0],
+                &0i64.to_ne_bytes(),
+                &past_a_second,
+                sizes[1],
+                sizes[2],
+            ],
+        );
+
+        for packed in [undated, out_of_range] {
+            let entry = read_entry(&packed).expect("the entry reads");
+            assert_eq!(entry.modified, None);
+            let mut listing = Listing::default();
+            assert!(add_entry(&entry, Path::new("/"), &|_| false, &mut listing));
+            assert_eq!(listing.tally.bytes, 4096);
+            assert_eq!(listing.tally.newest_write, None);
+        }
     }
 }

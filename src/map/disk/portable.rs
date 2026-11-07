@@ -24,7 +24,10 @@ pub(super) fn list(dir: &Path, pruned: Pruned) -> io::Result<Listing> {
                     listing.subdirs.push(subdir);
                 }
             } else if file_type.is_file() {
-                listing.tally.add_file(file_share(&entry.metadata()?));
+                let meta = entry.metadata()?;
+                listing
+                    .tally
+                    .add_file(file_share(&meta), meta.modified().ok());
             }
             Ok(())
         });

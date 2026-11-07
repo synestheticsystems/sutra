@@ -12,13 +12,15 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use rayon::prelude::*;
 
 use super::State;
 use super::tracked::Tracked;
 use crate::map::{
-    AgentSession, Harness, LARGE_FOLDER_BYTES, Project, Source, SourceProblem, agents, scan,
+    ActivitySource, AgentSession, DirUsage, Harness, LARGE_FOLDER_BYTES, Project, Source,
+    SourceProblem, agents, scan,
 };
 
 impl State {
@@ -106,6 +108,29 @@ impl State {
         changed
     }
 
+    /// Date the work in `project`, when it is a session's scratch folder, by the newest file the
+    /// walk of its own files found. A scratch folder has no git and no environment to date it, so
+    /// before any file event its work would be unknown, and the folder taken for quiet for good.
+    /// The file's time counts as a change to it would (see `live::worked`): by its own time, and
+    /// never later than now. The walk leaves out its build folders, as a build's writes are no
+    /// project's activity.
+    pub(super) fn date_scratch_folder(&mut self, project: &Path, usage: &DirUsage) {
+        let Some(tracked) = self.projects.get_mut(project) else {
+            return;
+        };
+        let Some(written) = usage
+            .newest_write
+            .filter(|_| tracked.project.scratch.is_some())
+        else {
+            return;
+        };
+        let at = written.min(SystemTime::now());
+        if tracked.observed.is_none_or(|(seen, _)| seen < at) {
+            tracked.observed = Some((at, ActivitySource::FileChange));
+            tracked.recompute_activity();
+        }
+    }
+
     /// Whether `project` is a session's scratch folder the map tracks.
     pub(in crate::map::engine) fn is_scratch_folder(&self, project: &Path) -> bool {
         self.projects
@@ -147,9 +172,10 @@ pub(super) fn earns_a_card(project: &Project) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::engine::sizing::Job;
     use crate::map::grant::Roots;
     use crate::map::test_support::{
-        CACHEDIR_TAG, TempDir, cargo_target, measured, project_at, usage,
+        CACHEDIR_TAG, TempDir, at, cargo_target, git, measured, project_at, usage,
     };
     use crate::map::{Measurement, ScanOptions, ScratchSpace};
 
@@ -221,10 +247,13 @@ mod tests {
 
         let card = |path: &Path| path.parent().unwrap().to_path_buf();
         assert_eq!(paths(&state), [card(&builds)], "the others wait for a size");
-        let large_job = crate::map::engine::sizing::Job::OwnFiles(card(&large));
-        let quiet_job = crate::map::engine::sizing::Job::OwnFiles(card(&quiet));
+        let large_job = Job::OwnFiles(card(&large));
+        let quiet_job = Job::OwnFiles(card(&quiet));
         assert!(state.apply_usage(&large_job, Ok(usage(LARGE_FOLDER_BYTES))));
-        assert!(state.apply_usage(&quiet_job, Ok(usage(4096))));
+        assert!(
+            !state.apply_usage(&quiet_job, Ok(usage(4096))),
+            "a folder with no card shows nothing new"
+        );
         assert_eq!(paths(&state), [card(&large), card(&builds)]);
     }
 
@@ -277,6 +306,38 @@ mod tests {
             .map(|dir| dir.path.as_path())
             .collect();
         assert_eq!(artifacts, [card.path.join("scratchpad/target-567")]);
+    }
+
+    #[test]
+    fn a_scratch_folder_is_dated_by_the_newest_file_its_walks_find_and_a_worktree_is_not() {
+        let fixture = TempDir::new("engine-scratch-dated");
+        fixture.write(
+            "claude-501/-Users-me/e26ca359/scratchpad/out/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        fixture.write("home/code/app/Cargo.toml", "[package]\n");
+        git(&fixture.path("home/code/app"), &["init", "-q"]);
+        let mut state = state_over(&fixture);
+        state.rediscover(None);
+        let scratch = fixture.path("claude-501/-Users-me/e26ca359");
+        let app = fixture.path("home/code/app");
+        let walked = |secs| DirUsage {
+            newest_write: Some(at(secs)),
+            ..usage(4096)
+        };
+        let activity = |state: &State, path: &Path| state.projects[path].project.last_activity;
+
+        state.apply_usage(&Job::OwnFiles(scratch.clone()), Ok(walked(2_000)));
+        state.apply_usage(&Job::OwnFiles(app.clone()), Ok(walked(2_000)));
+        assert_eq!(activity(&state, &scratch), Some(at(2_000)));
+        assert_eq!(activity(&state, &app), None, "git dates a worktree");
+
+        state.apply_usage(&Job::OwnFiles(scratch.clone()), Ok(walked(1_000)));
+        assert_eq!(
+            activity(&state, &scratch),
+            Some(at(2_000)),
+            "a file deleted since leaves the work done where it was"
+        );
     }
 
     #[test]

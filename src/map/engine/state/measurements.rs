@@ -7,6 +7,7 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 
 use super::State;
+use super::scratch::earns_a_card;
 use crate::map::engine::sizing::Job;
 use crate::map::{DirUsage, FolderAccess, Measurement, Project};
 
@@ -61,7 +62,8 @@ impl State {
         }
     }
 
-    /// Record a finished measurement. Returns whether what it measured is still on the map.
+    /// Record a finished measurement. Returns whether the map shows a change: what it measured is
+    /// still on the map, and has a card or had one.
     pub(in crate::map::engine) fn apply_usage(
         &mut self,
         job: &Job,
@@ -88,6 +90,10 @@ impl State {
                 true
             }
             (job, usage) => {
+                let shown_before = self.shows(job);
+                if let (Job::OwnFiles(project), Ok(usage)) = (job, &usage) {
+                    self.date_scratch_folder(project, usage);
+                }
                 let Some(measurement) = self.measurement_mut(job) else {
                     return false;
                 };
@@ -95,9 +101,21 @@ impl State {
                     Ok(usage) => Measurement::Measured(usage),
                     Err(err) => Measurement::Failed(err.kind()),
                 };
-                true
+                // A scratch folder too small for a card shows nothing, until a size gives it one.
+                shown_before || self.shows(job)
             }
         }
+    }
+
+    /// Whether the project `job` measures for has a card, which shows the size.
+    fn shows(&self, job: &Job) -> bool {
+        let project = match job {
+            Job::Artifact(artifact) => self.index.artifact_owner(artifact),
+            Job::OwnFiles(project) => Some(project.as_path()),
+        };
+        project
+            .and_then(|project| self.projects.get(project))
+            .is_some_and(|tracked| earns_a_card(&tracked.project))
     }
 
     fn measurement_mut(&mut self, job: &Job) -> Option<&mut Measurement> {

@@ -17,7 +17,8 @@ pub(super) struct Tracked {
     /// From `scan::git_activity`.
     pub(super) git_activity: Option<SystemTime>,
     /// The newest change the engine saw happen while watching: a file written in the project, or
-    /// its environment publishing a new status.
+    /// its environment publishing a new status. A session's scratch folder also takes the newest
+    /// file a walk of it found (see `State::date_scratch_folder`).
     pub(super) observed: Option<(SystemTime, ActivitySource)>,
     /// The newest activity of any agent seen here, a session or a subagent at work for a session
     /// elsewhere. It outlives the agent: one that only read leaves nothing else behind when it

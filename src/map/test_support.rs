@@ -226,11 +226,13 @@ pub(crate) fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
 }
 
-/// A tree holding `bytes`, every folder of it read, measured at the epoch.
+/// A tree holding `bytes` in one file written at the epoch, every folder of it read, measured at the
+/// epoch.
 pub(crate) fn usage(bytes: u64) -> DirUsage {
     DirUsage {
         bytes,
         files: 1,
+        newest_write: Some(UNIX_EPOCH),
         unreadable_dirs: 0,
         measured_at: UNIX_EPOCH,
         elapsed: Duration::ZERO,
