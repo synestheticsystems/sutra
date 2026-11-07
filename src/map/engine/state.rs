@@ -299,7 +299,8 @@ impl State {
 
     /// Reload every agent session and place each where it works (see `Place`), and each of its
     /// subagents at work where the subagent works, even beside the session (see
-    /// `Place::of_subagent`). Returns whether anything changed.
+    /// `Place::of_subagent`); and hand each session's scratch folder its session while it runs
+    /// (see `find_scratch_sessions`). Returns whether anything changed.
     pub(super) fn refresh_agents(&mut self) -> bool {
         let loaded = agents::load(&self.home, &self.boundary, &mut self.agent_files);
         let mut changed = self.report_problems(
@@ -316,6 +317,7 @@ impl State {
         let mut unplaced = Placed::default();
         let mut sessions = loaded.sessions;
         sessions.extend(self.sessions_of(&loaded.being_rewritten));
+        changed |= self.find_scratch_sessions(&sessions);
         for session in sessions {
             for subagent in &session.subagents_at_work {
                 let there = match Place::of_subagent(&self.projects, subagent) {
@@ -838,6 +840,7 @@ mod tests {
             project.scratch = Some(ScratchSpace {
                 session_id: path.rsplit('/').next().unwrap().to_string(),
                 started_in: "app".to_string(),
+                session: None,
             });
             project.artifacts = build_folders
                 .iter()

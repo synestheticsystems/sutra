@@ -170,12 +170,23 @@ pub struct ScratchSpace {
     /// The last part of the folder the session started in, as Claude Code's name for that folder
     /// still shows it on the disk, as `greyorange-foundry` reads.
     pub started_in: String,
+    /// The session while it runs. It counts on the card of the folder it works in alone, and its
+    /// robot stands on this card too, so a glance tells a live session's scratch from a gone one's.
+    pub session: Option<AgentSession>,
 }
 
 impl ScratchSpace {
-    /// What the folder goes by: the folder its session started in, and the first eight characters
-    /// of the session's id, as `greyorange-foundry e26ca359` reads.
+    /// What the folder goes by: its session's own name while the session runs and has one, as the
+    /// session's robot gives it; else the folder the session started in, and the first eight
+    /// characters of its id, as `greyorange-foundry e26ca359` reads.
     pub fn name(&self) -> String {
+        let label = self
+            .session
+            .as_ref()
+            .and_then(|session| session.label.as_ref());
+        if let Some(label) = label {
+            return label.clone();
+        }
         let short_id: String = self.session_id.chars().take(8).collect();
         format!("{} {short_id}", self.started_in)
     }

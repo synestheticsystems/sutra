@@ -17,7 +17,9 @@ use rayon::prelude::*;
 
 use super::State;
 use super::tracked::Tracked;
-use crate::map::{LARGE_FOLDER_BYTES, Project, Source, SourceProblem, agents, scan};
+use crate::map::{
+    AgentSession, Harness, LARGE_FOLDER_BYTES, Project, Source, SourceProblem, agents, scan,
+};
 
 impl State {
     /// Every session's scratch folder in the scratch root now, as a project, and the folders that
@@ -79,6 +81,31 @@ impl State {
         (kept, SourceProblem::per_kind(Source::Scan, failures))
     }
 
+    /// Hand each session's scratch folder its session while the session runs, among `sessions`,
+    /// and the name that goes with it (see `ScratchSpace::name`). Returns whether a folder with a
+    /// card changed.
+    pub(super) fn find_scratch_sessions(&mut self, sessions: &[AgentSession]) -> bool {
+        let running: HashMap<&str, &AgentSession> = sessions
+            .iter()
+            .filter(|session| session.harness == Harness::ClaudeCode)
+            .map(|session| (session.session_id.as_str(), session))
+            .collect();
+        let mut changed = false;
+        for tracked in self.projects.values_mut() {
+            let project = &mut tracked.project;
+            let Some(space) = &mut project.scratch else {
+                continue;
+            };
+            let session = running.get(space.session_id.as_str()).copied();
+            if space.session.as_ref() != session {
+                space.session = session.cloned();
+                project.name = space.name();
+                changed |= earns_a_card(project);
+            }
+        }
+        changed
+    }
+
     /// Whether `project` is a session's scratch folder the map tracks.
     pub(in crate::map::engine) fn is_scratch_folder(&self, project: &Path) -> bool {
         self.projects
@@ -133,6 +160,7 @@ mod tests {
             scratch: Some(ScratchSpace {
                 session_id: "e26ca359".to_string(),
                 started_in: "me".to_string(),
+                session: None,
             }),
             artifacts: artifacts
                 .iter()
@@ -200,6 +228,12 @@ mod tests {
         assert_eq!(paths(&state), [card(&large), card(&builds)]);
     }
 
+    /// Claude Code's name for `folder`: each character but a letter or a digit becomes `-`.
+    fn key_of(folder: &Path) -> String {
+        let path = folder.to_str().unwrap();
+        path.replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+    }
+
     #[test]
     fn a_session_folder_that_turns_readable_is_searched_again_at_the_next_rediscovery() {
         use std::os::unix::fs::PermissionsExt;
@@ -223,12 +257,7 @@ mod tests {
     #[test]
     fn a_scratch_card_goes_by_the_folder_its_session_started_in_and_its_id() {
         let fixture = TempDir::new("engine-scratch-names");
-        let started_in = fixture.dir("home/vt/greyorange-foundry");
-        // Claude Code's name for the folder: each character but a letter or a digit becomes `-`.
-        let key = started_in
-            .to_str()
-            .unwrap()
-            .replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+        let key = key_of(&fixture.dir("home/vt/greyorange-foundry"));
         fixture.write(
             &format!("claude-501/{key}/e26ca359-da00/scratchpad/target-567/CACHEDIR.TAG"),
             CACHEDIR_TAG,
@@ -248,5 +277,43 @@ mod tests {
             .map(|dir| dir.path.as_path())
             .collect();
         assert_eq!(artifacts, [card.path.join("scratchpad/target-567")]);
+    }
+
+    #[test]
+    fn a_scratch_card_holds_its_session_while_it_runs_and_goes_by_the_sessions_name() {
+        let fixture = TempDir::new("engine-scratch-session");
+        let key = key_of(&fixture.dir("home/vt/foundry"));
+        fixture.write(
+            &format!("claude-501/{key}/e26ca359/scratchpad/out/CACHEDIR.TAG"),
+            CACHEDIR_TAG,
+        );
+        // This process stands for the session's, so it runs for as long as the test.
+        let me = std::process::id();
+        let registry = fixture.write(
+            &format!("home/.claude/sessions/{me}.json"),
+            format!(
+                r#"{{"pid": {me}, "sessionId": "e26ca359", "cwd": "/Users/me/vt/foundry",
+                    "status": "busy", "name": "Foundry Agent Studio architecture"}}"#
+            ),
+        );
+        let mut state = state_over(&fixture);
+        state.rediscover(None);
+        let card = |state: &State| state.snapshot().projects.into_iter().next().unwrap();
+        let running = card(&state);
+        let session = running.scratch.and_then(|space| space.session);
+        assert_eq!(
+            session.map(|session| session.session_id).as_deref(),
+            Some("e26ca359")
+        );
+        assert_eq!(running.name, "Foundry Agent Studio architecture");
+        assert_eq!(running.agents, [], "it counts where it works");
+
+        std::fs::remove_file(registry).unwrap();
+        assert!(state.refresh_agents(), "the session ended");
+
+        let gone = card(&state);
+        assert_eq!(gone.scratch.and_then(|space| space.session), None);
+        assert_eq!(gone.name, "foundry e26ca359");
+        assert!(!state.refresh_agents(), "nothing more changed");
     }
 }

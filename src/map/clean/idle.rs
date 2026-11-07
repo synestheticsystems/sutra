@@ -22,11 +22,19 @@ pub struct IdleFolder<'a> {
 }
 
 /// Whether something is at work in `project` now: an agent, other than a job that has finished, a
-/// subagent at work there, as in a worktree of its own, or an environment whose process lives.
+/// subagent at work there, as in a worktree of its own, an environment whose process lives, or the
+/// session whose scratch folder it is, while the session runs. Such a session builds into its
+/// scratch whenever it likes, and a build's writes date no folder, so its scratch can look quiet
+/// between two of its builds.
 fn in_use(project: &Project) -> bool {
+    let session_runs = project
+        .scratch
+        .as_ref()
+        .is_some_and(|space| space.session.is_some());
     project.agents.iter().any(|agent| !agent.is_finished_job())
         || !project.subagents.is_empty()
         || project.environment.as_ref().is_some_and(|env| env.alive)
+        || session_runs
 }
 
 /// How long `project` has been quiet. One with no known activity counts as quiet for good, and one
@@ -306,6 +314,24 @@ mod tests {
             ..quiet_project("agent-a1", 9, LARGE)
         }]);
         assert_eq!(names(&map), [""; 0]);
+    }
+
+    #[test]
+    fn a_running_sessions_scratch_folder_is_kept_out_and_a_gone_ones_is_not() {
+        let scratch = |name: &str, session: Option<crate::map::AgentSession>| Project {
+            scratch: Some(crate::map::ScratchSpace {
+                session_id: name.to_string(),
+                started_in: "app".to_string(),
+                session,
+            }),
+            ..quiet_project(name, 9, LARGE)
+        };
+        let running = agent_session("/code/app", AgentStatus::Idle);
+        let map = snapshot_of(vec![
+            scratch("e26ca359", Some(running)),
+            scratch("d5fa0639", None),
+        ]);
+        assert_eq!(names(&map), ["d5fa0639"]);
     }
 
     #[test]

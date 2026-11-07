@@ -69,6 +69,8 @@ impl Tracked {
         let space = ScratchSpace {
             session_id: folder.session_id,
             started_in,
+            // Found with the session's other agents (see `State::refresh_agents`).
+            session: None,
         };
         Tracked {
             project: new_project(folder.path, None, Some(space), access, boundary),

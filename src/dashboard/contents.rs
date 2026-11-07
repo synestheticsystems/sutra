@@ -363,7 +363,8 @@ pub struct Tray {
     /// The folder's disk use, at the tray's start: `None` for a folder that cannot be read, which
     /// the card says why of, and while nothing about its size is known yet.
     pub disk: Option<DiskUse>,
-    /// The sessions in the folder, in the map's order, so none moves when its status changes.
+    /// The sessions in the folder, in the map's order, so none moves when its status changes. A
+    /// session's scratch folder has that session first, while it runs.
     pub sessions: Vec<AgentBadge>,
     /// The subagents at work in the folder, whichever session they work for: by session, each
     /// session's in its own order.
