@@ -2,6 +2,7 @@
 //! holding what each source contributed, so a refresh of one source leaves the others alone.
 
 mod artifacts;
+mod listening;
 mod measurements;
 mod placement;
 mod scratch;
@@ -23,7 +24,7 @@ use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
     ActivitySource, AgentSession, FolderAccess, KeptOutBy, Measurement, PrivateFolder, Project,
     RepoInfo, ScanOptions, ScanStats, ScratchSpace, Snapshot, Source, SourceProblem,
-    SubagentWithParent, agents, devrunner, scan,
+    SubagentWithParent, agents, devrunner, processes, scan,
 };
 use placement::{Place, Placed};
 use scratch::earns_a_card;
@@ -56,6 +57,8 @@ pub(super) struct State {
     state_folders: Vec<PathBuf>,
     /// What the agents' growing files said at the last read of the agents.
     agent_files: agents::LastRead,
+    /// The commands of the processes the last read of them found listening.
+    listener_commands: processes::LastRead,
     scan: ScanStats,
     index: Index,
 }
@@ -83,12 +86,18 @@ impl State {
             unread_by_rediscovery: Vec::new(),
             state_folders: Vec::new(),
             agent_files: agents::LastRead::default(),
+            listener_commands: processes::LastRead::default(),
             scan: ScanStats::default(),
         }
     }
 
     pub(super) fn roots(&self) -> &[PathBuf] {
         &self.roots
+    }
+
+    /// Running inside the App Sandbox, as the store edition does.
+    pub(super) fn is_sandboxed(&self) -> bool {
+        self.sandboxed
     }
 
     pub(super) fn scratch_root(&self) -> Option<&Path> {
@@ -487,6 +496,7 @@ fn new_project(
         agents: Vec::new(),
         subagents: Vec::new(),
         environment: None,
+        listening: Vec::new(),
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access,

@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -12,6 +13,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::clean::CargoEnv;
+use super::processes::ListeningProcess;
 use super::scan::Boundary;
 use super::{
     AgentSession, AgentStatus, ArtifactDir, ArtifactKind, DirUsage, FolderAccess, Harness,
@@ -280,6 +282,7 @@ pub(crate) fn project_at(path: impl Into<PathBuf>) -> Project {
         agents: Vec::new(),
         subagents: Vec::new(),
         environment: None,
+        listening: Vec::new(),
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access: FolderAccess::Readable,
@@ -334,6 +337,25 @@ pub(crate) fn environment_at(dir: impl Into<PathBuf>) -> Environment {
         alive: false,
         units: Vec::new(),
         sources: EnvSources::default(),
+    }
+}
+
+/// The process `name` of pid 4242, running `<name> server.js` in `folder` and listening at
+/// 127.0.0.1 on each of `ports`.
+pub(crate) fn listening_in(
+    folder: impl Into<PathBuf>,
+    name: &str,
+    ports: &[u16],
+) -> ListeningProcess {
+    let sockets = ports
+        .iter()
+        .map(|&port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+    ListeningProcess {
+        pid: 4242,
+        name: name.to_string(),
+        command: Some(format!("{name} server.js")),
+        folder: folder.into(),
+        sockets: sockets.collect(),
     }
 }
 

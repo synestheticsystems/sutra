@@ -22,7 +22,8 @@ pub struct IdleFolder<'a> {
 }
 
 /// Whether something is at work in `project` now: an agent, other than a job that has finished, a
-/// subagent at work there, as in a worktree of its own, an environment whose process lives, or the
+/// subagent at work there, as in a worktree of its own, an environment whose process lives, a
+/// process listening for connections there, as a server run from its build folder does, or the
 /// session whose scratch folder it is, while the session runs. Such a session builds into its
 /// scratch whenever it likes, and a build's writes date no folder, so its scratch can look quiet
 /// between two of its builds.
@@ -34,6 +35,7 @@ fn in_use(project: &Project) -> bool {
     project.agents.iter().any(|agent| !agent.is_finished_job())
         || !project.subagents.is_empty()
         || project.environment.as_ref().is_some_and(|env| env.alive)
+        || !project.listening.is_empty()
         || session_runs
 }
 
@@ -210,8 +212,8 @@ mod tests {
     use crate::map::clean::locks::tests::hold_like_cargo;
     use crate::map::clean::{CleanError, Plan, Sharing};
     use crate::map::test_support::{
-        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, measured,
-        node_modules, project_at, snapshot_of, subagent_at_work,
+        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, listening_in,
+        measured, node_modules, project_at, snapshot_of, subagent_at_work,
     };
     use crate::map::{
         AgentSession, AgentStatus, Harness, KeptOutBy, Measurement, PrivateFolder, ScratchSpace,
@@ -311,6 +313,15 @@ mod tests {
         let mut found = names(&map);
         found.sort();
         assert_eq!(found, ["environment-stopped", "finished-job"]);
+    }
+
+    #[test]
+    fn a_process_listening_in_a_project_keeps_it_out_as_it_may_run_from_its_build_folder() {
+        let map = snapshot_of(vec![Project {
+            listening: vec![listening_in("/code/server", "server", &[8080])],
+            ..quiet_project("server", 9, LARGE)
+        }]);
+        assert_eq!(names(&map), [""; 0]);
     }
 
     #[test]

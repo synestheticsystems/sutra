@@ -1,12 +1,11 @@
 //! A group's fold. Folded shut, the line stands alone and still says what its cards would of their
-//! agents and their dev servers: a robot for each agent in them stands at its end, every session
-//! before every subagent; it throbs while one of the sessions waits on the user; and the first
-//! servers up or on their way in them stand after its total, with a count of the rest.
+//! agents and of what serves in them: a robot for each agent in them stands at its end, every
+//! session before every subagent; it throbs while one of the sessions waits on the user; and the
+//! first of their lozenges up or on their way stand after its total, with a count of the rest.
 
-use crate::dashboard::contents::card::{CardContext, agents, subagents, units};
+use crate::dashboard::contents::card::{CardContext, agents, lozenges, subagents};
 use crate::dashboard::{AgentBadge, Card, UnitLook, UnitLozenge};
 use crate::map::Project;
-use crate::notifications::Notifier;
 
 /// What stands under a group's line: its cards, or, while the group is folded shut, none, the line
 /// itself showing the agents and the dev servers in those cards.
@@ -21,16 +20,17 @@ pub enum GroupFold {
         subagents: Vec<AgentBadge>,
         /// One of those sessions waits on the user, so the line throbs as its card would.
         waiting: bool,
-        /// After the line's total, the lozenges of the first two dev-runner units up or on their
-        /// way in the cards it holds, in the cards' order, as their cards draw them, so folding a
-        /// group shut never hides that a server runs in it.
+        /// After the line's total, the first two of the lozenges up or on their way in the cards
+        /// it holds, dev-runner units and the ports processes listen on alike, in the cards'
+        /// order, as their cards draw them, so folding a group shut never hides that a server runs
+        /// in it.
         units: Vec<UnitLozenge>,
-        /// The units up or on their way past those two; `None` while there are none.
+        /// The lozenges up or on their way past those two; `None` while there are none.
         more_units: Option<MoreUnits>,
     },
 }
 
-/// The units a folded line counts past the ones it draws.
+/// The lozenges a folded line counts past the ones it draws.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct MoreUnits {
     /// How many, as `+2` reads.
@@ -41,15 +41,15 @@ pub struct MoreUnits {
 
 /// What the line of a folded group shows of `cards`, the cards it holds: a robot for each agent in
 /// them, every session before every subagent, each in the order their cards would stand them, and
-/// whether one of the sessions waits on the user, as would make its card throb; and the dev
-/// servers at work in them (see `live_units`).
+/// whether one of the sessions waits on the user, as would make its card throb; and the servers at
+/// work in them (see `live_units`).
 pub(super) fn folded(cards: &[&Project], ctx: &CardContext) -> GroupFold {
     let sessions = cards
         .iter()
         .flat_map(|card| agents::badges(&card.agents, ctx.now));
     let at_work = cards.iter().flat_map(|card| &card.subagents);
     let waiting = agents::any_waiting(cards.iter().flat_map(|card| &card.agents));
-    let (units, more_units) = live_units(cards, ctx.notifier);
+    let (units, more_units) = live_units(cards, ctx);
     GroupFold::Folded {
         sessions: sessions.collect(),
         subagents: subagents::badges(at_work, ctx.now),
@@ -59,15 +59,14 @@ pub(super) fn folded(cards: &[&Project], ctx: &CardContext) -> GroupFold {
     }
 }
 
-/// How many units a folded line draws as lozenges: enough to say that a server runs, and which,
-/// and few enough to leave the line its name.
+/// How many lozenges a folded line draws: enough to say that a server runs, and which, and few
+/// enough to leave the line its name.
 const UNITS_ON_A_FOLDED_LINE: usize = 2;
 
-/// The dev-runner units up or on their way in `cards`, as their cards draw them, in the cards'
-/// order: the first `UNITS_ON_A_FOLDED_LINE` of them, and what counts the rest.
-fn live_units(cards: &[&Project], notifier: &Notifier) -> (Vec<UnitLozenge>, Option<MoreUnits>) {
-    let environments = cards.iter().filter_map(|card| card.environment.as_ref());
-    let lozenges = environments.flat_map(|environment| units::lozenges(environment, notifier));
+/// The lozenges up or on their way in `cards`, as their cards draw them, in the cards' order: the
+/// first `UNITS_ON_A_FOLDED_LINE` of them, and what counts the rest.
+fn live_units(cards: &[&Project], ctx: &CardContext) -> (Vec<UnitLozenge>, Option<MoreUnits>) {
+    let lozenges = cards.iter().flat_map(|card| lozenges::lozenges(card, ctx));
     let live = lozenges.filter(|unit| matches!(unit.look, UnitLook::Up | UnitLook::Starting));
     let mut shown: Vec<UnitLozenge> = live.collect();
     let rest = shown.split_off(UNITS_ON_A_FOLDED_LINE.min(shown.len()));
@@ -200,5 +199,31 @@ mod tests {
                 tooltip: "docs :4000".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn a_folded_group_shows_the_ports_its_cards_processes_listen_on_as_their_cards_do() {
+        use crate::map::test_support::listening_in;
+        let app = "/code/app/.git";
+        let main = main_worktree(app, "main", project("app", 1));
+        let mut fix = linked_worktree(app, "fix", project("app-fix", 1));
+        fix.listening = vec![listening_in("/code/app-fix", "node", &[5177])];
+        let map = snapshot(vec![main, fix], vec![]);
+        let mut folds = Folds::default();
+        let parent = Parent::Repository {
+            common_dir: app.to_string(),
+        };
+        folds.toggle(&parent, &map);
+
+        let (_, fold) = first_group(&map, &folds);
+
+        let GroupFold::Folded { units, .. } = fold else {
+            panic!("folded: {fold:?}");
+        };
+        let shown: Vec<(&str, Option<&str>)> = units
+            .iter()
+            .map(|unit| (unit.name.as_str(), unit.port.as_deref()))
+            .collect();
+        assert_eq!(shown, [("node", Some(":5177"))]);
     }
 }

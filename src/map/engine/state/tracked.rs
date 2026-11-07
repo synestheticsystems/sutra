@@ -87,13 +87,14 @@ impl Tracked {
     }
 
     /// Keep what discovery cannot see from the project as it was before the rediscovery: the
-    /// activity observed while watching, the environment, and the sizes measured. Its own files
-    /// keep their size only while the folder stays readable; a folder that turned unreadable
-    /// shows none.
+    /// activity observed while watching, the environment, the processes listening, until the next
+    /// read of them, and the sizes measured. Its own files keep their size only while the folder
+    /// stays readable; a folder that turned unreadable shows none.
     pub(super) fn carry_over(&mut self, before: Tracked) {
         self.observed = before.observed;
         self.agent_activity = before.agent_activity;
         self.project.environment = before.project.environment;
+        self.project.listening = before.project.listening;
         self.project.artifacts = keep_measurements(
             mem::take(&mut self.project.artifacts),
             &before.project.artifacts,

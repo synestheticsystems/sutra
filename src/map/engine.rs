@@ -6,8 +6,9 @@
 //! and sizes are measured on a pool of their own (`sizing`), so a 3 s walk of a large `target/`
 //! never holds up the map. A 2 s tick re-reads what no file event announces: agents whose status
 //! ages, environments whose process died, watched folders outside the roots that went, and Claude
-//! Code's scratch root coming or going. Each private folder the walk would enter is asked about on
-//! a thread of its own (`probe`), so a privacy prompt holds up nothing but that folder.
+//! Code's scratch root coming or going; and every 5 s, outside the sandbox, the processes are read
+//! for the ports they listen on. Each private folder the walk would enter is asked about on a
+//! thread of its own (`probe`), so a privacy prompt holds up nothing but that folder.
 
 mod debounce;
 mod live;

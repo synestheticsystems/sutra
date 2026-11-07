@@ -13,8 +13,9 @@ use crate::map::{LARGE_FOLDER_BYTES, Project};
 pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Whether the project belongs in the focused view of `sort`. In every sort, a project is in focus
-/// while a coding agent has a session or a subagent at work in it, or a dev-runner environment
-/// describes it, from `~/.dev-runner/` or its own `.dev-runner/`. Past that:
+/// while something is at work in it (see `Project::is_at_work`): a coding agent's session or
+/// subagent, a dev-runner environment describing it, from `~/.dev-runner/` or its own
+/// `.dev-runner/`, or a process listening there. Past that:
 ///   - in the Activity sort, while its last activity lies within `FOCUS_RECENT` of `now`, unless it
 ///     is the scratch of a session that has ended: that is disk news, not activity news, whatever
 ///     its age or size;
@@ -25,14 +26,11 @@ pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 
 ///
 /// Both thresholds are first guesses, to tune once the focused view has been lived with.
 pub(super) fn in_focus(project: &Project, sort: SortOrder, now: SystemTime) -> bool {
-    let at_work = !project.agents.is_empty()
-        || !project.subagents.is_empty()
-        || project.environment.is_some();
     let recent = project.last_activity.is_some_and(|at| {
         // A time ahead of the clock (a file touched with a future date) is recent.
         now.duration_since(at).unwrap_or(Duration::ZERO) <= FOCUS_RECENT
     });
-    at_work
+    project.is_at_work()
         || match sort {
             SortOrder::Activity => recent && !is_ended_scratch(project),
             SortOrder::Name | SortOrder::Disk => {
@@ -62,8 +60,8 @@ mod tests {
 
     use super::*;
     use crate::map::test_support::{
-        agent_session, at, cargo_target, environment_at, measured, node_modules, project_at,
-        subagent_at_work,
+        agent_session, at, cargo_target, environment_at, listening_in, measured, node_modules,
+        project_at, subagent_at_work,
     };
     use crate::map::{AgentStatus, ArtifactDir, Measurement, SubagentWithParent};
 
@@ -148,6 +146,15 @@ mod tests {
             ..out_of_focus()
         };
         assert_eq!(focused_in(&described), SortOrder::ALL);
+    }
+
+    #[test]
+    fn a_process_listening_in_a_project_brings_it_into_focus_in_every_sort() {
+        let serving = Project {
+            listening: vec![listening_in("/code/app", "node", &[5177])],
+            ..out_of_focus()
+        };
+        assert_eq!(focused_in(&serving), SortOrder::ALL);
     }
 
     #[test]

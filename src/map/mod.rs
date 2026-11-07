@@ -2,12 +2,14 @@
 //!
 //! A project is a git worktree (main or linked), any folder a dev-runner environment names, or one
 //! of a Claude Code session's scratch folders that holds a build folder or a lot of disk. One
-//! `Project` row merges four sources:
+//! `Project` row merges five sources:
 //!   - git: branch, head and the time of the last git activity, read from the worktree's git dir
 //!     without ever writing to it (a write would show up in our own file watcher);
 //!   - dev-runner environments, from `~/.dev-runner/` and from the project's own `.dev-runner/`;
 //!   - coding-agent sessions (Claude Code, Codex) whose working directory lies inside the project,
 //!     and the subagents at work inside it, whichever session they work for;
+//!   - the user's processes that listen for TCP connections and run inside the project, as libproc
+//!     tells of them, in the direct edition alone (see `processes`);
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
@@ -22,6 +24,7 @@ pub mod devrunner;
 pub mod disk;
 pub mod engine;
 pub mod grant;
+pub mod processes;
 mod project;
 pub mod scan;
 #[cfg(test)]
@@ -227,6 +230,9 @@ pub enum Source {
     ClaudeSessionTranscript,
     /// Codex's thread database, `~/.codex/state_5.sqlite`.
     CodexDatabase,
+    /// The user's processes, which macOS would not list, so no port they listen on shows. The
+    /// problem names no path.
+    Processes,
     /// A file watcher could not start, or could not watch a root or a folder outside the roots that
     /// the map needs file events from. The map then misses file changes there and refreshes only
     /// what its 2 s tick re-reads.
@@ -235,7 +241,7 @@ pub enum Source {
 
 impl Source {
     /// Whether the source tells what is at work in a project: failing to read it may hide an agent,
-    /// a running environment or a project's latest activity. Discovery failing only loses folders,
+    /// a running environment, a server or a project's latest activity. Discovery failing only loses folders,
     /// or the name of a session that has ended, a subagent's meta file only its name, and a
     /// session's transcript only its model.
     pub fn tells_what_is_at_work(self) -> bool {
@@ -245,18 +251,22 @@ impl Source {
             | Source::ClaudeSessions
             | Source::ClaudeSessionFile
             | Source::CodexDatabase
+            | Source::Processes
             | Source::Watcher => true,
             Source::Scan | Source::ClaudeSubagentMeta | Source::ClaudeSessionTranscript => false,
         }
     }
 
     /// Whether the source alone tells of a kind of thing: Claude Code's sessions, Codex's
-    /// threads, the environments registered in `~/.dev-runner/`. One that cannot be read hides
-    /// that kind from the map whole, where discovery or the watcher failing, or one environment's
-    /// or one session's file, loses only some of it.
+    /// threads, the environments registered in `~/.dev-runner/`, the ports the user's processes
+    /// listen on. One that cannot be read hides that kind from the map whole, where discovery or
+    /// the watcher failing, or one environment's or one session's file, loses only some of it.
     pub fn is_sole_source(self) -> bool {
         match self {
-            Source::Registry | Source::ClaudeSessions | Source::CodexDatabase => true,
+            Source::Registry
+            | Source::ClaudeSessions
+            | Source::CodexDatabase
+            | Source::Processes => true,
             Source::Scan
             | Source::EnvironmentState
             | Source::ClaudeSessionFile

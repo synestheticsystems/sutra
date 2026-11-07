@@ -19,7 +19,7 @@ use super::probe::{self, Probe};
 use super::route::Route;
 use super::sizing::{Job, Measured, Sizing, Urgency};
 use super::state::State;
-use super::timers::{TICK, Timers, WALK_AFTER_LOST_EVENTS};
+use super::timers::{PROCESSES, TICK, Timers, WALK_AFTER_LOST_EVENTS};
 use super::watch::Watches;
 use crate::map::grant::Roots;
 use crate::map::scan::MacOsAnswer;
@@ -138,12 +138,14 @@ impl<'a> Engine<'a> {
             let _ = messages.send(Message::Measured(measured));
         });
         let now = Instant::now();
+        // The store edition's sandbox tells it nothing of other processes, so it never asks.
+        let reads_processes = !state.is_sandboxed();
         let mut engine = Engine {
             state,
             watches,
             snapshots,
             sizing,
-            timers: Timers::new(now),
+            timers: Timers::new(now, reads_processes),
             lost_events: None,
             dirty: true,
             last_publish_attempt: None,
@@ -426,6 +428,10 @@ impl<'a> Engine<'a> {
             }
             self.follow_the_scratch_root(now);
             self.timers.next_tick = now + TICK;
+        }
+        if self.timers.next_processes.is_some_and(|due| now >= due) {
+            self.dirty |= self.state.refresh_processes();
+            self.timers.next_processes = Some(now + PROCESSES);
         }
         let walking_after_loss = tick && self.walk_trees_after_lost_events(now);
         for worktree in self.timers.git.take_due(now) {

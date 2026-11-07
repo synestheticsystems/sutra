@@ -52,6 +52,10 @@ const OWN_FILES: Debounce = debounce(60_000, 600_000);
 /// What no file event announces: agent status that ages, an environment's process dying, a watched
 /// folder outside the roots going with the folder around it, the scratch root coming or going.
 pub(super) const TICK: Duration = Duration::from_secs(2);
+/// How often the processes are read for the ports they listen on, which no event announces either.
+/// A read costs about 3 ms on Daniel's Mac (see `processes`), so this costs under a millisecond a
+/// second, and a server shows within this long of listening.
+pub(super) const PROCESSES: Duration = Duration::from_secs(5);
 /// How long after events go missing every tree they may have hidden a change in is walked again. A
 /// tree's top shows most changes at once (see `Engine::remeasure_changed_under`), and the tree's
 /// next event shows the rest, so this bounds how long a size can stay wrong when neither comes.
@@ -86,10 +90,14 @@ pub(super) struct Timers {
     /// Projects whose own files changed, or whose nested projects or build folders did.
     pub(super) own_files: Pending<PathBuf>,
     pub(super) next_tick: Instant,
+    /// When the processes are next read for the ports they listen on; `None` in the store edition,
+    /// whose sandbox tells it nothing of other processes, so they are never read.
+    pub(super) next_processes: Option<Instant>,
 }
 
 impl Timers {
-    pub(super) fn new(now: Instant) -> Self {
+    /// The timers from `now`, reading the processes when `reads_processes`.
+    pub(super) fn new(now: Instant, reads_processes: bool) -> Self {
         Timers {
             claude_sessions: Pending::new(CLAUDE_SESSIONS),
             codex: Pending::new(CODEX),
@@ -104,6 +112,7 @@ impl Timers {
             scratch_folders: Pending::new(SCRATCH_FOLDERS),
             own_files: Pending::new(OWN_FILES),
             next_tick: now + TICK,
+            next_processes: reads_processes.then_some(now),
         }
     }
 
@@ -123,6 +132,7 @@ impl Timers {
             self.own_files.next_due(),
         ]
         .into_iter()
+        .chain([self.next_processes])
         .flatten()
         .fold(self.next_tick, Instant::min)
     }

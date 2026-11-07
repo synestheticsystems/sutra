@@ -1,20 +1,20 @@
 //! One project's card: its identity (name, branch, age), what is happening in it (why its folder
-//! cannot be read, its environment's units), and, on a tray along the bottom, its disk use and its
+//! cannot be read, what serves in it), and, on a tray along the bottom, its disk use and its
 //! agents, sessions before subagents. A right click offers what can be done to it.
 
 pub(super) mod agents;
 mod header;
+pub(super) mod lozenges;
 mod menu;
 mod robots;
 pub(super) mod subagents;
 mod tray;
-pub(super) mod units;
 
 pub use agents::{AgentBadge, AgentLook};
 pub use header::{Chip, ScratchMark};
+pub use lozenges::{UnitLook, UnitLozenge};
 pub use robots::Robot;
 pub use tray::{DiskUse, Tray, TrayFolder};
-pub use units::{UnitLook, UnitLozenge};
 
 pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};
@@ -44,8 +44,10 @@ pub struct Card {
     pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
-    /// Why the folder cannot be read, above the units that sources outside it still show.
+    /// Why the folder cannot be read, above the lozenges that sources outside it still show.
     pub unreadable: Option<Unreadable>,
+    /// What serves in the folder: its dev-runner units, then the ports its processes listen on.
+    /// The name keeps the word from when every lozenge was a unit's.
     pub units: Vec<UnitLozenge>,
     /// The card's tray along its bottom: the folder's disk use, then the agents in it, sessions
     /// before subagents.
@@ -109,10 +111,7 @@ pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &Card
         chip: identity.chip,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
-        units: project
-            .environment
-            .as_ref()
-            .map_or_else(Vec::new, |env| units::lozenges(env, ctx.notifier)),
+        units: lozenges::lozenges(project, ctx),
         tray: tray::tray(
             project,
             sessions,

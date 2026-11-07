@@ -363,23 +363,20 @@ struct TrackedFolders {
     searched: Vec<(PathBuf, Tracked)>,
 }
 
-/// Whether `project` has a card on the map. A scratch folder earns one while something works in it:
-/// an agent standing on it, a session or a subagent at work there (see `Place`), or a dev-runner
-/// environment describing it, whose servers would show nowhere else. It earns one too by holding a
-/// build folder outside every worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES`
-/// without one; every other project has one. The session whose scratch it is earns it none by
-/// running: the session stands where it works.
+/// Whether `project` has a card on the map. A scratch folder earns one while something works in it
+/// (see `Project::is_at_work`): an agent standing on it, a session or a subagent at work there (see
+/// `Place`), or a dev-runner environment describing it or a process listening in it, whose servers
+/// would show nowhere else. It earns one too by holding a build folder outside every worktree on
+/// the map, which keeps its own, or `LARGE_FOLDER_BYTES` without one; every other project has one.
+/// The session whose scratch it is earns it none by running: the session stands where it works.
 pub(super) fn earns_a_card(project: &Project) -> bool {
-    let at_work = || {
-        !project.agents.is_empty() || !project.subagents.is_empty() || project.environment.is_some()
-    };
     let large = || {
         project
             .own_files
             .usage()
             .is_some_and(|usage| usage.bytes >= LARGE_FOLDER_BYTES)
     };
-    project.scratch.is_none() || at_work() || !project.artifacts.is_empty() || large()
+    project.scratch.is_none() || project.is_at_work() || !project.artifacts.is_empty() || large()
 }
 
 #[cfg(test)]
@@ -388,8 +385,8 @@ mod tests {
     use crate::map::engine::sizing::Job;
     use crate::map::grant::Roots;
     use crate::map::test_support::{
-        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, git, measured,
-        project_at, subagent_at_work, usage,
+        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, git, listening_in,
+        measured, project_at, subagent_at_work, usage,
     };
     use crate::map::{AgentStatus, Measurement, ScanOptions, SubagentWithParent};
 
@@ -430,14 +427,19 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_folder_earns_a_card_while_a_dev_environment_runs_in_it() {
+    fn a_scratch_folder_earns_a_card_while_a_dev_environment_or_a_server_runs_in_it() {
         let small = scratch(&[], measured(4096));
-        let serving = Project {
+        let described = Project {
             environment: Some(environment_at(&small.path)),
             ..small.clone()
         };
+        let listening = Project {
+            listening: vec![listening_in(&small.path, "node", &[5177])],
+            ..small.clone()
+        };
         assert!(!earns_a_card(&small));
-        assert!(earns_a_card(&serving), "its servers show on its card");
+        assert!(earns_a_card(&described), "its servers show on its card");
+        assert!(earns_a_card(&listening), "its port shows on its card");
     }
 
     #[test]

@@ -47,6 +47,7 @@ fn hidden_sources(problems: &[SourceProblem]) -> Option<String> {
         (Source::ClaudeSessions, "Claude Code sessions"),
         (Source::CodexDatabase, "Codex threads"),
         (Source::Registry, "dev environments in ~/.dev-runner"),
+        (Source::Processes, "processes' ports"),
     ]
     .into_iter()
     .filter(|(source, _)| hides(*source))
@@ -56,9 +57,11 @@ fn hidden_sources(problems: &[SourceProblem]) -> Option<String> {
 }
 
 /// A source the map could not read: `Couldn't read ~/.claude/sessions: permission denied`, with
-/// `and 3 more` when discovery met the same error in several folders.
+/// `and 3 more` when discovery met the same error in several folders. The processes have no path:
+/// `Couldn't list your processes: permission denied`.
 pub(super) fn problem_line(problem: &SourceProblem, home: &Path) -> String {
     let verb = match problem.source {
+        Source::Processes => return format!("Couldn't list your processes: {}", problem.kind),
         Source::Watcher => "watch",
         Source::Scan
         | Source::Registry
@@ -117,6 +120,7 @@ mod tests {
             Source::Registry,
             Source::ClaudeSessions,
             Source::CodexDatabase,
+            Source::Processes,
             Source::Watcher,
         ];
         for source in sources {
@@ -146,6 +150,23 @@ mod tests {
         assert_eq!(
             problem_line(&sessions, Path::new(HOME)),
             "Couldn't read ~/.claude/sessions: permission denied"
+        );
+    }
+
+    #[test]
+    fn processes_that_cannot_be_listed_hide_their_ports_and_say_so_with_no_path() {
+        let unlisted = SourceProblem::new(
+            Source::Processes,
+            PathBuf::new(),
+            io::ErrorKind::PermissionDenied,
+        );
+        assert_eq!(
+            problem_line(&unlisted, Path::new(HOME)),
+            "Couldn't list your processes: permission denied"
+        );
+        assert_eq!(
+            hidden_sources(&[unlisted]).as_deref(),
+            Some("Sutra can't see your processes' ports.")
         );
     }
 

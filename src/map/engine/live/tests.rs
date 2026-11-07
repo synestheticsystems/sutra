@@ -960,3 +960,30 @@ fn a_subagent_set_to_work_in_an_idle_session_shows_within_a_second() {
 
     assert_eq!(status(&engine), AgentStatus::Busy);
 }
+
+#[test]
+fn the_direct_edition_reads_the_processes_every_few_seconds_and_the_store_edition_never_does() {
+    let fixture = TempDir::new("live-processes");
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let roots = |sandboxed| Roots {
+        home: fixture.root().to_path_buf(),
+        dirs: vec![fixture.root().to_path_buf()],
+        scratch: None,
+        sandboxed,
+    };
+
+    let (mut direct, _inbox) = engine_on_roots(&roots(false), &snapshots);
+    let due = direct
+        .timers
+        .next_processes
+        .expect("the direct edition reads them");
+    direct.run_due(due);
+    assert_eq!(
+        direct.timers.next_processes,
+        Some(due + PROCESSES),
+        "and reads them again a few seconds later"
+    );
+
+    let (store, _inbox) = engine_on_roots(&roots(true), &snapshots);
+    assert_eq!(store.timers.next_processes, None);
+}

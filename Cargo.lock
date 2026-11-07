@@ -1562,6 +1562,7 @@ name = "sutra"
 version = "0.1.6"
 dependencies = [
  "dirs",
+ "libc",
  "nix",
  "notify",
  "objc2 0.5.2",

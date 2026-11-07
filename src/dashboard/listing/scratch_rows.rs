@@ -9,19 +9,16 @@ use crate::dashboard::cleaning::Cleaning;
 use crate::map::{LARGE_FOLDER_BYTES, Measurement, Project};
 
 /// Whether `project` has a row on the list. Every project has one but a scratch folder, which has
-/// one only while an agent or a dev environment works in it, while it holds `LARGE_FOLDER_BYTES`
-/// (see `disk_bytes`), while `cleaning` is at work on it, or while a measurement of it failed,
-/// which its card says why of.
+/// one only while something is at work in it (see `Project::is_at_work`), while it holds
+/// `LARGE_FOLDER_BYTES` (see `disk_bytes`), while `cleaning` is at work on it, or while a
+/// measurement of it failed, which its card says why of.
 pub(super) fn has_a_row(project: &Project, cleaning: &Cleaning) -> bool {
-    let at_work = || {
-        !project.agents.is_empty() || !project.subagents.is_empty() || project.environment.is_some()
-    };
     let failed = || {
         let mut measurements = project.measurements();
         measurements.any(|measurement| matches!(measurement, Measurement::Failed(_)))
     };
     project.scratch.is_none()
-        || at_work()
+        || project.is_at_work()
         || disk_bytes(project) >= LARGE_FOLDER_BYTES
         || cleaning.is_at_work_in(project)
         || failed()
@@ -37,7 +34,7 @@ mod tests {
         agent, quiet, running_as, scratch_folder, subagent_in,
     };
     use crate::map::AgentStatus;
-    use crate::map::test_support::{cargo_target, environment_at, measured};
+    use crate::map::test_support::{cargo_target, environment_at, listening_in, measured};
 
     /// A scratch folder of an ended session holding `own_files` and a build folder of `target`,
     /// at `/code/app/target`, where `deleted()` has cleaned one.
@@ -77,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_folder_has_a_row_while_an_agent_or_a_dev_environment_works_in_it() {
+    fn a_scratch_folder_has_a_row_while_an_agent_a_dev_environment_or_a_server_works_in_it() {
         let small = || scratch(measured(0), measured(10));
         let session = Project {
             agents: vec![agent("/code/app/review", AgentStatus::Busy)],
@@ -91,7 +88,11 @@ mod tests {
             environment: Some(environment_at("/code/app")),
             ..small()
         };
-        for working in [session, subagent, environment] {
+        let server = Project {
+            listening: vec![listening_in("/code/app", "node", &[5177])],
+            ..small()
+        };
+        for working in [session, subagent, environment, server] {
             assert!(has_a_row(&working, &cleaning()), "{working:?}");
         }
     }
