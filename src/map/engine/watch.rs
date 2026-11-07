@@ -72,12 +72,21 @@ impl Watches {
         }
     }
 
-    /// Start the stream over `roots` again, from now. Its events in between go undelivered, so the
-    /// caller reads again what it needs.
+    /// Start the stream over `roots` again, from now. The stream it replaces drops what it had not
+    /// delivered, so a rescan notice names the roots both watch, and the engine reads them again as
+    /// it does after any lost events (see `start_stream`). What a root new to the stream held before
+    /// it began is the caller's to read.
     pub(super) fn restart_over_roots(&mut self, roots: &[PathBuf]) {
         let (over_roots, root_problems) = watch_roots(roots, self.messages.clone());
-        self.roots = roots.to_vec();
+        // Replacing the watcher stops the stream it ran.
         self._over_roots = over_roots;
+        let watched = |root: &&PathBuf| !root_problems.iter().any(|problem| problem.path == **root);
+        let before = mem::replace(&mut self.roots, roots.to_vec());
+        let watched_before = roots
+            .iter()
+            .filter(watched)
+            .filter(|root| before.contains(root));
+        self.report_lost_events(watched_before.cloned());
         self.root_problems = root_problems;
     }
 
@@ -177,12 +186,7 @@ impl Watches {
             }
         }
         let watched_before = watched.iter().filter(|folder| before.contains(*folder));
-        let rescan = Event::new(EventKind::Other).set_flag(Flag::Rescan);
-        let notice = watched_before.cloned().fold(rescan, Event::add_path);
-        if !notice.paths.is_empty() {
-            // Fails only while the engine shuts down, when no one is left to read them again.
-            let _ = self.messages.send(Message::Fs(Ok(notice)));
-        }
+        self.report_lost_events(watched_before.cloned());
         let stream = (!watched.is_empty()).then(|| Stream {
             folders: watched,
             _watcher: watcher,
@@ -191,6 +195,17 @@ impl Watches {
             stream,
             read_again,
             failures,
+        }
+    }
+
+    /// Tell the engine that events in `folders` went undelivered, with the notice `notify` gives
+    /// when FSEvents drops events, so the engine reads them again as it does after any lost events.
+    fn report_lost_events(&self, folders: impl Iterator<Item = PathBuf>) {
+        let rescan = Event::new(EventKind::Other).set_flag(Flag::Rescan);
+        let notice = folders.fold(rescan, Event::add_path);
+        if !notice.paths.is_empty() {
+            // Fails only while the engine shuts down, when no one is left to read them again.
+            let _ = self.messages.send(Message::Fs(Ok(notice)));
         }
     }
 
@@ -480,6 +495,29 @@ mod tests {
         assert!(
             none.is_empty(),
             "the same folders again start nothing: {none:?}"
+        );
+    }
+
+    #[test]
+    fn starting_the_stream_over_the_roots_again_has_the_roots_it_watched_before_rescanned() {
+        let fixture = TempDir::new("watch-roots-again");
+        let (messages, inbox) = mpsc::channel();
+        let (home, scratch) = (fixture.dir("home"), fixture.dir("claude-501"));
+        let gone = fixture.path("gone");
+        let mut watches = Watches::over_roots(std::slice::from_ref(&home), messages);
+
+        watches.restart_over_roots(&[home.clone(), scratch.clone(), gone.clone()]);
+        assert_eq!(
+            rescanned(&inbox),
+            [home],
+            "the new root is the caller's to read"
+        );
+
+        watches.restart_over_roots(&[scratch.clone(), gone]);
+        assert_eq!(
+            rescanned(&inbox),
+            [scratch],
+            "and a root it cannot watch, none of its events to lose"
         );
     }
 

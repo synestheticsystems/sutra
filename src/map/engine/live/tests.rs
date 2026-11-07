@@ -680,6 +680,72 @@ fn the_scratch_root_is_watched_once_claude_code_makes_it_and_read_again_then() {
     );
 }
 
+/// Hand `engine` each rescan notice waiting in `inbox`, and each of `walks` measurements as it
+/// reports, and drop every other file event, as though FSEvents lost them.
+fn take_losing_file_events(engine: &mut Engine, inbox: &Receiver<Message>, walks: usize) {
+    let mut walked = 0;
+    loop {
+        let message = if walked < walks {
+            let next = inbox.recv_timeout(Duration::from_secs(60));
+            next.expect("a walk should have reported within a minute")
+        } else {
+            let Ok(next) = inbox.try_recv() else {
+                return;
+            };
+            next
+        };
+        match message {
+            Message::Measured(measured) => {
+                engine.on_measured(measured);
+                walked += 1;
+            }
+            Message::Fs(Ok(event)) if event.need_rescan() => engine.on_fs_event(Ok(event)),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_build_folder_changed_as_the_stream_over_the_roots_starts_again_is_measured_again() {
+    let fixture = TempDir::new("live-roots-again");
+    crate_with_target(&fixture, "home/a");
+    let roots = Roots {
+        home: fixture.path("home"),
+        dirs: vec![fixture.path("home")],
+        scratch: Some(fixture.path("claude-501")),
+        sandboxed: false,
+    };
+    let mut state = State::new(&roots, &ScanOptions::default());
+    state.rediscover(None);
+    let (messages, inbox) = mpsc::channel();
+    // As `run` starts it, though the events of this stream go unheard.
+    let watches = Watches::over_roots(&state.watched_roots(), messages.clone());
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let mut engine = Engine::new(state, watches, messages, &snapshots);
+    engine.queue_unmeasured(Instant::now());
+    engine.dispatch();
+    // Its build folder and its own files.
+    take_losing_file_events(&mut engine, &inbox, 2);
+    let a = fixture.path("home/a");
+    let before = build_bytes(&engine, a.clone());
+
+    // A build's last write, whose event the stream drops as it starts again over the scratch root.
+    fixture.write("home/a/target/debug/libnew.rlib", [2; 64 * 1024]);
+    fixture.dir("claude-501");
+    let tick = Instant::now() + Duration::from_secs(3);
+    engine.run_due(tick);
+    take_losing_file_events(&mut engine, &inbox, 0);
+    engine.run_due(tick + Duration::from_secs(3));
+    assert!(
+        engine.timers.artifacts.next_due().is_some(),
+        "the top of the build folder changed since its walk"
+    );
+    engine.run_due(tick + Duration::from_secs(6));
+    take_losing_file_events(&mut engine, &inbox, 1);
+
+    assert!(build_bytes(&engine, a) >= before + 64 * 1024);
+}
+
 /// Whether the map shows a card for the project at `path`.
 fn carded(engine: &Engine, path: &Path) -> bool {
     let snapshot = engine.state.snapshot();

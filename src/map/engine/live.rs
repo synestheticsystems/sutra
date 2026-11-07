@@ -312,8 +312,8 @@ impl<'a> Engine<'a> {
                 // The stream over the roots began before macOS let Sutra in, and FSEvents may
                 // not tell a stream about a folder its process could not read when it began. That
                 // is unverified, since testing it means touching a real private folder, so the
-                // stream begins again, now that Sutra may. The rediscovery this answer starts reads
-                // again whatever the restart left undelivered.
+                // stream begins again, now that Sutra may, and what it had not delivered is read
+                // again as after any lost events (see `Watches::restart_over_roots`).
                 self.watches.restart_over_roots(&self.state.watched_roots());
                 self.dirty |= self
                     .state
@@ -337,7 +337,9 @@ impl<'a> Engine<'a> {
 
     /// Watch the scratch root once it is there, and stop when it goes. Claude Code makes it with
     /// the first session after the Mac starts, often after Sutra, and no stream over a folder that
-    /// is not there yet can tell of it. Discovery reads again what the new stream did not hear.
+    /// is not there yet can tell of it. The stream over the roots begins again for it, so what it
+    /// had not delivered from the other roots is read again as after any lost events (see
+    /// `Watches::restart_over_roots`), and discovery reads what the scratch root held before.
     fn follow_the_scratch_root(&mut self, now: Instant) {
         let Some(root) = self.state.scratch_root() else {
             return;
