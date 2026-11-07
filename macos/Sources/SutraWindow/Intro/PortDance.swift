@@ -20,7 +20,7 @@ public struct PortDance: View {
     public var body: some View {
         let isRunning = time == nil && !reduceMotion && motion == .live
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isRunning)) { timeline in
-            let elapsed = time ?? (reduceMotion ? 0 : accumulatedTime + (runningSince.map { max(0, timeline.date.timeIntervalSince($0)) } ?? 0))
+            let elapsed = time ?? motion.frozenMoment ?? (reduceMotion ? 0 : accumulatedTime + (runningSince.map { max(0, timeline.date.timeIntervalSince($0)) } ?? 0))
             let seed = seed ?? (time == nil ? sessionSeed : PortDanceChoreography.exportSeed)
             Canvas { context, size in
                 context.withCGContext { cg in

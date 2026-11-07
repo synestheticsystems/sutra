@@ -13,6 +13,12 @@ struct Swell: Equatable {
     var steady: Double {
         rest + (peak - rest) * rhythm.steadyLevel
     }
+
+    /// How much of the colour the layer holds under `motion`: the steady level, which a live
+    /// rhythm runs over, or the level at the moment a recording draws.
+    func level(under motion: Motion) -> Double {
+        motion.frozenMoment.map { rest + (peak - rest) * rhythm.level(at: $0) } ?? steady
+    }
 }
 
 /// A swell filling its frame, or edging it, in a layer of its own that Core Animation moves, so
@@ -144,12 +150,12 @@ final class SwellView: NSView {
         needsLayout = true
     }
 
-    /// Hold the steady level, and run the rhythm over it while motion is live and a window shows
-    /// the swell.
+    /// Hold the level the motion gives, and run the rhythm over it while motion is live and a
+    /// window shows the swell.
     private func move() {
         guard let swell else { return }
         withoutImplicitAnimation {
-            swellLayer.opacity = Float(swell.steady)
+            swellLayer.opacity = Float(swell.level(under: motion))
         }
         swellLayer.removeAnimation(forKey: Self.animationKey)
         if motion == .live, window != nil {

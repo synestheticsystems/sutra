@@ -13,6 +13,9 @@ public struct DashboardView: View {
     @FocusState private var filterFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var seen = NSApp.occlusionState.contains(.visible)
+    /// How the window's host asks it to move: live in the app; frozen at each moment in turn while
+    /// a recording draws the window frame by frame.
+    @Environment(\.motion) private var hostMotion
 
     public init(dashboard: DashboardModel, welcome: Welcome) {
         self.dashboard = dashboard
@@ -25,7 +28,7 @@ public struct DashboardView: View {
                 IntroView(danceSeed: welcome.danceSeed) { welcome.continueToDashboard() }
                     // The dance tells no news, so only Reduce Motion and a window nobody can see
                     // hold it still.
-                    .environment(\.motion, reduceMotion || !seen ? .steady : .live)
+                    .environment(\.motion, motion(heldStill: reduceMotion || !seen))
             } else if dashboard.helpShown {
                 HelpPanel()
             } else {
@@ -51,9 +54,11 @@ public struct DashboardView: View {
             dashboard.showFilter()
             filterFocused = true
         })
-        // Nothing moves while macOS is set to reduce motion, while nobody can see the window, or
-        // once the map no longer updates, when a pulse would claim news Sutra no longer has.
-        .environment(\.motion, reduceMotion || !seen || dashboard.stopped != nil ? .steady : .live)
+        // Nothing moves once the map no longer updates, when a pulse would claim news Sutra no
+        // longer has, nor while macOS is set to reduce motion or nobody can see the window.
+        .environment(
+            \.motion, dashboard.stopped != nil ? .steady : motion(heldStill: reduceMotion || !seen)
+        )
         // The views open, copy and reveal through the services the model holds, links in text
         // too.
         .environment(\.native, dashboard.native)
@@ -65,6 +70,19 @@ public struct DashboardView: View {
             for: NSApplication.didChangeOcclusionStateNotification
         )) { _ in
             seen = NSApp.occlusionState.contains(.visible)
+        }
+    }
+
+    /// The window's motion when it holds still or moves. A recording that draws the window frame
+    /// by frame freezes each moment itself, whatever this Mac is set to and though nobody sees the
+    /// window here, as its viewers watch it elsewhere.
+    private func motion(heldStill: Bool) -> Motion {
+        if hostMotion.frozenMoment != nil {
+            hostMotion
+        } else if heldStill {
+            .steady
+        } else {
+            .live
         }
     }
 }
