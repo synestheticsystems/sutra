@@ -35,7 +35,8 @@ enum Scenario {
         pineScripts,
     ]
 
-    private static let cedarWebGit = "/Demo/Projects/cedar-web/.git"
+    /// The git folder Cedar Web's three worktrees share, which the preview's cut folds by.
+    static let cedarWebGit = "/Demo/Projects/cedar-web/.git"
     private static let day: TimeInterval = 86_400
 
     private static let cedarWeb = Project(

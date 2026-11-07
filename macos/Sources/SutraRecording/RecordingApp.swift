@@ -2,10 +2,9 @@ import AppKit
 import SutraWindow
 import SwiftUI
 
-/// The recording build: Sutra's window over invented work, for recording the Mac App Store's
-/// preview without anyone's machine in it. It has no live core to start, as nothing in this build
-/// makes one; packaging/macos/recording.sh bundles it with an identity of its own.
-@main
+/// The recording build as an app: Sutra's window over invented work, for recording the Mac App
+/// Store's preview without anyone's machine in it. It has no live core to start, as nothing in this
+/// build makes one; packaging/macos/recording.sh bundles it with an identity of its own.
 struct RecordingApp: App {
     @NSApplicationDelegateAdaptor private var delegate: RecordingDelegate
 

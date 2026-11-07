@@ -147,6 +147,50 @@ open -n "dist/Sutra Recording.app"
   container and preferences of its own, so it reads and writes none of
   Sutra's.
 
+### Drawing the preview video
+
+The video is drawn, not recorded: nothing captures the screen, and no window
+appears on it. Given `--film` and a folder, the recording build draws its
+window offscreen, frame by frame, as the cut (`Film/Cut.swift`) directs:
+`frame-0000.png` to `frame-0884.png`, 29.5 seconds at 30 frames a second. Each
+frame is the window at 960 by 540 points, title bar and toolbar included,
+drawn at 2x into the store's 1920 by 1080 pixels. Every frame holds the
+script, the welcome dance and the throbs at its own moment, so every film
+draws the same frames.
+
+```sh
+./macos/build.sh
+swift_build=(swift build -c release --package-path macos --product SutraRecording
+    --build-system native)
+"${swift_build[@]}"
+"$("${swift_build[@]}" --show-bin-path)/SutraRecording" --film frames
+bt709=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv
+ffmpeg -framerate 30 -i frames/frame-%04d.png \
+    -vf "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=$bt709" \
+    -c:v libx264 -preset slow -profile:v high -level:v 4.0 -g 30 \
+    -b:v 11M -minrate 11M -maxrate 11M -bufsize 11M -x264-params nal-hrd=cbr \
+    -an -map_metadata -1 -fflags +bitexact -movflags +faststart preview.mp4
+```
+
+- It runs as the bare executable the build makes: in its bundle, the sandbox
+  would keep the frames in its container.
+- The film presses Return, which Let's untangle this answers as the window's
+  default action, and folds Cedar Web by asking the script what a click on
+  the repository's line asks.
+- Drawn offscreen, the window has no Liquid Glass: the toolbar's buttons stand
+  without the glass platter that the window server draws behind them on the
+  screen.
+- To draw the window as the app looks in use, the key window of the active
+  app, the film's window (`Film/FilmWindow.swift`) answers two of AppKit's
+  private questions. That code is in the recording build alone, never in the
+  app: the Mac App Store refuses private API.
+- The encoding follows the store's specification for a Mac preview: H.264
+  High Profile Level 4.0, 1920 by 1080, 30 frames a second, no sound. The
+  store asks for 10 to 12 Mbps, and a window that mostly stands still needs far
+  fewer bits, so x264 holds a constant 11 Mbps and pads where the picture
+  needs less. The frames are drawn in sRGB; the video is tagged BT.709, the
+  colours of HD video, which ffmpeg would otherwise take from the PNGs as sRGB.
+
 ## Releases (CI)
 
 Releases build in CI, never on a workstation. A version bump on `main` releases
