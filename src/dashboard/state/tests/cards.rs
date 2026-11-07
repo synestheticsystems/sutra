@@ -60,6 +60,7 @@ fn clean_all_on_a_sessions_line_starts_each_build_folder_of_its_scratch_that_a_c
                 session_id: session_id.to_string(),
                 started_in: "app".to_string(),
                 session: None,
+                session_name: None,
             }),
             ..active_at(path, vec![target])
         }

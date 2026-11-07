@@ -4,11 +4,12 @@
 //! against 2.1.317. The registry says nothing of a session's subagents, whose transcripts
 //! `subagents` reads, nor of the model the session works with, which its own transcript names
 //! (see `session_model`). Both lie where Claude Code keeps the session's files (see
-//! `session_files`).
+//! `session_files`), and so does the name a session that has ended went by (see `session_name`).
 
 mod app_link;
 mod session_files;
 mod session_model;
+mod session_name;
 mod subagents;
 mod transcript;
 
@@ -23,6 +24,7 @@ use serde::Deserialize;
 pub(crate) use self::session_files::working_directory_name;
 use self::session_files::{session_folder, session_transcript};
 pub use self::session_model::SessionModels;
+pub(crate) use self::session_name::recorded_session_name;
 pub use self::subagents::{Transcripts, is_subagent_transcript};
 #[cfg(test)]
 pub(crate) use self::subagents::{write_test_subagent_acting, write_test_subagent_at_work};

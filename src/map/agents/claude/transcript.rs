@@ -2,11 +2,13 @@
 //! per line, appended as the agent works: the prompt and tool results handed to the model, each
 //! request sent to it, its replies, and the context recorded around them. Only its end is read: of
 //! a subagent's, what its turn is doing and where it works (see `Tail`), and of a session's, the
-//! model of its newest reply (see `newest_model`). The format is undocumented; what is read here
-//! was checked against 2,200 subagent transcripts written by Claude Code 2.1.18 to 2.1.317, the
-//! model on each reply against the newest 400 subagent transcripts and all 325 session
-//! transcripts, and the tool calls that tell where a subagent acts against the 923 subagent
-//! transcripts of the last two weeks (2026-11-05).
+//! model of its newest reply (see `newest_model`) and the name it last went by (see
+//! `newest_name`). The format is undocumented; what is read here was checked against 2,200
+//! subagent transcripts written by Claude Code 2.1.18 to 2.1.317, the model on each reply against
+//! the newest 400 subagent transcripts and all 325 session transcripts, and the tool calls that
+//! tell where a subagent acts against the 923 subagent transcripts of the last two weeks
+//! (2026-11-05); the names against the 71 transcripts of the sessions in the scratch root
+//! (2026-11-07).
 
 mod acted_in;
 
@@ -35,6 +37,11 @@ const TURN_KINDS: [&str; 3] = [
     r#""type":"user""#,
     r#""type":"api-request""#,
 ];
+
+/// The entry kinds that name the session, as they appear in a line: the title the user or the
+/// Claude app gave it, and the name it goes by among agents, which the registry's `name` repeats
+/// while it runs. Claude Code records both after each prompt, so the newest lies near the end.
+const NAME_KINDS: [&str; 2] = [r#""type":"custom-title""#, r#""type":"agent-name""#];
 
 /// What the end of a subagent's transcript says about it: the newest entry that tells of its turn,
 /// and while the turn goes on, the folder Claude Code runs the subagent in, where it acted and the
@@ -173,6 +180,43 @@ pub(super) fn newest_model(bytes: &[u8]) -> Option<String> {
     let lines = bytes.split(|&byte| byte == b'\n');
     let mut entries = lines.rev().filter_map(turn_entry);
     entries.find_map(|entry| entry.model)
+}
+
+/// The name the newest entry among the lines of `bytes` that names the session gives it, or `None`
+/// when no entry there names it. The window's first line may begin partway through an entry, and
+/// its last may be one Claude Code is still appending; neither parses, so neither counts.
+pub(super) fn newest_name(bytes: &[u8]) -> Option<String> {
+    newest_first(bytes).find_map(name_entry)
+}
+
+/// The name `line` gives the session, when it is an entry that names it, and the name is not blank.
+fn name_entry(line: &[u8]) -> Option<String> {
+    let line = std::str::from_utf8(line).ok()?;
+    if !NAME_KINDS.iter().any(|kind| line.contains(kind)) {
+        return None;
+    }
+    let name = match serde_json::from_str(line).ok()? {
+        NameEntry::CustomTitle { custom_title } => custom_title,
+        NameEntry::AgentName { agent_name } => agent_name,
+    };
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// An entry that names the session.
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum NameEntry {
+    #[serde(rename = "custom-title")]
+    CustomTitle {
+        #[serde(rename = "customTitle")]
+        custom_title: String,
+    },
+    #[serde(rename = "agent-name")]
+    AgentName {
+        #[serde(rename = "agentName")]
+        agent_name: String,
+    },
 }
 
 /// What `line` says, when it is an entry that tells of the turn.
@@ -513,6 +557,17 @@ pub(super) fn test_written_by(reply: String, model: serde_json::Value) -> String
     let mut reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
     reply["message"]["model"] = model;
     reply.to_string()
+}
+
+/// The entries Claude Code writes after a prompt to the session `session_id` named `name`: its
+/// title, then its name among agents.
+#[cfg(test)]
+pub(super) fn test_named(session_id: &str, name: &str) -> [String; 2] {
+    [
+        serde_json::json!({"type": "custom-title", "customTitle": name, "sessionId": session_id}),
+        serde_json::json!({"type": "agent-name", "agentName": name, "sessionId": session_id}),
+    ]
+    .map(|entry| entry.to_string())
 }
 
 /// Writes a transcript holding `lines`.
@@ -911,6 +966,42 @@ mod tests {
         let unnamed = test_written_by(reply(t, None, "text"), json!(7));
         assert_eq!(model(&[unnamed, prompt(t)]), None);
         assert_eq!(model(&[prompt(t), request(t)]), None, "no reply yet");
+    }
+
+    #[test]
+    fn a_sessions_name_is_the_one_its_newest_naming_entry_gives_of_either_kind() {
+        let t = at(1_000);
+        let name = |lines: &[String]| newest_name((lines.join("\n") + "\n").as_bytes());
+        let [first_title, _] = test_named("e26ca359", "Foundry");
+        let [title, agent_name] = test_named("e26ca359", "Foundry Agent Studio architecture");
+        let after_a_turn = [
+            first_title.clone(),
+            title,
+            prompt(t),
+            reply(t, None, "text"),
+        ];
+        assert_eq!(
+            name(&after_a_turn).as_deref(),
+            Some("Foundry Agent Studio architecture"),
+            "renamed since its first prompt"
+        );
+        assert_eq!(
+            name(&[first_title, agent_name]).as_deref(),
+            Some("Foundry Agent Studio architecture"),
+            "the name among agents, written last"
+        );
+        let [blank, _] = test_named("e26ca359", "  ");
+        let [kept, _] = test_named("e26ca359", "Foundry");
+        assert_eq!(name(&[kept, blank]).as_deref(), Some("Foundry"));
+        assert_eq!(name(&[prompt(t), request(t)]), None, "never named");
+    }
+
+    #[test]
+    fn a_naming_entry_cut_by_the_ends_of_the_read_names_nothing() {
+        let [title, _] = test_named("e26ca359", "Foundry");
+        let (start, end) = title.split_at(title.len() / 2);
+        assert_eq!(newest_name(end.as_bytes()), None, "begun before the read");
+        assert_eq!(newest_name(start.as_bytes()), None, "still being written");
     }
 
     #[test]

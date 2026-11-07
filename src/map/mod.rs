@@ -204,8 +204,9 @@ impl SourceProblem {
 /// Where a problem arose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Source {
-    /// Discovery: a folder the walk could not list, or a worktree whose git state it could not
-    /// read.
+    /// Discovery: a folder the walk could not list, a worktree whose git state it could not read,
+    /// or the transcript of a session that left scratch behind, which names the session once it
+    /// has ended.
     Scan,
     /// The dev-runner registry, `~/.dev-runner/`, which could not be listed at all.
     Registry,
@@ -235,7 +236,8 @@ pub enum Source {
 impl Source {
     /// Whether the source tells what is at work in a project: failing to read it may hide an agent,
     /// a running environment or a project's latest activity. Discovery failing only loses folders,
-    /// a subagent's meta file only its name, and a session's transcript only its model.
+    /// or the name of a session that has ended, a subagent's meta file only its name, and a
+    /// session's transcript only its model.
     pub fn tells_what_is_at_work(self) -> bool {
         match self {
             Source::Registry

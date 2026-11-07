@@ -254,6 +254,7 @@ pub(super) mod fixtures {
             session_id: session_id.to_string(),
             started_in: "app".to_string(),
             session: None,
+            session_name: None,
         };
         Project {
             path: space.session_folder.join("scratchpad").join(folder),
@@ -271,6 +272,7 @@ pub(super) mod fixtures {
             label: Some(label.to_string()),
             ..agent_session(&space.session_id, AgentStatus::Busy)
         });
+        space.session_name = Some(label.to_string());
         Project {
             name: space.name(),
             scratch: Some(space),

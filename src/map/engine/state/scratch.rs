@@ -13,6 +13,7 @@
 //! scratch root held 194 sessions' folders and 87,000 folders to list in them.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -48,8 +49,40 @@ impl State {
             })
             .collect();
         let is_worktree = |folder: &Path| worktrees.contains_key(folder);
-        let tracked = self.track_scratch_folders(found, previous, is_worktree);
+        let mut tracked = self.track_scratch_folders(found, previous, is_worktree);
+        self.name_sessions(&mut tracked, &mut failures);
         (tracked, SourceProblem::per_kind(Source::Scan, failures))
+    }
+
+    /// Name each session among the scratch folders `tracked` that has no name yet and is not seen
+    /// running, on every one of its folders, by the name its transcript last recorded (see
+    /// `agents::recorded_session_name`). A running session names itself (see
+    /// `find_scratch_sessions`), and a session that ended keeps the name it went by. A session
+    /// never named is looked up again at each rediscovery, which reads only the end of a
+    /// transcript, if it has one. The transcripts that could not be read go to `failures`.
+    fn name_sessions(
+        &self,
+        tracked: &mut [(PathBuf, Tracked)],
+        failures: &mut Vec<(PathBuf, io::ErrorKind)>,
+    ) {
+        let mut names: HashMap<PathBuf, Option<String>> = HashMap::new();
+        for (_, tracked) in tracked.iter_mut() {
+            let project = &mut tracked.project;
+            let Some(space) = project.scratch.as_mut() else {
+                continue;
+            };
+            if space.session_name.is_some() || space.session.is_some() {
+                continue;
+            }
+            let recorded = || {
+                // The session's folder is `<scratch root>/<project key>/<session id>`.
+                let key = space.session_folder.parent()?.file_name()?.to_str()?;
+                agents::recorded_session_name(&self.home, key, &space.session_id, failures)
+            };
+            let name = names.entry(space.session_folder.clone());
+            space.session_name.clone_from(name.or_insert_with(recorded));
+            project.name = space.name();
+        }
     }
 
     /// List the scratch folders of the session whose folder is `session` again, after a folder came,
@@ -99,20 +132,23 @@ impl State {
 
     /// Track the scratch folders `found`, listed by the session folder holding them: one tracked
     /// already is taken from `previous` whole, with the build folders last found in it, unless
-    /// Sutra's access to it changed since; a new one is searched through, on discovery's threads. A
-    /// folder `is_worktree` names stays the worktree it is, as git's claim on it comes first.
+    /// Sutra's access to it changed since; a new one is searched through, on discovery's threads,
+    /// in the space its session's folders on the map share, with what the map knows of the
+    /// session, or in a new one. A folder `is_worktree` names stays the worktree it is, as git's
+    /// claim on it comes first.
     fn track_scratch_folders(
         &self,
         found: Vec<(SessionFolder, Vec<PathBuf>)>,
         previous: &mut BTreeMap<PathBuf, Tracked>,
         is_worktree: impl Fn(&Path) -> bool,
     ) -> Vec<(PathBuf, Tracked)> {
-        let mut kept = Vec::new();
+        let mut kept: Vec<(PathBuf, Tracked)> = Vec::new();
         let mut new = Vec::new();
         // The sessions started in one folder share its name, which is worked out once.
         let mut started_in: HashMap<String, String> = HashMap::new();
         for (session, folders) in found {
-            let mut space: Option<ScratchSpace> = None;
+            let first_kept = kept.len();
+            let mut new_here = Vec::new();
             for folder in folders.into_iter().filter(|folder| !is_worktree(folder)) {
                 let access = scan::folder_access(&folder, &self.boundary);
                 match previous.remove(&folder) {
@@ -121,13 +157,16 @@ impl State {
                     {
                         kept.push((folder, before));
                     }
-                    _ => {
-                        let space =
-                            space.get_or_insert_with(|| self.space_of(&session, &mut started_in));
-                        new.push((folder, space.clone()));
-                    }
+                    _ => new_here.push(folder),
                 }
             }
+            if new_here.is_empty() {
+                continue;
+            }
+            let mut kept_here = kept[first_kept..].iter();
+            let known = kept_here.find_map(|(_, tracked)| tracked.project.scratch.clone());
+            let space = known.unwrap_or_else(|| self.space_of(&session, &mut started_in));
+            new.extend(new_here.into_iter().map(|folder| (folder, space.clone())));
         }
         let boundary = &self.boundary;
         // Each search is metadata I/O like discovery's walk.
@@ -157,11 +196,14 @@ impl State {
             started_in: started_in.clone(),
             // Found with the session's other agents (see `State::refresh_agents`).
             session: None,
+            // Found with the session, or in its transcript (see `name_sessions`).
+            session_name: None,
         }
     }
 
     /// Hand each scratch folder its session while the session runs, among `sessions`, and the name
-    /// that goes with it (see `ScratchSpace::name`). Returns whether a folder with a card changed.
+    /// the session goes by, which the folder keeps once the session ends (see
+    /// `ScratchSpace::name`). Returns whether a folder with a card changed.
     pub(super) fn find_scratch_sessions(&mut self, sessions: &[AgentSession]) -> bool {
         let running: HashMap<&str, &AgentSession> = sessions
             .iter()
@@ -177,6 +219,9 @@ impl State {
             let session = running.get(space.session_id.as_str()).copied();
             if space.session.as_ref() != session {
                 space.session = session.cloned();
+                if let Some(label) = session.and_then(|session| session.label.as_ref()) {
+                    space.session_name = Some(label.clone());
+                }
                 project.name = space.name();
                 changed |= earns_a_card(project);
             }
@@ -266,6 +311,7 @@ mod tests {
                 session_id: "e26ca359".to_string(),
                 started_in: "me".to_string(),
                 session: None,
+                session_name: None,
             }),
             artifacts: artifacts
                 .iter()
@@ -546,6 +592,65 @@ mod tests {
     }
 
     #[test]
+    fn a_session_that_ended_before_the_map_saw_it_goes_by_the_name_its_transcript_recorded() {
+        let fixture = TempDir::new("engine-scratch-transcript-name");
+        let key = key_of(&fixture.dir("home/vt/foundry"));
+        let scratchpad = format!("claude-501/{key}/e26ca359/scratchpad");
+        fixture.write(&format!("{scratchpad}/r567/CACHEDIR.TAG"), CACHEDIR_TAG);
+        let transcript = format!("home/.claude/projects/{key}/e26ca359.jsonl");
+        let named = |name: &str| {
+            format!(
+                "{{\"type\":\"custom-title\",\"customTitle\":\"{name}\",\"sessionId\":\"e26ca359\"}}\n"
+            )
+        };
+        fixture.write(&transcript, named("Foundry Agent Studio architecture"));
+        let mut state = state_over(&fixture);
+        let names = |state: &State| {
+            let snapshot = state.snapshot();
+            let cards = snapshot.projects.into_iter();
+            cards.map(|card| card.name).collect::<Vec<_>>()
+        };
+
+        state.rediscover(None);
+        assert_eq!(names(&state), ["Foundry Agent Studio architecture"]);
+
+        fixture.write(&transcript, named("Renamed after it ended"));
+        fixture.write(&format!("{scratchpad}/r593/CACHEDIR.TAG"), CACHEDIR_TAG);
+        state.rediscover(None);
+        assert_eq!(
+            names(&state),
+            ["Foundry Agent Studio architecture"; 2],
+            "a new folder takes the name its session's folders already go by"
+        );
+    }
+
+    #[test]
+    fn a_session_never_named_goes_by_where_it_started_and_says_what_it_could_not_read() {
+        let fixture = TempDir::new("engine-scratch-unnamed");
+        let key = key_of(&fixture.dir("home/vt/foundry"));
+        fixture.write(
+            &format!("claude-501/{key}/e26ca359/scratchpad/r567/CACHEDIR.TAG"),
+            CACHEDIR_TAG,
+        );
+        let transcript = fixture.write(&format!("home/.claude/projects/{key}/e26ca359.jsonl"), "");
+        fixture.restrict(&transcript, 0o000);
+        let mut state = state_over(&fixture);
+
+        state.rediscover(None);
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.projects[0].name, "foundry e26ca359");
+        let unread = snapshot
+            .problems
+            .iter()
+            .find(|problem| problem.path == transcript);
+        assert_eq!(
+            unread.map(|problem| (problem.source, problem.kind)),
+            Some((Source::Scan, io::ErrorKind::PermissionDenied))
+        );
+    }
+
+    #[test]
     fn each_scratch_folder_holds_its_session_while_it_runs_and_goes_by_the_sessions_name() {
         let fixture = TempDir::new("engine-scratch-session");
         let key = key_of(&fixture.dir("home/vt/foundry"));
@@ -586,7 +691,11 @@ mod tests {
                 .as_ref()
                 .is_some_and(|space| space.session.is_none())
         }));
-        assert_eq!(names(&state), ["foundry e26ca359"; 2]);
+        assert_eq!(
+            names(&state),
+            ["Foundry Agent Studio architecture"; 2],
+            "the name it went by outlasts it"
+        );
         assert!(!state.refresh_agents(), "nothing more changed");
     }
 

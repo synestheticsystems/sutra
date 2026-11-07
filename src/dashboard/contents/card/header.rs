@@ -253,6 +253,7 @@ mod tests {
                 session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
                 started_in: "sk".to_string(),
                 session: running,
+                session_name: None,
             }),
             ..project_at(&path)
         };

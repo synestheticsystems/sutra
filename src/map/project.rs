@@ -190,19 +190,19 @@ pub struct ScratchSpace {
     /// The session while it runs. It counts on the card of the folder it works in alone, and while
     /// it runs, it may build in any folder of its scratch.
     pub session: Option<AgentSession>,
+    /// The name the session last went by: while it runs, its own, as its robot gives it; once it
+    /// has ended, the one it went by while the map watched it run, or else the one its transcript
+    /// last recorded. `None` for a session never named.
+    pub session_name: Option<String>,
 }
 
 impl ScratchSpace {
-    /// What the space goes by: its session's own name while the session runs and has one, as the
-    /// session's robot gives it; else the folder the session started in, and the first eight
-    /// characters of its id, as `greyorange-foundry e26ca359` reads.
+    /// What the space goes by: the name its session last went by, so that the space keeps it once
+    /// the session ends; else the folder the session started in, and the first eight characters of
+    /// its id, as `greyorange-foundry e26ca359` reads.
     pub fn name(&self) -> String {
-        let label = self
-            .session
-            .as_ref()
-            .and_then(|session| session.label.as_ref());
-        if let Some(label) = label {
-            return label.clone();
+        if let Some(name) = &self.session_name {
+            return name.clone();
         }
         let short_id: String = self.session_id.chars().take(8).collect();
         format!("{} {short_id}", self.started_in)
@@ -236,8 +236,8 @@ mod tests {
     use std::io;
 
     use super::*;
+    use crate::map::DirUsage;
     use crate::map::test_support::{at, cargo_target, measured, project_at, usage};
-    use crate::map::{AgentStatus, DirUsage};
 
     fn partly_measured(bytes: u64, unreadable_dirs: u64) -> Measurement {
         Measurement::Measured(DirUsage {
@@ -322,22 +322,20 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_space_goes_by_its_running_sessions_name_else_where_it_started_and_its_id() {
+    fn a_scratch_space_goes_by_its_sessions_last_name_else_where_it_started_and_its_id() {
         let session = "/private/tmp/claude-501/-Users-me-vt-foundry/e26ca359-da00";
         let mut space = ScratchSpace {
             session_folder: PathBuf::from(session),
             session_id: "e26ca359-da00".to_string(),
             started_in: "foundry".to_string(),
             session: None,
+            session_name: None,
         };
         assert_eq!(space.name(), "foundry e26ca359");
         let folder = PathBuf::from(session).join("scratchpad/r567fixture");
         assert_eq!(space.place_of(&folder), Path::new("scratchpad/r567fixture"));
 
-        space.session = Some(AgentSession {
-            label: Some("Foundry Agent Studio architecture".to_string()),
-            ..crate::map::test_support::agent_session("e26ca359-da00", AgentStatus::Busy)
-        });
+        space.session_name = Some("Foundry Agent Studio architecture".to_string());
         assert_eq!(space.name(), "Foundry Agent Studio architecture");
     }
 
@@ -350,6 +348,7 @@ mod tests {
                 session_id: "e26ca359".to_string(),
                 started_in: "me".to_string(),
                 session: None,
+                session_name: None,
             }),
             own_files,
             ..project_at(format!("{session}/scratchpad/r567"))

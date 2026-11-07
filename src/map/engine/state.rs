@@ -846,6 +846,7 @@ mod tests {
                 session_id: "e26ca359".to_string(),
                 started_in: "app".to_string(),
                 session: None,
+                session_name: None,
             });
             project.artifacts = build_folders
                 .iter()

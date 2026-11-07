@@ -346,6 +346,7 @@ mod tests {
                 session_id: name.to_string(),
                 started_in: "app".to_string(),
                 session,
+                session_name: None,
             }),
             own_files,
             ..quiet_project(name, 9, LARGE)
@@ -740,6 +741,7 @@ mod tests {
             session_id: "e26ca359".to_string(),
             started_in: "foundry".to_string(),
             session,
+            session_name: None,
         };
         let builder = Project {
             name: space.name(),
