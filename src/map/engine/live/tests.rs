@@ -816,6 +816,32 @@ fn a_folder_made_in_a_scratch_folder_has_it_searched_through_once_its_folders_se
 }
 
 #[test]
+fn a_folder_a_scratch_folders_search_could_not_list_has_it_searched_again_at_a_change_there() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = TempDir::new("live-scratch-unlisted");
+    let folder = fixture.dir("claude-501/-code-app/e26ca359/scratchpad/r567");
+    fixture.write(
+        "claude-501/-code-app/e26ca359/scratchpad/r567/sub/cache/CACHEDIR.TAG",
+        CACHEDIR_TAG,
+    );
+    let sub = folder.join("sub");
+    fixture.restrict(&sub, 0o000);
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
+    assert!(!carded(&engine, &folder), "nothing in it to see yet");
+    let now = Instant::now();
+
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+    // What FSEvents reports of the change of permissions, which no folder appearing comes with.
+    let chmod = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Ownership));
+    engine.on_fs_event(Ok(Event::new(chmod).add_path(sub.clone())));
+    engine.run_due(now + Duration::from_secs(11));
+
+    assert_eq!(build_folders(&engine, &folder), [sub.join("cache")]);
+    assert_eq!(engine.state.snapshot().problems, []);
+}
+
+#[test]
 fn a_folder_made_at_the_top_of_a_sessions_scratch_joins_the_map_once_its_folders_are_listed() {
     let fixture = TempDir::new("live-scratch-folders");
     let session = fixture.dir("claude-501/-code-app/e26ca359/scratchpad");

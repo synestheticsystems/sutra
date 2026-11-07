@@ -25,7 +25,6 @@ use crate::map::{
     RepoInfo, ScanOptions, ScanStats, ScratchSpace, Snapshot, Source, SourceProblem,
     SubagentWithParent, agents, devrunner, scan,
 };
-use artifacts::artifact_dirs;
 use placement::{Place, Placed};
 use scratch::earns_a_card;
 use tracked::Tracked;
@@ -50,6 +49,9 @@ pub(super) struct State {
     unplaced_subagents: Vec<SubagentWithParent>,
     /// What each source reported when it was last read, ordered by source.
     problems: Vec<SourceProblem>,
+    /// What the last rediscovery could not read, which the problems of `Source::Scan` hold with the
+    /// folders the last search of each scratch folder could not list (see `report_unread`).
+    unread_by_rediscovery: Vec<SourceProblem>,
     /// The folders discovery found publishing state of their own.
     state_folders: Vec<PathBuf>,
     /// What the agents' growing files said at the last read of the agents.
@@ -78,6 +80,7 @@ impl State {
             unplaced_agents: Vec::new(),
             unplaced_subagents: Vec::new(),
             problems: Vec::new(),
+            unread_by_rediscovery: Vec::new(),
             state_folders: Vec::new(),
             agent_files: agents::LastRead::default(),
             scan: ScanStats::default(),
@@ -218,8 +221,8 @@ impl State {
         projects.extend(plain_folders);
         projects.extend(scratch_folders);
         self.projects = projects;
-        let problems = [discovery.problems, scratch_problems].concat();
-        self.report_problems(&[Source::Scan], problems);
+        self.unread_by_rediscovery = [discovery.problems, scratch_problems].concat();
+        self.report_unread();
         self.state_folders = discovery.state_folders;
         self.place_environments(observed_at);
         self.leave_build_folders_to_nested_projects();
@@ -401,6 +404,15 @@ impl State {
         earns_a_card(&tracked.project)
     }
 
+    /// Report what discovery could not read: what the last rediscovery could not, and the folders
+    /// in each scratch folder that its last search could not list. Returns whether that changed.
+    fn report_unread(&mut self) -> bool {
+        let unlisted = self.projects.values().flat_map(|tracked| &tracked.unlisted);
+        let searches = SourceProblem::per_kind(Source::Scan, unlisted.cloned().collect());
+        let unread = [self.unread_by_rediscovery.clone(), searches].concat();
+        self.report_problems(&[Source::Scan], unread)
+    }
+
     /// Replace the problems `sources` reported last time with `fresh`, what they reported now.
     /// Returns whether anything changed.
     pub(super) fn report_problems(
@@ -454,19 +466,18 @@ impl State {
 }
 
 /// A project at `path`: a worktree of `repo`, a session's scratch folder (`scratch`), or a plain
-/// folder when neither, its build folders found where `access` lets Sutra look.
+/// folder when neither, with nothing found or measured in it yet (see `Tracked::searched`).
 fn new_project(
     path: PathBuf,
     repo: Option<RepoInfo>,
     scratch: Option<ScratchSpace>,
     access: FolderAccess,
-    boundary: &Boundary,
 ) -> Project {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let mut project = Project {
+    Project {
         path,
         name,
         repo,
@@ -479,13 +490,7 @@ fn new_project(
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access,
-    };
-    // An unreadable folder is not entered: it may be a private folder whose first read raises the
-    // privacy prompt.
-    if access == FolderAccess::Readable {
-        project.artifacts = artifact_dirs(&project, boundary);
     }
-    project
 }
 
 /// The project an agent working in `path` works on, of those `counts` lets in: the deepest project
@@ -531,20 +536,14 @@ mod tests {
     use crate::map::test_support::TempDir;
 
     fn tracked(path: &str) -> Tracked {
-        let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
         Tracked {
-            project: new_project(
-                PathBuf::from(path),
-                None,
-                None,
-                FolderAccess::Missing,
-                &boundary,
-            ),
+            project: new_project(PathBuf::from(path), None, None, FolderAccess::Missing),
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
             inode: None,
+            unlisted: Vec::new(),
         }
     }
 

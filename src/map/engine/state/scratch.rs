@@ -12,6 +12,11 @@
 //! through at every rediscovery would cost each rediscovery several times the walk of the home
 //! folder: on Daniel's Mac (2026-11-06) the scratch root held 194 sessions' folders and 87,000
 //! folders to list in them.
+//!
+//! A folder in a scratch folder that the search cannot list is named among the problems, and the
+//! build folders the map knew in it stay, as they may be there still. A change at it, in it or at a
+//! folder holding it has the scratch folder searched again: giving the folder back its permissions
+//! is one, and it comes as no folder appearing.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -148,6 +153,7 @@ impl State {
             let sessions: Vec<AgentSession> = self.sessions_on_the_map().cloned().collect();
             self.find_scratch_sessions(&sessions);
             self.reindex();
+            self.report_unread();
         }
         Some(changed)
     }
@@ -288,6 +294,22 @@ impl State {
         self.projects
             .get(project)
             .is_some_and(|tracked| tracked.project.scratch.is_some())
+    }
+
+    /// Whether `path`, in the scratch folder `project`, holds or lies in a folder the last search of
+    /// `project` could not list, so a change there, as one to its permissions, may let a search in.
+    pub(in crate::map::engine) fn search_could_not_list(
+        &self,
+        project: &Path,
+        path: &Path,
+    ) -> bool {
+        let Some(tracked) = self.projects.get(project) else {
+            return false;
+        };
+        let unlisted = tracked.unlisted.iter();
+        unlisted
+            .map(|(folder, _)| folder)
+            .any(|folder| folder.starts_with(path) || path.starts_with(folder))
     }
 
     /// The scratch folders the map tracks that hold or lie inside one of `folders`, so whatever a
@@ -530,6 +552,45 @@ mod tests {
         state.rediscover(None);
 
         assert_eq!(paths(&state), [folder]);
+    }
+
+    #[test]
+    fn a_folder_a_scratch_folders_search_cannot_list_is_a_problem_and_keeps_its_build_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = TempDir::new("engine-scratch-search-unlisted");
+        let r567 = fixture.dir("claude-501/-Users-me/e26ca359/scratchpad/r567");
+        fixture.write(
+            "claude-501/-Users-me/e26ca359/scratchpad/r567/sub/cache/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        let (sub, sealed) = (r567.join("sub"), r567.join("sealed"));
+        fixture.dir("claude-501/-Users-me/e26ca359/scratchpad/r567/sealed");
+        fixture.restrict(&sealed, 0o000);
+        let mut state = state_over(&fixture);
+        let unread = |state: &State| {
+            let problems = state.snapshot().problems.into_iter();
+            let problems = problems.map(|problem| (problem.path, problem.kind, problem.count));
+            problems.collect::<Vec<_>>()
+        };
+        let denied = io::ErrorKind::PermissionDenied;
+
+        state.rediscover(None);
+        assert_eq!(unread(&state), [(sealed.clone(), denied, 1)]);
+        assert_eq!(build_folders(&state, &r567), [sub.join("cache")]);
+
+        fixture.restrict(&sub, 0o000);
+        assert!(state.refind_artifacts(&r567));
+        assert_eq!(
+            build_folders(&state, &r567),
+            [sub.join("cache")],
+            "it may be there still"
+        );
+        assert_eq!(unread(&state), [(sealed.clone(), denied, 2)]);
+
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(state.refind_artifacts(&r567));
+        assert_eq!(unread(&state), [(sub.clone(), denied, 1)]);
+        assert!(!state.refind_artifacts(&r567), "nothing more changed");
     }
 
     /// Claude Code's name for `folder`: each character but a letter or a digit becomes `-`.

@@ -1,11 +1,12 @@
 //! One project on the map, with the facts its last activity is the newest of, so a refresh of
 //! one source can recompute it without re-reading the others.
 
+use std::io;
 use std::mem;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::artifacts::keep_measurements;
+use super::artifacts::{artifact_dirs, keep_measurements};
 use super::new_project;
 use crate::map::devrunner::FolderEnvironments;
 use crate::map::scan::{self, Boundary, ScratchFolder, Worktree};
@@ -31,23 +32,18 @@ pub(super) struct Tracked {
     /// into its place later is told from it, and searched through as the new folder it is (see
     /// `scratch`).
     pub(super) inode: Option<u64>,
+    /// For a scratch folder, the folders in it that its last search for build folders could not
+    /// list, and why, where a build folder may have gone unfound (see `scratch`).
+    pub(super) unlisted: Vec<(PathBuf, io::ErrorKind)>,
 }
 
 impl Tracked {
     pub(super) fn worktree(worktree: Worktree, boundary: &Boundary) -> Tracked {
+        let git_activity = scan::git_activity(&worktree.repo);
+        let project = new_project(worktree.path, Some(worktree.repo), None, worktree.access);
         Tracked {
-            git_activity: scan::git_activity(&worktree.repo),
-            project: new_project(
-                worktree.path,
-                Some(worktree.repo),
-                None,
-                worktree.access,
-                boundary,
-            ),
-            observed: None,
-            agent_activity: None,
-            environments: None,
-            inode: None,
+            git_activity,
+            ..Tracked::searched(project, None, boundary)
         }
     }
 
@@ -55,14 +51,7 @@ impl Tracked {
     /// grant or in a private folder Sutra stays out of stays on the map, unreadable.
     pub(super) fn plain(folder: PathBuf, boundary: &Boundary) -> Tracked {
         let access = scan::folder_access(&folder, boundary);
-        Tracked {
-            project: new_project(folder, None, None, access, boundary),
-            git_activity: None,
-            observed: None,
-            agent_activity: None,
-            environments: None,
-            inode: None,
-        }
+        Tracked::searched(new_project(folder, None, None, access), None, boundary)
     }
 
     /// The scratch folder `listed` in `space`, its build folders found anywhere in it, itself
@@ -73,13 +62,27 @@ impl Tracked {
         boundary: &Boundary,
     ) -> Tracked {
         let access = scan::folder_access(&listed.path, boundary);
+        let project = new_project(listed.path, None, Some(space), access);
+        Tracked::searched(project, Some(listed.inode), boundary)
+    }
+
+    /// `project`, new to the map, its build folders found where its access lets Sutra look. An
+    /// unreadable folder is not entered: it may be a private folder whose first read raises the
+    /// privacy prompt.
+    fn searched(mut project: Project, inode: Option<u64>, boundary: &Boundary) -> Tracked {
+        let (artifacts, unlisted) = match project.access {
+            FolderAccess::Readable => artifact_dirs(&project, boundary),
+            _ => (Vec::new(), Vec::new()),
+        };
+        project.artifacts = artifacts;
         Tracked {
-            project: new_project(listed.path, None, Some(space), access, boundary),
+            project,
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
-            inode: Some(listed.inode),
+            inode,
+            unlisted,
         }
     }
 
@@ -200,23 +203,22 @@ fn environment_started(env: &Environment) -> Option<SystemTime> {
 mod tests {
     use super::*;
     use crate::map::test_support::{agent_session, at, environment_at, subagent_at_work};
-    use crate::map::{AgentSession, AgentStatus, ScanOptions, Subagent, SubagentWithParent};
+    use crate::map::{AgentSession, AgentStatus, Subagent, SubagentWithParent};
 
     fn tracked() -> Tracked {
-        let boundary = Boundary::new(&[], std::path::Path::new("/"), &ScanOptions::default());
         Tracked {
             project: new_project(
                 PathBuf::from("/code/app"),
                 None,
                 None,
                 FolderAccess::Missing,
-                &boundary,
             ),
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
             inode: None,
+            unlisted: Vec::new(),
         }
     }
 

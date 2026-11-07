@@ -3,9 +3,11 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use super::Failure;
 use super::boundary::Boundary;
 use super::cargo_target::{CACHEDIR_TAG_FILE, is_tagged_build_folder};
 use crate::map::ArtifactKind;
@@ -33,7 +35,7 @@ fn search(dir: &Path, depth: usize, boundary: &Boundary, found: &mut Vec<(PathBu
     if depth == SEARCH_DEPTH {
         return probe(dir, found);
     }
-    let Some(listed) = Listed::read(dir, boundary.skipped_children_of(dir)) else {
+    let Ok(listed) = Listed::read(dir, boundary.skipped_children_of(dir)) else {
         return;
     };
     if depth > 0 {
@@ -53,45 +55,62 @@ fn search(dir: &Path, depth: usize, boundary: &Boundary, found: &mut Vec<(PathBu
     }
 }
 
+/// What a search through a scratch folder found.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Searched {
+    /// Its build folders, sorted by path.
+    pub artifacts: Vec<(PathBuf, ArtifactKind)>,
+    /// The folders in it that could not be listed, and why, sorted: a build folder in one went
+    /// unfound.
+    pub unlisted: Vec<Failure>,
+}
+
 /// Build-artifact directories in `folder`, one of a session's scratch folders: the folder itself
 /// when it is a Cargo build folder, as one `CARGO_TARGET_DIR` named in the scratchpad is, and
 /// otherwise each `node_modules/` and each Cargo build folder (see `is_cargo_target`) at any depth,
-/// in the repositories cloned there too. Sorted by path. Agents build anywhere in their scratch.
-/// The search lists every folder but the build folders and `.git`, on the current rayon pool's
-/// threads at once, as discovery's walk does, and skips a folder it cannot list.
-pub fn find_artifacts_throughout(folder: &Path) -> Vec<(PathBuf, ArtifactKind)> {
-    let found = Mutex::new(Vec::new());
-    rayon::scope(|scope| search_throughout(scope, folder.to_path_buf(), &found));
-    let mut found = found
+/// in the repositories cloned there too. Agents build anywhere in their scratch. The search lists
+/// every folder but the build folders and `.git`, on the current rayon pool's threads at once, as
+/// discovery's walk does, and names each folder it cannot list. One removed since the folder
+/// holding it was listed holds nothing, which is no failure.
+pub fn find_artifacts_throughout(folder: &Path) -> Searched {
+    let searched = Mutex::new(Searched::default());
+    rayon::scope(|scope| search_throughout(scope, folder.to_path_buf(), &searched));
+    let mut searched = searched
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    found.sort_by(|a, b| a.0.cmp(&b.0));
-    found
+    searched.artifacts.sort_by(|a, b| a.0.cmp(&b.0));
+    searched.unlisted.sort();
+    searched
 }
 
-fn search_throughout<'s>(
-    scope: &rayon::Scope<'s>,
-    dir: PathBuf,
-    found: &'s Mutex<Vec<(PathBuf, ArtifactKind)>>,
-) {
-    let Some(listed) = Listed::read(&dir, None) else {
-        return;
-    };
+fn search_throughout<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, searched: &'s Mutex<Searched>) {
     let lock = || {
-        found
+        searched
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     };
+    let listed = match Listed::read(&dir, None) {
+        Ok(listed) => listed,
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return;
+        }
+        Err(err) => return lock().unlisted.push((dir, err.kind())),
+    };
     if listed.is_cargo_target(&dir) {
-        lock().push((dir, ArtifactKind::CargoTarget));
+        lock().artifacts.push((dir, ArtifactKind::CargoTarget));
         return;
     }
     let (build_folders, subfolders) = listed.into_parts();
     if !build_folders.is_empty() {
-        lock().extend(build_folders);
+        lock().artifacts.extend(build_folders);
     }
     for subfolder in subfolders {
-        scope.spawn(move |scope| search_throughout(scope, subfolder, found));
+        scope.spawn(move |scope| search_throughout(scope, subfolder, searched));
     }
 }
 
@@ -131,10 +150,9 @@ struct Listed {
 }
 
 impl Listed {
-    /// `None` when `dir` cannot be listed. `DirEntry::file_type` does not follow symlinks, so a
-    /// symlinked folder is never entered.
-    fn read(dir: &Path, skipped: Option<&HashSet<OsString>>) -> Option<Listed> {
-        let entries = fs::read_dir(dir).ok()?;
+    /// Why `dir` cannot be listed in full, when it cannot. `DirEntry::file_type` does not follow
+    /// symlinks, so a symlinked folder is never entered.
+    fn read(dir: &Path, skipped: Option<&HashSet<OsString>>) -> io::Result<Listed> {
         let mut listed = Listed {
             holds_tag: false,
             holds_manifest: false,
@@ -143,7 +161,8 @@ impl Listed {
             node_modules: None,
             subfolders: Vec::new(),
         };
-        for entry in entries.flatten() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
             let name = entry.file_name();
             listed.holds_tag |= name == CACHEDIR_TAG_FILE;
             listed.holds_manifest |= name == "Cargo.toml";
@@ -151,7 +170,7 @@ impl Listed {
                 listed.is_repo = true;
                 continue;
             }
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            if !entry.file_type()?.is_dir() {
                 continue;
             }
             if name == "target" {
@@ -162,7 +181,7 @@ impl Listed {
                 listed.subfolders.push(entry.path());
             }
         }
-        Some(listed)
+        Ok(listed)
     }
 
     /// Whether `dir`, the folder listed, is itself a Cargo build folder, by cargo's tag in it.
@@ -336,12 +355,37 @@ mod tests {
         let cargo = |rel: &str| (at(rel), ArtifactKind::CargoTarget);
         assert_eq!(
             find_artifacts_throughout(&folder),
-            [
-                cargo("repo/crates/web/app/target"),
-                cargo("repo/target"),
-                cargo("runs/567"),
-                (at("ui/a/b/node_modules"), ArtifactKind::NodeModules),
-            ]
+            Searched {
+                artifacts: vec![
+                    cargo("repo/crates/web/app/target"),
+                    cargo("repo/target"),
+                    cargo("runs/567"),
+                    (at("ui/a/b/node_modules"), ArtifactKind::NodeModules),
+                ],
+                unlisted: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn a_scratch_folders_search_names_each_folder_below_it_it_could_not_list_and_finds_the_rest() {
+        let fixture = TempDir::new("scan-artifacts-throughout-unlisted");
+        let folder = fixture.dir("r567");
+        fixture.write("r567/runs/567/CACHEDIR.TAG", CACHEDIR_TAG);
+        fixture.write("r567/runs/sealed/out/CACHEDIR.TAG", CACHEDIR_TAG);
+        fixture.write("r567/z/sealed/CACHEDIR.TAG", CACHEDIR_TAG);
+        let sealed = [folder.join("runs/sealed"), folder.join("z/sealed")];
+        for sealed in &sealed {
+            fixture.restrict(sealed, 0o000);
+        }
+
+        let denied = io::ErrorKind::PermissionDenied;
+        assert_eq!(
+            find_artifacts_throughout(&folder),
+            Searched {
+                artifacts: vec![(folder.join("runs/567"), ArtifactKind::CargoTarget)],
+                unlisted: sealed.map(|sealed| (sealed, denied)).to_vec(),
+            }
         );
     }
 
@@ -353,7 +397,7 @@ mod tests {
         fixture.write("target-567-fix/wasm/CACHEDIR.TAG", CACHEDIR_TAG);
 
         assert_eq!(
-            find_artifacts_throughout(&folder),
+            find_artifacts_throughout(&folder).artifacts,
             [(folder.clone(), ArtifactKind::CargoTarget)]
         );
     }

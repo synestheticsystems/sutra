@@ -274,7 +274,10 @@ impl<'a> Engine<'a> {
                     // renames, so a path now holding a file is no reason to look. Looking in a
                     // private folder would raise the privacy prompt.
                     let moved_folder = renamed && readable && !path.is_file();
-                    if folder_appeared_or_vanished || moved_folder {
+                    // So may a change at a folder the last search could not list, which may
+                    // read now (see `state::scratch`).
+                    let unlisted = self.state.search_could_not_list(&project, path);
+                    if folder_appeared_or_vanished || moved_folder || unlisted {
                         self.layout_changed(project.clone(), now);
                     }
                     self.timers.own_files.mark(project, now);
@@ -436,7 +439,8 @@ impl<'a> Engine<'a> {
             if self.state.refind_artifacts(&project) {
                 self.dirty = true;
                 reshaped = true;
-                // Its own files were walked around the build folders it had before.
+                // Its own files were walked around the build folders it had before, and past the
+                // folders that could not be read then.
                 self.timers.own_files.mark(project, now);
             }
         }

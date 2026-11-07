@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-pub use artifacts::{find_artifacts, find_artifacts_throughout};
+pub use artifacts::{Searched, find_artifacts, find_artifacts_throughout};
 pub use boundary::{Boundary, MacOsAnswer, folder_access};
 pub use cargo_target::{CACHEDIR_TAG_FILE, is_cargo_tag, is_cargo_target};
 pub use git::{git_activity, repo_info};

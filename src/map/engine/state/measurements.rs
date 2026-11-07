@@ -203,14 +203,7 @@ mod tests {
         let mut state = State::new(&roots, &ScanOptions::default());
         for (n, path) in paths.iter().enumerate() {
             let path = PathBuf::from(path);
-            let mut project = new_project(
-                path.clone(),
-                None,
-                None,
-                FolderAccess::Missing,
-                &state.boundary,
-            );
-            project.access = FolderAccess::Readable;
+            let mut project = new_project(path.clone(), None, None, FolderAccess::Readable);
             // Later paths are more recently active.
             project.last_activity = Some(at(n as u64));
             project.artifacts = artifacts
@@ -226,6 +219,7 @@ mod tests {
                 agent_activity: None,
                 environments: None,
                 inode: None,
+                unlisted: Vec::new(),
             };
             state.projects.insert(path, tracked);
         }

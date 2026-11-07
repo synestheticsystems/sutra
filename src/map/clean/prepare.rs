@@ -568,7 +568,7 @@ mod tests {
         );
         let folder = fixture.path(&format!("{scratchpad}/target-567-fix"));
         // Discovery searches a scratch folder for its build folders this way.
-        let found = scan::find_artifacts_throughout(&folder);
+        let found = scan::find_artifacts_throughout(&folder).artifacts;
         assert_eq!(found, [(folder.clone(), ArtifactKind::CargoTarget)]);
         let artifacts = found.into_iter().map(|(path, kind)| ArtifactDir {
             path,
