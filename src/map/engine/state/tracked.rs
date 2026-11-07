@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::artifacts::keep_measurements;
 use super::new_project;
 use crate::map::devrunner::FolderEnvironments;
-use crate::map::scan::{self, Boundary, Worktree};
+use crate::map::scan::{self, Boundary, ScratchFolder, Worktree};
 use crate::map::{ActivitySource, FolderAccess, Project, ScratchSpace};
 use crate::model::Environment;
 
@@ -27,6 +27,10 @@ pub(super) struct Tracked {
     pub(super) agent_activity: Option<SystemTime>,
     /// Every environment describing this folder; `project.environment` is what they merge into.
     pub(super) environments: Option<FolderEnvironments>,
+    /// For a scratch folder, the inode of the folder the map found at its path, so that one moved
+    /// into its place later is told from it, and searched through as the new folder it is (see
+    /// `scratch`).
+    pub(super) inode: Option<u64>,
 }
 
 impl Tracked {
@@ -43,6 +47,7 @@ impl Tracked {
             observed: None,
             agent_activity: None,
             environments: None,
+            inode: None,
         }
     }
 
@@ -56,19 +61,25 @@ impl Tracked {
             observed: None,
             agent_activity: None,
             environments: None,
+            inode: None,
         }
     }
 
-    /// The scratch folder `folder` in `space`, its build folders found anywhere in it, itself
+    /// The scratch folder `listed` in `space`, its build folders found anywhere in it, itself
     /// included.
-    pub(super) fn scratch(folder: PathBuf, space: ScratchSpace, boundary: &Boundary) -> Tracked {
-        let access = scan::folder_access(&folder, boundary);
+    pub(super) fn scratch(
+        listed: ScratchFolder,
+        space: ScratchSpace,
+        boundary: &Boundary,
+    ) -> Tracked {
+        let access = scan::folder_access(&listed.path, boundary);
         Tracked {
-            project: new_project(folder, None, Some(space), access, boundary),
+            project: new_project(listed.path, None, Some(space), access, boundary),
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
+            inode: Some(listed.inode),
         }
     }
 
@@ -205,6 +216,7 @@ mod tests {
             observed: None,
             agent_activity: None,
             environments: None,
+            inode: None,
         }
     }
 

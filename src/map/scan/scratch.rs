@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::io;
+use std::os::unix::fs::DirEntryExt;
 use std::path::{Path, PathBuf};
 
 use nix::unistd::getuid;
@@ -47,6 +48,17 @@ impl SessionFolder {
     }
 }
 
+/// One of a session's scratch folders, as listing the session's folder found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchFolder {
+    pub path: PathBuf,
+    /// Which folder stood at `path`: its inode, which no other folder on the volume has while it
+    /// exists. A folder moved into another's place comes from the same volume, so its inode alone
+    /// tells it from the folder that stood there before, and so does that of a folder made anew
+    /// there, as APFS never hands out an inode twice.
+    pub inode: u64,
+}
+
 /// Every session's folder in `root`, sorted by path, and the folders that could not be listed.
 /// With no root, no session has kept scratch since the Mac started, which is no problem. The folder
 /// of a project key is the one whose name starts with `-`, as every absolute path's name does.
@@ -58,11 +70,11 @@ pub fn session_folders(root: &Path) -> (Vec<SessionFolder>, Vec<Failure>) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return (found, failures),
         Err(err) => return (found, vec![(root.to_path_buf(), err.kind())]),
     };
-    for project_key in keys.into_iter().filter(|name| name.starts_with('-')) {
+    for (project_key, _) in keys.into_iter().filter(|(name, _)| name.starts_with('-')) {
         let folder = root.join(&project_key);
         match subfolders(&folder) {
             Ok(sessions) => {
-                found.extend(sessions.into_iter().map(|session_id| SessionFolder {
+                found.extend(sessions.into_iter().map(|(session_id, _)| SessionFolder {
                     path: folder.join(&session_id),
                     project_key: project_key.clone(),
                     session_id,
@@ -81,29 +93,32 @@ pub fn session_folders(root: &Path) -> (Vec<SessionFolder>, Vec<Failure>) {
 /// scratchpad, and each other folder beside the scratchpad, sorted by path, and the folders that
 /// could not be listed. A session folder or a scratchpad removed meanwhile holds none, which is
 /// no problem.
-pub fn scratch_folders(session: &Path) -> (Vec<PathBuf>, Vec<Failure>) {
+pub fn scratch_folders(session: &Path) -> (Vec<ScratchFolder>, Vec<Failure>) {
     let mut found = Vec::new();
     let mut failures = Vec::new();
     let mut list = |folder: &Path, leaving_out: Option<&str>| match subfolders(folder) {
-        Ok(names) => {
-            let kept = names
+        Ok(listed) => {
+            let kept = listed
                 .into_iter()
-                .filter(|name| Some(name.as_str()) != leaving_out);
-            found.extend(kept.map(|name| folder.join(name)));
+                .filter(|(name, _)| Some(name.as_str()) != leaving_out);
+            found.extend(kept.map(|(name, inode)| ScratchFolder {
+                path: folder.join(name),
+                inode,
+            }));
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => failures.push((folder.to_path_buf(), err.kind())),
     };
     list(session, Some(SCRATCHPAD));
     list(&session.join(SCRATCHPAD), None);
-    found.sort();
+    found.sort_by(|a, b| a.path.cmp(&b.path));
     (found, failures)
 }
 
-/// The names of the folders in `dir`, leaving out links and names that are not UTF-8, which
-/// Claude Code never makes here.
-fn subfolders(dir: &Path) -> io::Result<Vec<String>> {
-    let mut names = Vec::new();
+/// The folders in `dir`, each by its name and its inode, leaving out links and names that are not
+/// UTF-8, which Claude Code never makes here.
+fn subfolders(dir: &Path) -> io::Result<Vec<(String, u64)>> {
+    let mut found = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         // `DirEntry::file_type` does not follow symlinks.
@@ -111,10 +126,10 @@ fn subfolders(dir: &Path) -> io::Result<Vec<String>> {
             continue;
         }
         if let Ok(name) = entry.file_name().into_string() {
-            names.push(name);
+            found.push((name, entry.ino()));
         }
     }
-    Ok(names)
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -196,6 +211,11 @@ mod tests {
         );
     }
 
+    /// The paths of the scratch folders `found`.
+    fn paths(found: &[ScratchFolder]) -> Vec<PathBuf> {
+        found.iter().map(|folder| folder.path.clone()).collect()
+    }
+
     #[test]
     fn a_sessions_scratch_folders_are_those_atop_its_scratchpad_and_beside_it() {
         let fixture = TempDir::new("scratch-folders-of-a-session");
@@ -210,7 +230,7 @@ mod tests {
         let (found, failures) = scratch_folders(&session);
 
         assert_eq!(
-            found,
+            paths(&found),
             [
                 session.join("scratchpad/r567fixture"),
                 session.join("scratchpad/target-567-fix"),
@@ -222,12 +242,41 @@ mod tests {
     }
 
     #[test]
+    fn a_scratch_folder_is_listed_with_the_inode_of_the_folder_at_its_path() {
+        use std::os::unix::fs::MetadataExt;
+        let fixture = TempDir::new("scratch-folders-inode");
+        let session = fixture.dir("e26ca359");
+        let r567 = fixture.dir("e26ca359/scratchpad/r567");
+        let first = fs::symlink_metadata(&r567).unwrap().ino();
+
+        let (found, _) = scratch_folders(&session);
+        assert_eq!(
+            found,
+            [ScratchFolder {
+                path: r567.clone(),
+                inode: first
+            }]
+        );
+
+        fs::rename(&r567, fixture.path("e26ca359/moved-away")).unwrap();
+        fs::rename(fixture.dir("elsewhere"), &r567).unwrap();
+        let (found, _) = scratch_folders(&session);
+        let listed = found.iter().find(|folder| folder.path == r567);
+        assert_ne!(
+            listed.map(|folder| folder.inode),
+            Some(first),
+            "a folder moved into its place"
+        );
+    }
+
+    #[test]
     fn a_session_with_no_scratchpad_has_none_atop_it_and_one_that_cannot_be_listed_says_so() {
         let fixture = TempDir::new("scratch-folders-unlisted");
         let session = fixture.dir("e26ca359/tasks");
         let session = session.parent().unwrap().to_path_buf();
+        let (found, failures) = scratch_folders(&session);
         assert_eq!(
-            scratch_folders(&session),
+            (paths(&found), failures),
             (vec![session.join("tasks")], vec![])
         );
         assert_eq!(
@@ -238,8 +287,9 @@ mod tests {
 
         let scratchpad = fixture.dir("e26ca359/scratchpad");
         fixture.restrict(&scratchpad, 0o000);
+        let (found, failures) = scratch_folders(&session);
         assert_eq!(
-            scratch_folders(&session),
+            (paths(&found), failures),
             (
                 vec![session.join("tasks")],
                 vec![(scratchpad, io::ErrorKind::PermissionDenied)]

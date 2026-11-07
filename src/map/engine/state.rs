@@ -544,6 +544,7 @@ mod tests {
             observed: None,
             agent_activity: None,
             environments: None,
+            inode: None,
         }
     }
 

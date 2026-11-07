@@ -5,7 +5,7 @@ use notify::event::{DataChange, Flag, MetadataKind, RenameMode};
 
 use super::*;
 use crate::map::test_support::{CACHEDIR_TAG, TempDir, at, commit, git, set_mtime};
-use crate::map::{ActivitySource, AgentStatus, SourceProblem, agents};
+use crate::map::{ActivitySource, AgentStatus, Measurement, SourceProblem, agents};
 
 /// A repository at `rel` in `fixture`, with a `target/` Cargo made.
 fn crate_with_target(fixture: &TempDir, rel: &str) {
@@ -785,6 +785,52 @@ fn a_folder_made_at_the_top_of_a_sessions_scratch_joins_the_map_once_its_folders
         !engine.state.project_paths().contains(&made),
         "gone with it"
     );
+}
+
+#[test]
+fn a_folder_moved_into_the_place_of_a_scratch_folder_is_searched_and_sized_as_the_new_folder() {
+    let fixture = TempDir::new("live-scratch-replaced");
+    let scratchpad = "claude-501/-code-app/e26ca359/scratchpad";
+    fixture.write(
+        &format!("{scratchpad}/r567/target/CACHEDIR.TAG"),
+        CACHEDIR_TAG,
+    );
+    let r567 = fixture.path(&format!("{scratchpad}/r567"));
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, inbox) = engine_with_scratch(&fixture, &snapshots);
+    engine.queue_unmeasured(Instant::now());
+    engine.dispatch();
+    // Its build folder and its own files.
+    take_measurements(&mut engine, &inbox, 2);
+
+    // Moved out of the scratch, and another folder moved into its place, so the session's
+    // folders keep their paths.
+    fs::rename(&r567, fixture.path("moved-away")).unwrap();
+    fixture.write("elsewhere/r593/out-593/CACHEDIR.TAG", CACHEDIR_TAG);
+    fs::rename(fixture.path("elsewhere/r593"), &r567).unwrap();
+    engine.on_fs_event(renamed(r567.clone()));
+    engine.dirty = false;
+    engine.run_due(Instant::now() + Duration::from_secs(3));
+
+    let out_593 = r567.join("out-593");
+    assert_eq!(
+        build_folders(&engine, &r567),
+        std::slice::from_ref(&out_593)
+    );
+    assert!(
+        engine.state.is_build_folder(&out_593),
+        "file events find it"
+    );
+    assert!(!engine.state.is_build_folder(&r567.join("target")));
+    let snapshot = engine.state.snapshot();
+    let card = snapshot.projects.iter().find(|card| card.path == r567);
+    let measurements: Vec<&Measurement> = card.expect("on the map").measurements().collect();
+    assert_eq!(
+        measurements,
+        [&Measurement::Measuring; 2],
+        "its own files and its build folder are sized anew"
+    );
+    assert!(engine.dirty, "and the map goes out");
 }
 
 #[test]

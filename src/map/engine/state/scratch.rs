@@ -7,12 +7,13 @@
 //!
 //! A session's folders are listed at every rediscovery, and again when a folder comes, goes or
 //! moves among them, two listings each time. A scratch folder is searched through for its build
-//! folders when it is new to the map, and again when a folder appears, vanishes or moves in it, or
-//! its events went missing. Searching every scratch folder through at every rediscovery would cost
-//! each rediscovery several times the walk of the home folder: on Daniel's Mac (2026-11-06) the
-//! scratch root held 194 sessions' folders and 87,000 folders to list in them.
+//! folders when it is new to the map, or another folder takes its place, and again when a folder
+//! appears, vanishes or moves in it, or its events went missing. Searching every scratch folder
+//! through at every rediscovery would cost each rediscovery several times the walk of the home
+//! folder: on Daniel's Mac (2026-11-06) the scratch root held 194 sessions' folders and 87,000
+//! folders to list in them.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -21,7 +22,7 @@ use rayon::prelude::*;
 
 use super::State;
 use super::tracked::Tracked;
-use crate::map::scan::{self, SessionFolder};
+use crate::map::scan::{self, ScratchFolder, SessionFolder};
 use crate::map::{
     ActivitySource, AgentSession, DirUsage, Harness, LARGE_FOLDER_BYTES, Project, ScratchSpace,
     Source, SourceProblem, agents,
@@ -40,7 +41,7 @@ impl State {
             return (Vec::new(), Vec::new());
         };
         let (sessions, mut failures) = scan::session_folders(root);
-        let found: Vec<(SessionFolder, Vec<PathBuf>)> = sessions
+        let found: Vec<(SessionFolder, Vec<ScratchFolder>)> = sessions
             .into_iter()
             .map(|session| {
                 let (folders, unlisted) = scan::scratch_folders(&session.path);
@@ -49,9 +50,11 @@ impl State {
             })
             .collect();
         let is_worktree = |folder: &Path| worktrees.contains_key(folder);
-        let mut tracked = self.track_scratch_folders(found, previous, is_worktree);
-        self.name_sessions(&mut tracked, &mut failures);
-        (tracked, SourceProblem::per_kind(Source::Scan, failures))
+        let TrackedFolders { mut kept, searched } =
+            self.track_scratch_folders(found, previous, is_worktree);
+        kept.extend(searched);
+        self.name_sessions(&mut kept, &mut failures);
+        (kept, SourceProblem::per_kind(Source::Scan, failures))
     }
 
     /// Name each session among the scratch folders `tracked` that has no name yet and is not seen
@@ -82,10 +85,11 @@ impl State {
     }
 
     /// List the scratch folders of the session whose folder is `session` again, after a folder came,
-    /// went or moved among them: track each new one, searched through for its build folders, and
-    /// drop each gone. Returns whether any came or went, or `None` when the session's folders could
-    /// not all be listed, which leaves those on the map as they were, for a rediscovery to say why;
-    /// so does a folder no session's folder could be, whose name is not text.
+    /// went or moved among them: search through for its build folders each new one, and each that
+    /// took the place of the folder the map found there, and drop each gone. Returns whether any
+    /// came, went or was searched anew, or `None` when the session's folders could not all be
+    /// listed, which leaves those on the map as they were, for a rediscovery to say why; so does a
+    /// folder no session's folder could be, whose name is not text.
     pub(in crate::map::engine) fn refind_scratch_folders(
         &mut self,
         session: &Path,
@@ -112,11 +116,11 @@ impl State {
             let tracked = self.projects.get(folder);
             tracked.is_some_and(|tracked| tracked.project.repo.is_some())
         };
-        let tracked =
+        let TrackedFolders { kept, searched } =
             self.track_scratch_folders(vec![(session_folder, folders)], &mut previous, is_worktree);
-        let after: BTreeSet<&PathBuf> = tracked.iter().map(|(path, _)| path).collect();
-        let changed = after != before.iter().collect();
-        self.projects.extend(tracked);
+        // What the listing did not name is left in `previous`, and goes.
+        let changed = !searched.is_empty() || !previous.is_empty();
+        self.projects.extend(kept.into_iter().chain(searched));
         if changed {
             self.leave_build_folders_to_nested_projects();
             let sessions: Vec<AgentSession> = self.sessions_on_the_map().cloned().collect();
@@ -127,17 +131,18 @@ impl State {
     }
 
     /// Track the scratch folders `found`, listed by the session folder holding them: one tracked
-    /// already is taken from `previous` whole, with the build folders last found in it, unless
-    /// Sutra's access to it changed since; a new one is searched through, on discovery's threads,
-    /// in the space its session's folders on the map share, with what the map knows of the
-    /// session, or in a new one. A folder `is_worktree` names stays the worktree it is, as git's
-    /// claim on it comes first.
+    /// already is taken from `previous` whole, with the build folders last found in it, while it is
+    /// still the folder searched and Sutra's access to it is unchanged; one new to the map, or
+    /// another folder in the place of one on it, is searched through, on discovery's threads, in
+    /// the space its session's folders on the map share, with what the map knows of the session, or
+    /// in a new one. A folder `is_worktree` names stays the worktree it is, as git's claim on it
+    /// comes first.
     fn track_scratch_folders(
         &self,
-        found: Vec<(SessionFolder, Vec<PathBuf>)>,
+        found: Vec<(SessionFolder, Vec<ScratchFolder>)>,
         previous: &mut BTreeMap<PathBuf, Tracked>,
         is_worktree: impl Fn(&Path) -> bool,
-    ) -> Vec<(PathBuf, Tracked)> {
+    ) -> TrackedFolders {
         let mut kept: Vec<(PathBuf, Tracked)> = Vec::new();
         let mut new = Vec::new();
         // The sessions started in one folder share its name, which is worked out once.
@@ -145,15 +150,20 @@ impl State {
         for (session, folders) in found {
             let first_kept = kept.len();
             let mut new_here = Vec::new();
-            for folder in folders.into_iter().filter(|folder| !is_worktree(folder)) {
-                let access = scan::folder_access(&folder, &self.boundary);
-                match previous.remove(&folder) {
+            for listed in folders
+                .into_iter()
+                .filter(|folder| !is_worktree(&folder.path))
+            {
+                let access = scan::folder_access(&listed.path, &self.boundary);
+                match previous.remove(&listed.path) {
+                    // Only a scratch folder has an inode on the map.
                     Some(before)
-                        if before.project.scratch.is_some() && before.project.access == access =>
+                        if before.inode == Some(listed.inode)
+                            && before.project.access == access =>
                     {
-                        kept.push((folder, before));
+                        kept.push((listed.path, before));
                     }
-                    _ => new_here.push(folder),
+                    _ => new_here.push(listed),
                 }
             }
             if new_here.is_empty() {
@@ -162,17 +172,21 @@ impl State {
             let mut kept_here = kept[first_kept..].iter();
             let known = kept_here.find_map(|(_, tracked)| tracked.project.scratch.clone());
             let space = known.unwrap_or_else(|| self.space_of(&session, &mut started_in));
-            new.extend(new_here.into_iter().map(|folder| (folder, space.clone())));
+            new.extend(new_here.into_iter().map(|listed| (listed, space.clone())));
         }
         let boundary = &self.boundary;
         // Each search is metadata I/O like discovery's walk.
-        let searched: Vec<(PathBuf, Tracked)> = scan::on_discovery_threads(|| {
+        let searched = scan::on_discovery_threads(|| {
             new.into_par_iter()
-                .map(|(folder, space)| (folder.clone(), Tracked::scratch(folder, space, boundary)))
+                .map(|(listed, space)| {
+                    (
+                        listed.path.clone(),
+                        Tracked::scratch(listed, space, boundary),
+                    )
+                })
                 .collect()
         });
-        kept.extend(searched);
-        kept
+        TrackedFolders { kept, searched }
     }
 
     /// The scratch space of the session whose folder is `session`, before the session is found
@@ -271,6 +285,15 @@ impl State {
             .cloned()
             .collect()
     }
+}
+
+/// The scratch folders one listing named, as the map tracks them (see
+/// `State::track_scratch_folders`).
+struct TrackedFolders {
+    /// Those the map held, taken whole.
+    kept: Vec<(PathBuf, Tracked)>,
+    /// Those searched through anew.
+    searched: Vec<(PathBuf, Tracked)>,
 }
 
 /// Whether `project` has a card on the map. A scratch folder earns one by holding a build folder
@@ -728,6 +751,34 @@ mod tests {
         assert!(
             state.index().artifact_owner(&r593.join("target")).is_some(),
             "and file events find its build folder"
+        );
+    }
+
+    #[test]
+    fn a_folder_moved_into_the_place_of_a_scratch_folder_is_searched_anew_at_the_next_rediscovery()
+    {
+        let fixture = TempDir::new("engine-scratch-replaced");
+        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
+        fixture.write(
+            &format!("{scratchpad}/r567/target/CACHEDIR.TAG"),
+            CACHEDIR_TAG,
+        );
+        let r567 = fixture.path(&format!("{scratchpad}/r567"));
+        let mut state = state_over(&fixture);
+        state.rediscover(None);
+        state.apply_usage(&Job::Artifact(r567.join("target")), Ok(usage(1 << 30)));
+        state.apply_usage(&Job::OwnFiles(r567.clone()), Ok(usage(4096)));
+
+        std::fs::rename(&r567, fixture.path("moved-away")).unwrap();
+        fixture.write("elsewhere/r593/out-593/CACHEDIR.TAG", CACHEDIR_TAG);
+        std::fs::rename(fixture.path("elsewhere/r593"), &r567).unwrap();
+        state.rediscover(None);
+
+        assert_eq!(build_folders(&state, &r567), [r567.join("out-593")]);
+        assert_eq!(
+            state.projects[&r567].project.own_files,
+            Measurement::Pending,
+            "nothing measured of the folder that stood there"
         );
     }
 
