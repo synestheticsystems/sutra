@@ -1,9 +1,10 @@
 //! The scratch folders of Claude Code's sessions: each folder at the top of a session's scratchpad,
 //! or beside the scratchpad in the session's folder (see `scan::scratch`). The engine tracks each
 //! as a project from the moment discovery finds it: its build folders are found, its size measured
-//! and its file changes followed. But it has a card, and agents stand on it, only once it holds a
-//! build folder outside every worktree on the map, or `LARGE_FOLDER_BYTES` without one. Most
-//! sessions throw away a few files, and a card for each of them would bury the projects.
+//! and its file changes followed, and an agent working in it stands on it. But it has a card only
+//! while an agent stands on it, or once it holds a build folder outside every worktree on the map,
+//! or `LARGE_FOLDER_BYTES` without one. Most sessions throw away a few files, and a card for each
+//! of them would bury the projects.
 //!
 //! A session's folders are listed at every rediscovery, and again when a folder comes, goes or
 //! moves among them, two listings each time. A scratch folder is searched through for its build
@@ -362,17 +363,20 @@ struct TrackedFolders {
     searched: Vec<(PathBuf, Tracked)>,
 }
 
-/// Whether `project` has a card on the map. A scratch folder earns one by holding a build folder
-/// outside every worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES` without one;
-/// every other project has one.
+/// Whether `project` has a card on the map. A scratch folder earns one while an agent stands on it,
+/// a session or a subagent at work there (see `Place`), and by holding a build folder outside every
+/// worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES` without one; every other
+/// project has one. The session whose scratch it is earns it none by running: the session stands
+/// where it works.
 pub(super) fn earns_a_card(project: &Project) -> bool {
+    let at_work = || !project.agents.is_empty() || !project.subagents.is_empty();
     let large = || {
         project
             .own_files
             .usage()
             .is_some_and(|usage| usage.bytes >= LARGE_FOLDER_BYTES)
     };
-    project.scratch.is_none() || !project.artifacts.is_empty() || large()
+    project.scratch.is_none() || at_work() || !project.artifacts.is_empty() || large()
 }
 
 #[cfg(test)]
@@ -381,9 +385,10 @@ mod tests {
     use crate::map::engine::sizing::Job;
     use crate::map::grant::Roots;
     use crate::map::test_support::{
-        CACHEDIR_TAG, TempDir, at, cargo_target, git, measured, project_at, usage,
+        CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, git, measured, project_at,
+        subagent_at_work, usage,
     };
-    use crate::map::{Measurement, ScanOptions};
+    use crate::map::{AgentStatus, Measurement, ScanOptions, SubagentWithParent};
 
     /// A scratch folder holding the build folders `artifacts` and own files of `own_files`.
     fn scratch(artifacts: &[&str], own_files: Measurement) -> Project {
@@ -419,6 +424,28 @@ mod tests {
         ] {
             assert!(!earns_a_card(&scratch(&[], small)), "{small:?}");
         }
+    }
+
+    #[test]
+    fn a_scratch_folder_earns_a_card_while_an_agent_stands_on_it_and_not_by_its_session_running() {
+        let small = || scratch(&[], measured(4096));
+        let session = agent_session("0b1d", AgentStatus::Busy);
+        let at_work = Project {
+            agents: vec![session.clone()],
+            ..small()
+        };
+        let subagent = SubagentWithParent::new(subagent_at_work("a1"), &session);
+        let subagent_at_work = Project {
+            subagents: vec![subagent],
+            ..small()
+        };
+        assert!(earns_a_card(&at_work));
+        assert!(earns_a_card(&subagent_at_work));
+
+        let mut running = small();
+        let space = running.scratch.as_mut().expect("a scratch folder");
+        space.session = Some(agent_session("e26ca359", AgentStatus::Busy));
+        assert!(!earns_a_card(&running), "its session stands where it works");
     }
 
     /// A map whose scratch root is the fixture's `claude-501`, and whose home is its `home`.

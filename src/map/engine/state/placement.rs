@@ -5,40 +5,35 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::owner;
-use super::scratch::earns_a_card;
 use super::tracked::Tracked;
 use crate::map::{AgentSession, Subagent, SubagentWithParent};
 
 /// Where an agent goes on the map: on the card of the project its folder lies in (see `owner`), or,
 /// when that is none, among the agents working elsewhere, beside the folder. A session's scratch
-/// folder with no card (see `earns_a_card`) holds no agent, so one working there shows elsewhere.
+/// folder counts as such a project whether it has a card yet or not, as an agent standing on it
+/// gives it one (see `earns_a_card`): no card decides where an agent stands, so an agent's place
+/// cannot turn on the card it gives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Place<'a> {
     Project(&'a Path),
     Elsewhere,
 }
 
-/// Whether `tracked` has a card for an agent to stand on.
-fn has_a_card(tracked: &Tracked) -> bool {
-    earns_a_card(&tracked.project)
-}
-
 impl<'a> Place<'a> {
     /// The place of an agent working in `folder`.
     pub(super) fn of(projects: &'a BTreeMap<PathBuf, Tracked>, folder: &'a Path) -> Place<'a> {
-        owner(projects, folder, has_a_card).map_or(Place::Elsewhere, Place::Project)
+        owner(projects, folder).map_or(Place::Elsewhere, Place::Project)
     }
 
     /// The place of `subagent`: the project holding the first of its folders that a project
     /// holds, the most telling first (see `Subagent::folders`). A subagent that acted only outside
-    /// every project with a card, as one reviewing a clone in a scratch folder too small for a
-    /// card does, stays on the card of the project its harness runs it in.
+    /// every project stays on the card of the project its harness runs it in.
     pub(super) fn of_subagent(
         projects: &'a BTreeMap<PathBuf, Tracked>,
         subagent: &'a Subagent,
     ) -> Place<'a> {
         let mut folders = subagent.folders();
-        let project = folders.find_map(|folder| owner(projects, folder, has_a_card));
+        let project = folders.find_map(|folder| owner(projects, folder));
         project.map_or(Place::Elsewhere, Place::Project)
     }
 }

@@ -493,24 +493,21 @@ fn new_project(
     }
 }
 
-/// The project an agent working in `path` works on, of those `counts` lets in: the deepest project
-/// holding `path`, or, when none does, the one project `path` holds. Codex Desktop records a task's
-/// folder as the thread's working directory, one level above the worktree the task checks out in
-/// it (`<task>/work/<repo>`). A folder holding several projects is no one project's.
-fn owner<'a>(
-    projects: &'a BTreeMap<PathBuf, Tracked>,
-    path: &'a Path,
-    counts: impl Fn(&Tracked) -> bool,
-) -> Option<&'a Path> {
-    let counted = |folder: &Path| projects.get(folder).is_some_and(&counts);
-    if let Some(holder) = path.ancestors().find(|folder| counted(folder)) {
+/// The project an agent working in `path` works on: the deepest project holding `path`, or, when
+/// none does, the one project `path` holds. Codex Desktop records a task's folder as the thread's
+/// working directory, one level above the worktree the task checks out in it (`<task>/work/<repo>`).
+/// A folder holding several projects is no one project's.
+fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option<&'a Path> {
+    if let Some(holder) = path
+        .ancestors()
+        .find(|folder| projects.contains_key(*folder))
+    {
         return Some(holder);
     }
     // Paths order by component, so the projects inside `path` follow it in a run.
     let mut held = projects
         .range::<Path, _>((Bound::Excluded(path), Bound::Unbounded))
         .take_while(|(project, _)| project.starts_with(path))
-        .filter(|(_, tracked)| counts(tracked))
         .map(|(project, _)| project.as_path());
     match (held.next(), held.next()) {
         (Some(only), None) => Some(only),
@@ -547,11 +544,6 @@ mod tests {
         }
     }
 
-    /// Lets every project count.
-    fn every(_: &Tracked) -> bool {
-        true
-    }
-
     #[test]
     fn owner_is_the_deepest_project_holding_the_path() {
         let projects: BTreeMap<PathBuf, Tracked> = ["/code/app", "/code/app/.claude/worktrees/wt"]
@@ -559,18 +551,14 @@ mod tests {
             .map(|path| (PathBuf::from(path), tracked(path)))
             .collect();
         assert_eq!(
-            owner(
-                &projects,
-                Path::new("/code/app/.claude/worktrees/wt/src"),
-                every
-            ),
+            owner(&projects, Path::new("/code/app/.claude/worktrees/wt/src")),
             Some(Path::new("/code/app/.claude/worktrees/wt"))
         );
         assert_eq!(
-            owner(&projects, Path::new("/code/app/src"), every),
+            owner(&projects, Path::new("/code/app/src")),
             Some(Path::new("/code/app"))
         );
-        assert_eq!(owner(&projects, Path::new("/code/other"), every), None);
+        assert_eq!(owner(&projects, Path::new("/code/other")), None);
     }
 
     #[test]
@@ -585,37 +573,17 @@ mod tests {
         .map(|path| (PathBuf::from(path), tracked(path)))
         .collect();
         assert_eq!(
-            owner(&projects, Path::new("/tasks/fix"), every),
+            owner(&projects, Path::new("/tasks/fix")),
             Some(Path::new("/tasks/fix/work/app")),
             "the task folder Codex Desktop records holds one worktree"
         );
-        assert_eq!(owner(&projects, Path::new("/tasks/pair"), every), None);
-        assert_eq!(owner(&projects, Path::new("/tasks"), every), None);
+        assert_eq!(owner(&projects, Path::new("/tasks/pair")), None);
+        assert_eq!(owner(&projects, Path::new("/tasks")), None);
         assert_eq!(
-            owner(&projects, Path::new("/tasks/pair-2"), every),
+            owner(&projects, Path::new("/tasks/pair-2")),
             Some(Path::new("/tasks/pair-2/work/app")),
             "a folder whose name begins like another's holds only its own"
         );
-    }
-
-    #[test]
-    fn owner_passes_over_the_projects_that_do_not_count() {
-        let projects: BTreeMap<PathBuf, Tracked> =
-            ["/code", "/code/app", "/code/app/wt", "/tasks/one/work/app"]
-                .into_iter()
-                .map(|path| (PathBuf::from(path), tracked(path)))
-                .collect();
-        let not_app = |tracked: &Tracked| !tracked.project.path.ends_with("app");
-        assert_eq!(
-            owner(&projects, Path::new("/code/app/src"), not_app),
-            Some(Path::new("/code")),
-            "the deepest project that counts"
-        );
-        assert_eq!(
-            owner(&projects, Path::new("/code/app/wt/src"), not_app),
-            Some(Path::new("/code/app/wt"))
-        );
-        assert_eq!(owner(&projects, Path::new("/tasks/one"), not_app), None);
     }
 
     /// A state reading the fixture `home`, with `projects` on its map.
@@ -824,18 +792,16 @@ mod tests {
     }
 
     #[test]
-    fn a_subagent_in_a_scratch_folder_stands_on_its_card_and_elsewhere_while_it_has_none() {
-        let home = TempDir::new("state-subagents-scratch");
+    fn an_agent_at_work_in_a_scratch_folder_stands_on_it_which_has_a_card_while_one_does() {
+        let home = TempDir::new("state-agents-scratch");
         let session = "/private/tmp/claude-501/-code-app/e26ca359";
-        let carded = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567";
-        let uncarded = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/probe";
-        let (in_carded, in_uncarded) = (
-            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567/src",
-            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/probe",
-        );
-        session_with_subagents(&home, "/code/app", &[in_carded, in_uncarded]);
+        let r567 = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567";
+        let probe = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/probe";
+        let review = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/review";
+        let in_r567 = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567/src";
+        session_with_subagents(&home, "/code/app", &[in_r567, probe]);
         let mut state = state_with(&home, &["/code/app"]);
-        for (path, build_folders) in [(carded, &["target"][..]), (uncarded, &[])] {
+        for (path, build_folders) in [(r567, &["target"][..]), (probe, &[]), (review, &[])] {
             let mut tracked = tracked(path);
             let project = &mut tracked.project;
             project.scratch = Some(ScratchSpace {
@@ -856,15 +822,42 @@ mod tests {
                 .collect();
             state.projects.insert(PathBuf::from(path), tracked);
         }
+        let carded = |state: &State| {
+            let snapshot = state.snapshot();
+            let scratch = snapshot
+                .projects
+                .into_iter()
+                .filter(|p| p.scratch.is_some());
+            let mut carded: Vec<PathBuf> = scratch.map(|project| project.path).collect();
+            carded.sort();
+            carded
+        };
+        assert_eq!(carded(&state), [PathBuf::from(r567)]);
 
-        state.refresh_agents();
-
+        assert!(state.refresh_agents());
+        assert_eq!(subagents_at(&state, Some(r567)), [PathBuf::from(in_r567)]);
         assert_eq!(
-            subagents_at(&state, Some(carded)),
-            [PathBuf::from(in_carded)]
+            subagents_at(&state, Some(probe)),
+            [PathBuf::from(probe)],
+            "one with no build folder too"
         );
-        assert_eq!(subagents_at(&state, None), [PathBuf::from(in_uncarded)]);
-        assert!(subagents_at(&state, Some(uncarded)).is_empty());
+        assert!(subagents_at(&state, None).is_empty());
+        assert_eq!(carded(&state), [probe, r567].map(PathBuf::from));
+
+        live_session(&home, review);
+        assert!(state.refresh_agents());
+        let on_review = &state.projects[Path::new(review)].project.agents;
+        assert_eq!(on_review.len(), 1, "a session working there stands there");
+        assert!(carded(&state).contains(&PathBuf::from(review)));
+
+        std::fs::remove_file(home.path(&format!(".claude/sessions/{}.json", std::process::id())))
+            .unwrap();
+        assert!(state.refresh_agents());
+        assert_eq!(
+            carded(&state),
+            [PathBuf::from(r567)],
+            "the others go with their agents"
+        );
     }
 
     #[test]

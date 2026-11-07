@@ -37,7 +37,7 @@ impl State {
         let unseen: Vec<ArtifactDir> = unseen.cloned().collect();
         found.extend(unseen);
         found.sort_by(|a, b| a.path.cmp(&b.path));
-        found.retain(|dir| owner(&self.projects, &dir.path, |_| true) == Some(project));
+        found.retain(|dir| owner(&self.projects, &dir.path) == Some(project));
         let Some(tracked) = self.projects.get_mut(project) else {
             return false;
         };
