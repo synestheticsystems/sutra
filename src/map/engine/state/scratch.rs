@@ -24,14 +24,17 @@ use super::State;
 use super::tracked::Tracked;
 use crate::map::scan::{self, ScratchFolder, SessionFolder};
 use crate::map::{
-    ActivitySource, AgentSession, DirUsage, Harness, LARGE_FOLDER_BYTES, Project, ScratchSpace,
-    Source, SourceProblem, agents,
+    ActivitySource, AgentSession, DirUsage, FolderAccess, Harness, LARGE_FOLDER_BYTES, Project,
+    ScratchSpace, Source, SourceProblem, agents,
 };
 
 impl State {
     /// Every scratch folder of every session in the scratch root now, as a project, and the folders
     /// that could not be listed. Each is tracked as `track_scratch_folders` says, and one that
-    /// `worktrees` holds as a worktree stays that.
+    /// `worktrees` holds as a worktree stays that. One in `previous` that a listing that failed
+    /// would have named stays, with the build folders and sizes last found, until a listing that
+    /// names the folders beside it leaves it out, or its own path leads nowhere. Whether Sutra can
+    /// read it is read again, so nothing is read inside a folder it no longer can.
     pub(super) fn rediscover_scratch(
         &self,
         previous: &mut BTreeMap<PathBuf, Tracked>,
@@ -53,6 +56,25 @@ impl State {
         let TrackedFolders { mut kept, searched } =
             self.track_scratch_folders(found, previous, is_worktree);
         kept.extend(searched);
+        let unlisted: Vec<PathBuf> = previous
+            .iter()
+            .filter(|(folder, before)| {
+                !is_worktree(folder) && could_not_be_listed(folder, before, &failures)
+            })
+            .map(|(folder, _)| folder.clone())
+            .collect();
+        for folder in unlisted {
+            let Some(mut before) = previous.remove(&folder) else {
+                continue;
+            };
+            match scan::folder_access(&folder, &self.boundary) {
+                FolderAccess::Missing => {}
+                access => {
+                    before.project.access = access;
+                    kept.push((folder, before));
+                }
+            }
+        }
         self.name_sessions(&mut kept, &mut failures);
         (kept, SourceProblem::per_kind(Source::Scan, failures))
     }
@@ -285,6 +307,28 @@ impl State {
             .cloned()
             .collect()
     }
+}
+
+/// Whether `tracked`, at `folder`, is a scratch folder that one of the listings that failed,
+/// `failures`, would have named: that of the folder holding it, or of one holding its session's
+/// folder, which then went unlisted. The listing of the session's folder itself names only the
+/// folders beside its scratchpad, which is listed on its own.
+fn could_not_be_listed(
+    folder: &Path,
+    tracked: &Tracked,
+    failures: &[(PathBuf, io::ErrorKind)],
+) -> bool {
+    let Some(space) = &tracked.project.scratch else {
+        return false;
+    };
+    // The session's folder is `<scratch root>/<project key>/<session id>`.
+    let holds_its_session = |failed: &Path| {
+        let key = space.session_folder.parent();
+        key.is_some_and(|key| key.starts_with(failed))
+    };
+    failures
+        .iter()
+        .any(|(failed, _)| folder.parent() == Some(failed.as_path()) || holds_its_session(failed))
 }
 
 /// The scratch folders one listing named, as the map tracks them (see
@@ -783,17 +827,65 @@ mod tests {
     }
 
     #[test]
-    fn a_session_whose_folders_cannot_all_be_listed_keeps_those_on_the_map() {
+    fn a_scratch_folder_a_failed_listing_would_name_stays_on_the_map_until_it_is_known_gone() {
+        use std::os::unix::fs::PermissionsExt;
         let fixture = TempDir::new("engine-scratch-unlisted");
-        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
-        fixture.write(&format!("{scratchpad}/r567/CACHEDIR.TAG"), CACHEDIR_TAG);
         let session = fixture.path("claude-501/-Users-me/e26ca359");
+        let (key, scratchpad) = (
+            fixture.path("claude-501/-Users-me"),
+            session.join("scratchpad"),
+        );
+        let [r567, tasks, notes] =
+            ["scratchpad/r567", "tasks", "notes"].map(|place| session.join(place));
+        for folder in [&r567, &tasks, &notes] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("CACHEDIR.TAG"), CACHEDIR_TAG).unwrap();
+        }
         let mut state = state_over(&fixture);
         state.rediscover(None);
+        let all = [notes.clone(), r567.clone(), tasks.clone()];
+        let unread = |state: &State| {
+            let problems = state.snapshot().problems.into_iter();
+            problems.map(|problem| problem.path).collect::<Vec<_>>()
+        };
+        let access = |state: &State, folder: &Path| state.projects[folder].project.access;
 
-        fixture.restrict(&fixture.path(scratchpad), 0o000);
-
+        fixture.restrict(&scratchpad, 0o000);
         assert_eq!(state.refind_scratch_folders(&session), None);
-        assert_eq!(paths(&state), [session.join("scratchpad/r567")]);
+        assert_eq!(paths(&state), all);
+        state.rediscover(None);
+        assert_eq!(paths(&state), all, "nor does the rediscovery that says why");
+        assert_eq!(unread(&state), std::slice::from_ref(&scratchpad));
+        assert_eq!(
+            access(&state, &r567),
+            FolderAccess::Denied,
+            "nothing is read in it, as nothing can be"
+        );
+
+        fixture.restrict(&key, 0o000);
+        state.rediscover(None);
+        assert_eq!(
+            paths(&state),
+            all,
+            "nor while the folder of its project key cannot be listed"
+        );
+        assert_eq!(unread(&state), std::slice::from_ref(&key));
+
+        for folder in [&key, &scratchpad] {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for gone in [&r567, &notes] {
+            std::fs::remove_dir_all(gone).unwrap();
+        }
+        // Its folders can be reached, and the folders beside its scratchpad not listed.
+        fixture.restrict(&session, 0o311);
+        state.rediscover(None);
+        assert_eq!(
+            paths(&state),
+            std::slice::from_ref(&tasks),
+            "the scratchpad's listing tells that r567 has gone, and the path of notes leads nowhere"
+        );
+        assert_eq!(unread(&state), [session]);
+        assert_eq!(access(&state, &tasks), FolderAccess::Readable);
     }
 }
