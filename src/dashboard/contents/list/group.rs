@@ -9,14 +9,47 @@
 
 mod fold;
 
+pub use fold::{GroupFold, MoreUnits};
+
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::contents::card::{self, CardContext, Naming};
 use crate::dashboard::listing::{self, Folds, Group};
-use crate::dashboard::{
-    Action, GroupFold, GroupLine, ListRow, MenuAction, MenuEntry, Parent, format,
-};
+use crate::dashboard::{Action, ListRow, MenuAction, MenuEntry, ScratchMark, format};
 use crate::map::{ArtifactDir, DirUsage, FolderSize, Project, ScratchSpace, Snapshot};
 use fold::folded;
+
+/// The line over a group's cards, which names their parent.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GroupLine {
+    /// What the cards share, which the window knows the group by, and a click on the line names.
+    pub parent: Parent,
+    /// A repository's main worktree's folder name, or a bare repository's own, less `.git`; a
+    /// session's name, as the mark on its scratch folders' cards gives it.
+    pub name: String,
+    /// Where a repository is, as `~/code/app` reads, which tells two clones of one remote apart;
+    /// a session's name and whether it still runs, then its folder.
+    pub tooltip: String,
+    /// On a session's line, the mark of its scratch, which the window draws around the total, as
+    /// the total is exactly what is throwaway. Once the session has ended, the mark steps back as
+    /// a robot at rest does, and the total does not: what the scratch holds is still there to
+    /// clean.
+    pub scratch: Option<ScratchMark>,
+    /// The disk the parent's cards on the map take between them, listed or not, as their trays
+    /// write it: the sizes measured so far, added up, and `None` before the first.
+    pub total: Option<String>,
+    /// What a right click offers: on a session's line, the clean of every build folder in its
+    /// scratch that a card would offer, while one is on offer; nothing on a repository's.
+    pub menu: Vec<MenuEntry>,
+}
+
+/// What a group's cards share: the parent whose fate decides theirs, which its line stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum Parent {
+    /// A git repository, by the git folder its worktrees share.
+    Repository { common_dir: String },
+    /// A Claude Code session, by its folder in the scratch root, which holds its scratch folders.
+    Session { folder: String },
+}
 
 /// The row of `group`, on `map`, folded shut as `folds` says.
 pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
@@ -133,13 +166,13 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::dashboard::Chip;
     use crate::dashboard::cleaning::Cleaning;
     use crate::dashboard::cleaning::tests::{cleaning, deleted};
     use crate::dashboard::listing::fixtures::{
         linked_worktree, main_worktree, now, project, quiet, running_as, scratch_folder, snapshot,
     };
     use crate::dashboard::listing::{Arrangement, Listing, Row};
-    use crate::dashboard::{Chip, ScratchMark};
     use crate::map::test_support::{cargo_target, measured, node_modules, project_at, usage};
     use crate::map::{DirUsage, Measurement};
     use crate::notifications::Notifier;

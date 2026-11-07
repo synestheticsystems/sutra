@@ -9,8 +9,27 @@ use std::path::Path;
 
 use crate::dashboard::contents::card::{CardContext, agents, subagents};
 use crate::dashboard::listing::Elsewhere;
-use crate::dashboard::{ElsewhereLine, format};
+use crate::dashboard::{AgentBadge, format};
 use crate::map::{AgentSession, SubagentWithParent};
+
+/// One line of the agents working outside every project, each with the folder it is about, with
+/// `~` for the home folder.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ElsewhereLine {
+    /// A session's robot beside the folder it works in, and at the line's end, as on a card's
+    /// tray, the subagents at work in that same folder.
+    Session {
+        badge: AgentBadge,
+        folder: String,
+        subagents: Vec<AgentBadge>,
+    },
+    /// The subagents at work in a folder that no session on the row works in: their robots, then
+    /// the folder.
+    Subagents {
+        subagents: Vec<AgentBadge>,
+        folder: String,
+    },
+}
 
 /// The lines: the sessions' in the map's order, each with the subagents at work in that same
 /// folder, then a line for each folder the other subagents work in, in the order of the first
@@ -66,9 +85,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::dashboard::AgentLook;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::{agent, now, subagent_in};
-    use crate::dashboard::{AgentBadge, AgentLook};
     use crate::map::AgentStatus;
     use crate::notifications::Notifier;
 

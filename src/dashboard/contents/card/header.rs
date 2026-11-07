@@ -7,9 +7,33 @@
 use std::path::Path;
 
 use super::Naming;
+use crate::dashboard::format;
 use crate::dashboard::listing::nested_name;
-use crate::dashboard::{Chip, ScratchMark, format};
 use crate::map::{ActivitySource, Project, RepoInfo, ScratchSpace};
+
+/// The chip beside a card's name, whose look says what it marks before its words do.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Chip {
+    /// A worktree's branch, a filled label: the branch, `detached abc1234` or `no commits`, and in
+    /// its tooltip the branch in full and which worktree of which repository this is.
+    Branch { text: String, tooltip: String },
+    /// A scratch folder's session, by its name, in the mark of scratch. The session's name is the
+    /// mark's own words, so it steps back with the mark once the session has ended.
+    Scratch { session: String, mark: ScratchMark },
+}
+
+/// The mark of Claude Code's scratch space: an outline of dashes around what it marks, the
+/// session's name on a scratch folder's card and the total on the session's line, drawn the way a
+/// placeholder is, so that nothing about it reads as a branch, which is kept, where scratch is
+/// thrown away. It fades, as a still robot does, once its session has ended and will build there
+/// no more.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ScratchMark {
+    /// `Claude Code's scratch space`, and the session's whole id.
+    pub tooltip: String,
+    /// The session runs, and may build in its scratch again.
+    pub session_runs: bool,
+}
 
 /// What a card goes by.
 pub(super) struct Identity {

@@ -3,9 +3,36 @@
 //! stands what a unit in trouble or under way says of itself, and a mark for each announcement
 //! switched off; the words for the rest are in its tooltip.
 
-use crate::dashboard::{UnitLook, UnitLozenge};
 use crate::model::{Environment, State, UnitStatus};
 use crate::notifications::Notifier;
+
+/// One dev-runner unit, as `(web :3000)` reads.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct UnitLozenge {
+    pub name: String,
+    /// The port as the window draws it after the name, colon included: `:3000`.
+    pub port: Option<String>,
+    pub look: UnitLook,
+    /// What a unit under way or in trouble says of itself.
+    pub beside: Option<String>,
+    pub muted: bool,
+    pub notifications_off: bool,
+    pub tooltip: String,
+    /// Opens the unit in the browser, on a click.
+    pub link: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UnitLook {
+    /// Up: green.
+    Up,
+    /// On the way: blue, so amber stays for what needs the user.
+    Starting,
+    /// Failed: red.
+    Failed,
+    /// Stopped, unknown, or its environment's process has gone: grey.
+    Still,
+}
 
 /// The lozenges of `env`'s units, in the order it lists them.
 pub(in crate::dashboard::contents) fn lozenges(

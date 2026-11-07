@@ -4,17 +4,67 @@
 
 mod gauge;
 
+pub use gauge::{DiskGauge, GaugeLook};
+
 pub(in crate::dashboard) use gauge::gauge as disk_gauge;
 
 use std::path::{Path, PathBuf};
 
 use crate::dashboard::cleaning::{self, IdleOffer};
 use crate::dashboard::listing::{Arrangement, Listing};
-use crate::dashboard::{
-    Action, CleanControl, DiskGauge, MenuAction, MenuEntry, SortChoice, SortControl, SortOrder,
-    Toolbar, format,
-};
+use crate::dashboard::{Action, MenuAction, MenuEntry, SortOrder, format};
 use crate::notifications::Notifier;
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Toolbar {
+    /// The current sort, and the sorts to choose from. `None` while there is at most one project,
+    /// when ordering means nothing.
+    pub sort: Option<SortControl>,
+    /// The filter field's text while the field shows (⌘F).
+    pub filter: Option<String>,
+    /// The clean of idle build folders.
+    pub clean: CleanControl,
+    pub muted: bool,
+    /// What the sound switch does: `Mute all sounds`, or `Unmute all sounds` while muted.
+    pub mute_tooltip: String,
+    pub notifications_off: bool,
+    /// What the notification switch does: `Disable notifications`, or `Enable notifications`
+    /// while they are off.
+    pub notifications_tooltip: String,
+    /// The store edition's folder button, with what it watches for its tooltip; `None` outside the
+    /// App Sandbox, where Sutra reads the whole home folder, and until the first map arrives.
+    pub folder: Option<String>,
+    /// How full the disk holding the home folder is, or why it could not be read; `None` until it
+    /// is first read.
+    pub disk: Option<DiskGauge>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SortControl {
+    pub current: SortOrder,
+    pub choices: Vec<SortChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SortChoice {
+    pub order: SortOrder,
+    pub label: String,
+    pub tooltip: String,
+}
+
+/// The toolbar's clean: a click cleans every idle build folder, a right click sets what Sutra keeps
+/// free.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CleanControl {
+    /// Something idle is on offer, so a click does something; the icon fades while nothing is.
+    pub offered: bool,
+    /// A click's clean is being worked out, which takes seconds when many folders are searched
+    /// for locks.
+    pub busy: bool,
+    pub tooltip: String,
+    /// What a right click offers.
+    pub menu: Vec<MenuEntry>,
+}
 
 /// The toolbar, with `listing` `None` until the first map arrives, `clean` as `clean_control`
 /// works it out, and `disk` as `disk_gauge` does, `None` before the disk's first reading.

@@ -7,8 +7,18 @@ use std::cmp::Reverse;
 use std::path::Path;
 
 use crate::dashboard::cleaning::CleanState;
-use crate::dashboard::{TrayFolder, format};
+use crate::dashboard::format;
 use crate::map::{ArtifactDir, Measurement, Project};
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TrayFolder {
+    /// As `target/` reads.
+    pub label: String,
+    /// Its own size, and while cleaning, what is left of it.
+    pub tooltip: String,
+    /// A clean is at work on it.
+    pub cleaning: bool,
+}
 
 /// One build folder on the tray.
 #[derive(Debug, PartialEq)]

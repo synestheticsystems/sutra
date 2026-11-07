@@ -5,8 +5,18 @@
 
 use std::path::Path;
 
-use crate::dashboard::{Banner, format};
+use crate::dashboard::format;
 use crate::map::{Source, SourceProblem};
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Banner {
+    /// What Sutra cannot see, as one sentence.
+    pub heading: String,
+    /// Each unreadable source and why, one line each.
+    pub reasons: Vec<String>,
+    /// The store edition offers the remedy: granting a larger folder (`MenuAction::ChooseFolder`).
+    pub offers_folder: bool,
+}
 
 /// The banner over the map's `problems`, `None` while every source that alone tells of a kind of
 /// thing reads.

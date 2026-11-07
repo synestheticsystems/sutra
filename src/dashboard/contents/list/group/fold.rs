@@ -4,9 +4,40 @@
 //! servers up or on their way in them stand after its total, with a count of the rest.
 
 use crate::dashboard::contents::card::{CardContext, agents, subagents, units};
-use crate::dashboard::{GroupFold, MoreUnits, UnitLook, UnitLozenge};
+use crate::dashboard::{AgentBadge, Card, UnitLook, UnitLozenge};
 use crate::map::Project;
 use crate::notifications::Notifier;
+
+/// What stands under a group's line: its cards, or, while the group is folded shut, none, the line
+/// itself showing the agents and the dev servers in those cards.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum GroupFold {
+    /// The cards, nested under the line, a repository's main worktree first.
+    Open { cards: Vec<Card> },
+    /// Folded shut: at the line's end, a robot for each agent in the cards it holds, every session
+    /// before every subagent, each in its card's order.
+    Folded {
+        sessions: Vec<AgentBadge>,
+        subagents: Vec<AgentBadge>,
+        /// One of those sessions waits on the user, so the line throbs as its card would.
+        waiting: bool,
+        /// After the line's total, the lozenges of the first two dev-runner units up or on their
+        /// way in the cards it holds, in the cards' order, as their cards draw them, so folding a
+        /// group shut never hides that a server runs in it.
+        units: Vec<UnitLozenge>,
+        /// The units up or on their way past those two; `None` while there are none.
+        more_units: Option<MoreUnits>,
+    },
+}
+
+/// The units a folded line counts past the ones it draws.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MoreUnits {
+    /// How many, as `+2` reads.
+    pub label: String,
+    /// Each by its name and port, a line each, as `api :8787` reads.
+    pub tooltip: String,
+}
 
 /// What the line of a folded group shows of `cards`, the cards it holds: a robot for each agent in
 /// them, every session before every subagent, each in the order their cards would stand them, and

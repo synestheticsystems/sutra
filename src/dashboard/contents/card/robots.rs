@@ -2,8 +2,19 @@
 //! `claude-opus-5-5` or `gpt-6-astra` reads, or, while none is known, by the harness it runs in,
 //! whose own models it runs unless told otherwise.
 
-use crate::dashboard::Robot;
 use crate::map::Harness;
+
+/// Which AI an agent is, as its robot shows it: by the model its transcript names, or, while none
+/// is known, by the harness it runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Robot {
+    Claude,
+    /// An OpenAI model, as Codex runs.
+    Codex,
+    Gemini,
+    /// A model with no robot of its own.
+    Plain,
+}
 
 /// The robot of an agent running in `harness` on `model`, when its harness records the model.
 pub(in crate::dashboard::contents) fn robot(harness: Harness, model: Option<&str>) -> Robot {

@@ -4,7 +4,40 @@
 //! the disk cannot be read, the gauge says so, rather than leaving the bar's place empty.
 
 use crate::dashboard::disk_space::{Volume, VolumeUnread};
-use crate::dashboard::{DiskGauge, GaugeLook, format};
+use crate::dashboard::format;
+
+/// The gauge at the end of the scope bar: how full the disk holding the home folder is. It is the
+/// summary of what the Disk sort lists, so a click on it chooses that sort
+/// (`Action::SetSort`).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum DiskGauge {
+    /// A bar filling with the share of the disk in use, and that share in words.
+    Read {
+        /// The share of the disk in use, from 0 to 1, to whole percents.
+        used: f32,
+        /// That share: `94%`.
+        label: String,
+        /// The disk by its name, then in bytes, then the free space Sutra keeps, if it keeps any:
+        /// `Macintosh HD: 1.8 TB of 2 TB in use, 160 GB free`.
+        tooltip: String,
+        look: GaugeLook,
+        /// The share of the disk in use at which only the free space Sutra keeps by cleaning by
+        /// itself is left, from 0 to 1: a tick on the bar's track. `None` while it keeps none, or
+        /// would keep more than the disk holds.
+        floor: Option<f32>,
+    },
+    /// The disk could not be read: an alert sign in the bar's place, and why in its tooltip.
+    Unavailable { tooltip: String },
+}
+
+/// How the gauge looks: plain while the disk has room, dark once little is free, red once almost
+/// nothing is. Amber is left for an agent that wants the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GaugeLook {
+    Roomy,
+    Tight,
+    Full,
+}
 
 /// The share of the disk left free below which the gauge darkens.
 const TIGHT_BELOW: f64 = 0.10;

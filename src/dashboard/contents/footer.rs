@@ -6,8 +6,21 @@ use std::io;
 use std::path::Path;
 
 use super::banner::problem_line;
-use crate::dashboard::{Footer, format};
+use crate::dashboard::format;
 use crate::map::{PrivateFolder, Snapshot, Source, SourceProblem};
+
+/// What shows under the list.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Footer {
+    /// How far the first sizing has come, from 0 to 1, while it runs.
+    pub sizing: Option<f32>,
+    /// Sources whose failure loses only some folders or some changes, one line each, for an alert
+    /// sign's tooltip.
+    pub problems: Vec<String>,
+    /// The private folders macOS keeps Sutra out of, and where the user can let it in, beside the
+    /// quiet sign the cards in them show.
+    pub refused: Option<String>,
+}
 
 /// The footer under `map`, `None` while there is nothing to say.
 pub(in crate::dashboard) fn footer(map: &Snapshot, home: &Path) -> Option<Footer> {

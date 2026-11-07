@@ -7,8 +7,37 @@
 use std::time::SystemTime;
 
 use super::robots::robot;
-use crate::dashboard::{AgentBadge, AgentLook, format};
+use crate::dashboard::{Robot, format};
 use crate::map::{AgentSession, AgentStatus, SessionHost};
+
+/// One agent, as one of the robots on its card's tray: the robot says which AI it is, and the light
+/// of its face what it is doing. A session's face moves with its look's rhythm, a subagent's holds
+/// still, and where each stands, before the tray's divider or after it, says which it is.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AgentBadge {
+    pub robot: Robot,
+    pub look: AgentLook,
+    /// What the robot says only in its light, in words, then who the agent is. A session's: its
+    /// status, with how long it has waited and how many of its subagents are at work; its name or
+    /// id; its harness and the model it works with, as `Claude · claude-opus-5-5` reads. A
+    /// subagent's: its status; its name and task, when its harness records them; what kind of
+    /// agent it is, the model it works with and the session it works for, as `general-purpose ·
+    /// claude-opus-5-5 · for Sutra launch` reads.
+    pub tooltip: String,
+    /// Opens the session in the app it runs in, on a click: for a subagent, the session it works
+    /// for.
+    pub link: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AgentLook {
+    /// Waiting on the user: an amber face, a session's throbbing with its card.
+    Waiting,
+    /// At work: a green face, a session's pulsing slowly.
+    Working,
+    /// Quiet mid-turn, idle, or with no status: the face unlit and the robot dimmed.
+    Still,
+}
 
 /// The badges of the sessions that earn one, in the order the map lists the sessions. A session
 /// keeps its place for as long as it lasts, so a robot never moves when its status changes: its
@@ -129,7 +158,6 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::dashboard::Robot;
     use crate::map::Harness;
     use crate::map::test_support::{agent_session, at, subagent_at_work};
 

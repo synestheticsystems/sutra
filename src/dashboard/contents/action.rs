@@ -1,0 +1,73 @@
+//! What the user asks the dashboard to do, which the window passes to `Dashboard::perform`: the
+//! action of a line of one of its menus (`MenuAction::Dashboard`), or what one of the window's own
+//! controls asks for.
+
+use crate::dashboard::{Parent, SortOrder};
+
+/// What the user asks the dashboard to do (`Dashboard::perform`).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Action {
+    /// Clean the build folder at `folder`.
+    Clean {
+        folder: String,
+    },
+    /// Clean every build folder the scratch folders of the session whose folder is
+    /// `session_folder` hold, as a click on each one's card would, so each goes only where it
+    /// would go alone.
+    CleanScratch {
+        session_folder: String,
+    },
+    /// Clean every idle build folder, after one question.
+    CleanIdle,
+    /// Keep this much free space from now on, cleaning by itself; `None` leaves cleaning to the
+    /// user. Asks first when it turns cleaning on.
+    KeepFree {
+        bytes: Option<u64>,
+    },
+    SetSort {
+        order: SortOrder,
+    },
+    /// Show the filter field (⌘F).
+    ShowFilter,
+    FilterChanged {
+        text: String,
+    },
+    HideFilter,
+    ToggleQuietProjects,
+    /// Fold shut the group of `parent`, as its line names it, or open it again. The fold is kept
+    /// for the next run.
+    ToggleFold {
+        parent: Parent,
+    },
+    /// The pointer entered or left the list, which holds the cards in place while it is there.
+    PointerEnteredList,
+    PointerLeftList,
+    ToggleGlobalMute,
+    ToggleGlobalNotifications,
+    ToggleUnitMute {
+        environment: String,
+        unit: String,
+    },
+    ToggleUnitNotifications {
+        environment: String,
+        unit: String,
+    },
+    TerminateEnvironment {
+        pid: u32,
+    },
+    /// The user answered the dialog `dialog`: `yes` for its action button, `false` for Cancel or
+    /// for a notice's OK.
+    Answer {
+        dialog: u64,
+        yes: bool,
+    },
+    /// The store edition's user granted `folder` in the open panel.
+    FolderGranted {
+        folder: String,
+    },
+    /// The user chose whether Sutra watches the private folder named `folder` (`Documents`).
+    WatchPrivateFolder {
+        folder: String,
+        watch: bool,
+    },
+}

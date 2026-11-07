@@ -7,12 +7,44 @@
 
 mod folders;
 
+pub use folders::TrayFolder;
+
 use std::path::Path;
 
 use crate::dashboard::cleaning::CleanState;
-use crate::dashboard::{AgentBadge, DiskUse, Tray, format};
+use crate::dashboard::{AgentBadge, format};
 use crate::map::{ArtifactDir, FolderAccess, FolderSize, Measurement, Project};
 use folders::{entries, folder, measured_bytes, off_the_card, off_the_card_tooltip};
+
+/// The card's tray, all on one line: the folder's disk use at its start, and at its end the agents
+/// in the folder, its sessions, a divider, and the subagents at work in it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Tray {
+    /// The folder's disk use, at the tray's start: `None` for a folder that cannot be read, which
+    /// the card says why of, and while nothing about its size is known yet.
+    pub disk: Option<DiskUse>,
+    /// The sessions in the folder, in the map's order, so none moves when its status changes.
+    pub sessions: Vec<AgentBadge>,
+    /// The subagents at work in the folder, whichever session they work for: by session, each
+    /// session's in its own order.
+    pub subagents: Vec<AgentBadge>,
+}
+
+/// The folder's disk use, as `32 GB  target/  node_modules/` reads.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DiskUse {
+    /// The folder's whole size, with what a clean has left of the folders it is at work on.
+    pub total: Option<String>,
+    /// The build folders too small to name, for the total's tooltip.
+    pub total_tooltip: Option<String>,
+    /// Why the folder has no total, when measuring its own files failed: an alert sign's tooltip.
+    pub warning: Option<String>,
+    /// The build folders large enough to matter, largest first.
+    pub folders: Vec<TrayFolder>,
+    /// How far the clean of its build folders has come, from 0 to 1, by the space given back:
+    /// the bar along the seam above the tray. Empty while a clean is worked out or waits its turn.
+    pub progress: Option<f32>,
+}
 
 /// The tray of `project`, with its `sessions` and `subagents` at its end; `None` while it would
 /// hold nothing: no agent, and nothing about the folder's size known yet, which the bar under the

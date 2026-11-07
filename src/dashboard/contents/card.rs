@@ -10,6 +10,12 @@ pub(super) mod subagents;
 mod tray;
 pub(super) mod units;
 
+pub use agents::{AgentBadge, AgentLook};
+pub use header::{Chip, ScratchMark};
+pub use robots::Robot;
+pub use tray::{DiskUse, Tray, TrayFolder};
+pub use units::{UnitLook, UnitLozenge};
+
 pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};
 
@@ -17,9 +23,54 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::dashboard::cleaning::Cleaning;
-use crate::dashboard::{Card, Unreadable, UnreadableLook, format};
+use crate::dashboard::{MenuEntry, format};
 use crate::map::{FolderAccess, FolderSize, KeptOutBy, Project, Snapshot};
 use crate::notifications::Notifier;
+
+/// One project's card.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Card {
+    /// The project's folder, which actions on the card name. Text, as every APFS path is.
+    pub path: String,
+    /// The folder in full, with `~` for the home folder: shown while the pointer is over the card.
+    pub location: String,
+    /// The folder's name; nested under its repository's line, a worktree's branch.
+    pub name: String,
+    /// The folder, then when its last activity was and where it came from; nested, a worktree's
+    /// branch in full before them.
+    pub name_tooltip: String,
+    /// The chip beside the name: a worktree's branch, or a scratch folder's session. `None` for a
+    /// plain folder, and for a card nested under its parent's line, which says what the chip would.
+    pub chip: Option<Chip>,
+    /// How long ago the last activity was, as `4m` reads.
+    pub age: Option<String>,
+    /// Why the folder cannot be read, above the units that sources outside it still show.
+    pub unreadable: Option<Unreadable>,
+    pub units: Vec<UnitLozenge>,
+    /// The card's tray along its bottom: the folder's disk use, then the agents in it, sessions
+    /// before subagents.
+    pub tray: Option<Tray>,
+    /// An agent in it waits on the user, so the card throbs.
+    pub waiting: bool,
+    /// What a right click offers.
+    pub menu: Vec<MenuEntry>,
+}
+
+/// Why a card shows nothing from inside its folder, as `in Desktop, not watched` reads.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Unreadable {
+    pub reason: String,
+    pub look: UnreadableLook,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UnreadableLook {
+    /// Kept out by the user's own choice, in Settings, in the folder granted or in answer to
+    /// macOS's prompt, or until they answer it: a quiet sign, since nothing went wrong.
+    KeptOut,
+    /// Missing, or locked by its own permissions: the warning sign.
+    Failed,
+}
 
 /// What every card reads besides its own project and the map.
 pub(in crate::dashboard) struct CardContext<'a> {
@@ -117,7 +168,6 @@ fn unreadable(project: &Project, roots: &[PathBuf], sandboxed: bool) -> Option<U
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dashboard::Robot;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::{agent, now, project, snapshot, subagent_in};
     use crate::map::PrivateFolder;

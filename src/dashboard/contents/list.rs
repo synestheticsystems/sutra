@@ -7,13 +7,75 @@
 mod elsewhere;
 mod group;
 
+pub use elsewhere::ElsewhereLine;
+pub use group::{GroupFold, GroupLine, MoreUnits, Parent};
+
 use std::path::PathBuf;
 
 use super::card::{self, CardContext, Naming, agents};
 use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing, Row};
-use crate::dashboard::{List, ListRow, SortOrder, format};
+use crate::dashboard::{Card, SortOrder, format};
 use crate::map::LARGE_FOLDER_BYTES;
 use crate::map::grant::GrantError;
+
+/// The list, or what stands in its place.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum List {
+    /// The store edition has no folder to read yet: what Sutra needs and why, with the button that
+    /// opens the panel (`MenuAction::ChooseFolder`).
+    NoFolder {
+        message: String,
+        /// Why the folder granted on an earlier launch could not be reopened.
+        lost: Option<String>,
+    },
+    /// The first map is still being made.
+    Scanning,
+    /// Nothing to list, or nothing the filter admits, or no map ever came because the scanner
+    /// stopped, and why, in a sentence or two.
+    Empty {
+        message: String,
+    },
+    Rows {
+        rows: Vec<ListRow>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ListRow {
+    Card {
+        // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
+        card: Box<Card>,
+    },
+    /// The cards that share a parent, in the Activity sort, where two or more of a repository's, or
+    /// any of a session's, are listed together: a line naming the parent, with the disk its cards
+    /// take, then the cards, nested under it, unless the line holds them folded. The line names
+    /// what the cards share, so each goes by what sets it apart: a worktree by its branch, or on no
+    /// branch by its folder, and a scratch folder by its own name. A click on the line folds the
+    /// group shut, and another opens it (`Action::ToggleFold`).
+    Group {
+        line: GroupLine,
+        // Boxed, as a line and what it holds dwarf the other rows; the window receives it as a
+        // plain fold.
+        fold: Box<GroupFold>,
+    },
+    /// The agents working outside every project, under `heading`: a line for each session, in the
+    /// map's order, then one for each other folder subagents work in, in the order of the first
+    /// subagent there. No folder has two lines of subagents, and none moves when a status changes.
+    Elsewhere {
+        heading: String,
+        lines: Vec<ElsewhereLine>,
+        /// One of them waits on the user, so the row throbs as a card does.
+        waiting: bool,
+    },
+    /// The row standing for the quiet projects: how many, and whether they are listed below it.
+    /// A click opens or closes it (`Action::ToggleQuietProjects`).
+    QuietProjects {
+        count: u32,
+        open: bool,
+        label: String,
+        tooltip: String,
+    },
+}
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
@@ -123,13 +185,13 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::dashboard::AgentLook;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::Arrangement;
     use crate::dashboard::listing::fixtures::{
         agent, linked_worktree, main_worktree, now, project, quiet, running_as, scratch_folder,
         snapshot, subagent_in,
     };
-    use crate::dashboard::{AgentLook, ElsewhereLine, GroupFold, Parent};
     use crate::map::test_support::measured;
     use crate::map::{AgentStatus, Project, Snapshot};
     use crate::notifications::Notifier;
