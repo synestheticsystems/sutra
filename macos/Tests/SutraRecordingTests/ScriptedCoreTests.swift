@@ -4,7 +4,8 @@ import SutraCore
 import Testing
 
 /// What the user can do to the scripted list, at the start of the script: what a recording
-/// demonstrates changes the list as the live core would, and the rest changes nothing.
+/// demonstrates changes the list as the live core would, and the rest changes nothing. And the
+/// take a film holds at a moment of its own.
 struct ScriptedCoreTests {
     /// A window that counts how often it is told its contents changed.
     private final class CountingWindow: DashboardWindow {
@@ -98,5 +99,16 @@ struct ScriptedCoreTests {
         core.perform(action: .toggleQuietProjects)
         core.rewind()
         #expect(core.contents() == ScriptedCore(window: CountingWindow()).contents())
+    }
+
+    @Test func aHeldTakeShowsItsMomentAndTheWallClockMovesItNoFurther() async throws {
+        core.play()
+        core.hold(at: Scenario.permissionAsked)
+        #expect(core.moment == Scenario.permissionAsked)
+        #expect(core.contents() == Arrangement().contents(at: Scenario.permissionAsked))
+        // Past the next whole second of the wall clock, when a playing take would look again.
+        try await Task.sleep(for: .milliseconds(1_100))
+        #expect(core.moment == Scenario.permissionAsked)
+        #expect(window.changes == 1)
     }
 }

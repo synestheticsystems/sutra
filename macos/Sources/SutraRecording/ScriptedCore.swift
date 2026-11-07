@@ -9,20 +9,40 @@ import SutraCore
 /// leaves undone.
 ///
 /// It waits at the start of the script until `play`, and its clock runs from there, so every take
-/// reads alike at each moment.
+/// reads alike at each moment. A film that draws the take frame by frame holds it at each frame's
+/// moment instead.
 final class ScriptedCore: DashboardProtocol {
     private struct State {
         var arrangement = Arrangement()
-        /// When the take began on the wall clock; `nil` while the script waits at its start.
-        var playingSince: Date?
+        var clock = Clock.waiting
         /// What the window shows, as the script last worked it out.
         var shown: WindowContents
-        /// Works the contents out again at each whole second of the take.
-        var clock: Task<Void, Never>?
+    }
+
+    /// Where the take's clock stands.
+    private enum Clock {
+        /// At the start of the script, waiting for the take to play.
+        case waiting
+        /// Playing on the wall clock since `since`, with `ticks` working the contents out again at
+        /// each whole second of the take.
+        case playing(since: Date, ticks: Task<Void, Never>)
+        /// Held at a moment of the take by a film, which moves the clock itself, frame by frame.
+        case held(at: TimeInterval)
 
         /// The moment of the take it is at `now` on the wall clock.
         func moment(at now: Date) -> TimeInterval {
-            playingSince.map { now.timeIntervalSince($0) } ?? 0
+            switch self {
+            case .waiting: 0
+            case .playing(let since, _): now.timeIntervalSince(since)
+            case .held(let moment): moment
+            }
+        }
+
+        /// No more ticks, if it plays.
+        func stopTicks() {
+            if case .playing(_, let ticks) = self {
+                ticks.cancel()
+            }
         }
     }
 
@@ -67,27 +87,24 @@ final class ScriptedCore: DashboardProtocol {
 
     /// Stop the clock, as the app quits.
     func stop() {
-        state.withLock { state in
-            state.clock?.cancel()
-            state.clock = nil
-        }
+        state.withLock { $0.clock.stopTicks() }
     }
 
     /// Play the script from its start, from now.
     func play() {
         state.withLock { state in
-            state.clock?.cancel()
-            state.playingSince = Date()
-            state.clock = Task { [weak self] in
+            state.clock.stopTicks()
+            let ticks = Task { [weak self] in
                 while let wait = self?.untilNextSecond() {
                     do {
                         try await Task.sleep(for: .seconds(wait))
                     } catch {
-                        return // Cancelled: rewound, or stopped.
+                        return // Cancelled: rewound, held, or stopped.
                     }
                     self?.publish()
                 }
             }
+            state.clock = .playing(since: Date(), ticks: ticks)
         }
         publish()
     }
@@ -95,17 +112,28 @@ final class ScriptedCore: DashboardProtocol {
     /// Back to the start of the script, the list as a take opens it, to wait for the next take.
     func rewind() {
         state.withLock { state in
-            state.clock?.cancel()
-            state.clock = nil
-            state.playingSince = nil
+            state.clock.stopTicks()
+            state.clock = .waiting
             state.arrangement = Arrangement()
         }
         publish()
     }
 
-    /// The moment of the take it is now: 0 while the script waits at its start.
+    /// Show the take at `moment` and hold it there, out of the wall clock's reach. A film that
+    /// draws the take frame by frame moves the clock itself, a frame at a time, so every film of
+    /// the take draws the same frames.
+    func hold(at moment: TimeInterval) {
+        state.withLock { state in
+            state.clock.stopTicks()
+            state.clock = .held(at: moment)
+        }
+        publish()
+    }
+
+    /// The moment of the take it is now: 0 while the script waits at its start, and the moment a
+    /// film holds it at.
     var moment: TimeInterval {
-        state.withLock { $0.moment(at: Date()) }
+        state.withLock { $0.clock.moment(at: Date()) }
     }
 
     /// How long until the take's next whole second, when the clock looks again.
@@ -118,7 +146,7 @@ final class ScriptedCore: DashboardProtocol {
     /// shows, as the live core publishes its contents.
     private func publish() {
         let changed = state.withLock { state in
-            let contents = state.arrangement.contents(at: state.moment(at: Date()))
+            let contents = state.arrangement.contents(at: state.clock.moment(at: Date()))
             guard contents != state.shown else { return false }
             state.shown = contents
             return true
