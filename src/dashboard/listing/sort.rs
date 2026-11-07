@@ -37,9 +37,8 @@ impl SortOrder {
     }
 
     /// `projects`, the cards above the quiet row or every card a typed filter admits, as this sort
-    /// lays them out: the Activity sort gathers the cards of each parent with two or more of them
-    /// into its group (see `group`), and the others list every card alone. `map` gives each group
-    /// every project of its parent.
+    /// lays them out: the Activity sort gathers the cards of a parent into its group (see `group`),
+    /// and the others list every card alone. `map` gives each group every project of its parent.
     pub(super) fn lay_out<'a>(
         self,
         projects: Vec<&'a Project>,

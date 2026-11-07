@@ -1,10 +1,9 @@
 //! What the list shows, in order: the projects in focus in the user's sort (see `focus`), the
 //! agents working outside every project, and one row standing for the quiet projects, which opens
-//! to list them.
-//! A typed filter lists every project it admits instead. In the Activity sort, the cards of a
-//! parent with two or more of them above the quiet row, a repository's worktrees or a session's
-//! scratch folders, stand together in its group, under the line that names it. Judged at one
-//! instant, so the cards and the counts always agree.
+//! to list them. A typed filter lists every project it admits instead. In the Activity sort, the
+//! cards of a parent above the quiet row, a repository's worktrees, two or more, or a session's
+//! scratch folders, however few, stand together in its group, under the line that names it (see
+//! `group`). Judged at one instant, so the cards and the counts always agree.
 
 mod arrangement;
 mod filter;
@@ -436,7 +435,7 @@ mod tests {
         };
         assert_eq!(
             listed(SortOrder::Activity),
-            ["Foundry", "quiet:2", "app d5fa0639", "forgotten"],
+            ["Foundry: r567", "quiet:2", "app d5fa0639", "forgotten"],
             "its activity a minute ago, and its size, are disk news"
         );
         assert_eq!(

@@ -99,10 +99,10 @@ pub struct SortChoice {
 /// The orders the project list can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
 pub enum SortOrder {
-    /// Newest activity first, in five-minute slices of the clock, each slice in name order. The
-    /// cards of a parent with two or more of them above the quiet row, a git repository's
-    /// worktrees or a Claude Code session's scratch folders, stand together under a line naming
-    /// it, a repository's main worktree first, and the group takes the place its newest card would.
+    /// Newest activity first, in five-minute slices of the clock, each slice in name order. Above
+    /// the quiet row, a git repository's worktrees, two or more, and a Claude Code session's
+    /// scratch folders, however few, stand together under a line naming their parent, a
+    /// repository's main worktree first, and the group takes the place its newest card would.
     #[default]
     Activity,
     /// By folder name, ignoring case.
@@ -163,9 +163,9 @@ pub enum ListRow {
         // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
         card: Box<Card>,
     },
-    /// The cards that share a parent, in the Activity sort, where two or more of them are listed
-    /// together: a line naming the parent, with the disk its cards take, then the cards, nested
-    /// under it, unless the line holds them folded. The line names what the cards share, so each
+    /// The cards that share a parent, in the Activity sort, where two or more of a repository's, or
+    /// any of a session's, are listed together: a line naming the parent, with the disk its cards
+    /// take, then the cards, nested under it, unless the line holds them folded. The line names what the cards share, so each
     /// goes by what sets it apart: a worktree by its branch, or on no branch by its folder, and a
     /// scratch folder by its own name. A click on the line folds the group shut, and another opens
     /// it (`Action::ToggleFold`).

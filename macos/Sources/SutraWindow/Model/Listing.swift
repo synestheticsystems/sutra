@@ -14,7 +14,8 @@ public enum Listing: Equatable {
 /// One row of the list.
 public enum Row: Identifiable, Equatable {
     case card(CardModel)
-    /// The cards that share a parent under its line, where two or more are listed together.
+    /// The cards that share a parent under its line: a repository's where two or more are listed
+    /// together, a session's however few.
     case group(line: GroupLine, fold: Fold)
     case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)

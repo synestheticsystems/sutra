@@ -4,8 +4,9 @@
 //! worktree and the worktrees linked to it. Two clones of one remote are two repositories, and a
 //! bare repository's linked worktrees are a group of their own. A Claude Code session is the parent
 //! of its scratch folders, which share no history: they share the session that made them, lie in
-//! its folder, and lose their use when it ends. A parent has a group only where two or more of its
-//! cards are listed together, so the list gains no line for a card on its own.
+//! its folder, and lose their use when it ends. A repository has a group only where two or more of
+//! its cards are listed together, so the list gains no line for a worktree on its own; a session
+//! has one wherever any of its scratch is listed, as its folded line is what scratch looks like.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -21,9 +22,10 @@ pub(in crate::dashboard) struct Group<'a> {
     pub(in crate::dashboard) parent: Parent<'a>,
     /// What the line calls the parent (see `name`).
     pub(in crate::dashboard) name: String,
-    /// The cards the list shows, two or more, whether the line holds them folded or not: a
-    /// repository's main worktree first, then the cards by their five-minute slice, each slice in
-    /// the order of the names they go by nested (see `nested_name`).
+    /// The cards the list shows, two or more of a repository's and one or more of a session's,
+    /// whether the line holds them folded or not: a repository's main worktree first, then the
+    /// cards by their five-minute slice, each slice in the order of the names they go by nested
+    /// (see `nested_name`).
     pub(in crate::dashboard) cards: Vec<&'a Project>,
     /// Every project of the parent on the map, listed or not, whose sizes the line adds up.
     pub(in crate::dashboard) members: Vec<&'a Project>,
@@ -59,10 +61,11 @@ impl<'a> Parent<'a> {
     }
 }
 
-/// `projects`, one section's cards, in the Activity order, with the cards of each parent that has
-/// two or more of them gathered into its group. The groups and the cards standing alone interleave,
-/// each group in the place its newest card would take, so a group moves up only when one of its
-/// cards' activity enters a newer slice. `map` gives each group every project of its parent.
+/// `projects`, one section's cards, in the Activity order, with the cards of each repository that
+/// has two or more of them, and of each session that has any, gathered into its group. The groups
+/// and the cards standing alone interleave, each group in the place its newest card would take, so
+/// a group moves up only when one of its cards' activity enters a newer slice. `map` gives each
+/// group every project of its parent.
 pub(super) fn gather<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Vec<SectionRow<'a>> {
     let mut rows = Vec::new();
     let mut gatherings: HashMap<&Path, Gathering> = HashMap::new();
@@ -76,13 +79,12 @@ pub(super) fn gather<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Vec<S
             None => rows.push(SectionRow::Project(project)),
         }
     }
-    // A line over one card would only take room, so that card stands alone.
-    gatherings.retain(|_, gathering| match gathering.cards.as_slice() {
-        [alone] => {
+    gatherings.retain(|_, gathering| match gathering.lone_card() {
+        Some(alone) => {
             rows.push(SectionRow::Project(alone));
             false
         }
-        _ => true,
+        None => true,
     });
     for project in &map.projects {
         let gathering = Parent::of(project).and_then(|parent| gatherings.get_mut(parent.folder()));
@@ -118,6 +120,16 @@ impl<'a> Gathering<'a> {
             parent,
             cards: Vec::new(),
             members: Vec::new(),
+        }
+    }
+
+    /// The card that stands alone rather than under its parent's line: a repository's only card,
+    /// as its group starts open, and a line over one card would only take room. A session's group
+    /// starts folded, so its line is the compact form of its scratch, however few folders it has.
+    fn lone_card(&self) -> Option<&'a Project> {
+        match (self.parent, self.cards.as_slice()) {
+            (Parent::Repository(_), [alone]) => Some(alone),
+            _ => None,
         }
     }
 
@@ -254,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn a_parent_with_one_card_among_them_has_no_group_and_its_card_stands_alone() {
+    fn a_repository_with_one_card_among_them_has_no_group_and_a_session_has_its_line_still() {
         let app = "/code/app/.git";
         let map = snapshot(
             vec![
@@ -269,7 +281,8 @@ mod tests {
         let listed = vec![&map.projects[0], &map.projects[1], &map.projects[3]];
         assert_eq!(
             grouped_of(listed, &map),
-            ["app e26ca359", "app-fix", "notes"]
+            ["app e26ca359: r567", "app-fix", "notes"],
+            "a session's line, folded, is what its scratch looks like on the list"
         );
     }
 
@@ -394,11 +407,11 @@ mod tests {
         assert_eq!(
             grouped(&map),
             [
-                "app d5fa0639",
+                "app d5fa0639: probe",
                 "notes",
                 "Foundry Agent Studio architecture: cencora-seed, r567guards, target-567-fix",
             ],
-            "the lone folder of another session stands alone, by its session's name"
+            "the lone folder of another session has its session's line too"
         );
     }
 
