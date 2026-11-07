@@ -20,13 +20,16 @@ use nix::fcntl::{Flock, FlockArg};
 use rayon::prelude::*;
 
 use super::CleanError;
-use super::open_folder::{Kind, OpenFolder};
+use super::open_folder::{Identity, Kind, OpenFolder};
 use crate::map::scan;
 
 /// The files cargo locks in a profile folder.
 const LOCK_NAMES: [&str; 3] = [".cargo-build-lock", ".cargo-lock", ".cargo-artifact-lock"];
 
-/// Cargo's locks that Sutra holds, each released when the set is dropped.
+/// Cargo's locks that Sutra holds, each released when the set is dropped. A lock is known by the
+/// file locked, its device and inode, and never by its path: a script can remove a profile folder
+/// whose locks Sutra holds, and a build make it again, with new lock files at the same paths that
+/// the build holds.
 #[derive(Debug, Default)]
 pub(super) struct HeldLocks {
     held: Vec<HeldLock>,
@@ -34,7 +37,7 @@ pub(super) struct HeldLocks {
 
 #[derive(Debug)]
 struct HeldLock {
-    path: PathBuf,
+    file: Identity,
     _flock: Flock<File>,
 }
 
@@ -51,7 +54,7 @@ impl HeldLocks {
         let holds_any = !found.is_empty();
         let before = self.held.len();
         for lock in found {
-            if self.holds(&lock.path) {
+            if self.holds(lock.identity) {
                 continue;
             }
             match take(lock) {
@@ -65,8 +68,9 @@ impl HeldLocks {
         Ok(holds_any)
     }
 
-    pub(super) fn holds(&self, path: &Path) -> bool {
-        self.held.iter().any(|lock| lock.path == path)
+    /// Whether Sutra holds the lock of the file `file` names.
+    pub(super) fn holds(&self, file: Identity) -> bool {
+        self.held.iter().any(|lock| lock.file == file)
     }
 }
 
@@ -76,14 +80,19 @@ impl HeldLocks {
 struct LockFile {
     path: PathBuf,
     file: File,
+    identity: Identity,
 }
 
 /// Lock `lock` exclusively without waiting.
 fn take(lock: LockFile) -> Result<HeldLock, CleanError> {
-    let LockFile { path, file } = lock;
+    let LockFile {
+        path,
+        file,
+        identity,
+    } = lock;
     match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
         Ok(flock) => Ok(HeldLock {
-            path,
+            file: identity,
             _flock: flock,
         }),
         Err((_, Errno::EWOULDBLOCK)) => Err(CleanError::BuildRunning { lock: path }),
@@ -122,7 +131,15 @@ fn find_in(dir: &OpenFolder, path: &Path) -> Result<Vec<LockFile>, CleanError> {
             Kind::File if is_lock_name(&entry.name) => {
                 let at = path.join(&entry.name);
                 match dir.file(&entry.name) {
-                    Ok(file) => locks.push(LockFile { path: at, file }),
+                    Ok(file) => {
+                        let identity =
+                            Identity::of_file(&file).map_err(|err| io_error(at.clone(), err))?;
+                        locks.push(LockFile {
+                            path: at,
+                            file,
+                            identity,
+                        });
+                    }
                     // Gone since the listing, with the folder that held it.
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                     Err(err) => return Err(io_error(at, err)),
@@ -154,10 +171,17 @@ fn is_lock_name(name: &OsStr) -> bool {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::fs;
+
     use super::*;
     use crate::map::test_support::TempDir;
 
     impl HeldLocks {
+        /// Whether Sutra holds the lock of the file at `path` now.
+        pub(in crate::map::clean) fn holds_file_at(&self, path: &Path) -> bool {
+            self.holds(Identity::of_file(&File::open(path).unwrap()).unwrap())
+        }
+
         /// `take_found` in the folder at `path`, opened for it.
         pub(in crate::map::clean) fn take_found_at(
             &mut self,
@@ -326,6 +350,39 @@ pub(super) mod tests {
         );
 
         let starting = File::open(target.join("debug/.cargo-build-lock")).unwrap();
+        assert!(matches!(
+            Flock::lock(starting, FlockArg::LockExclusiveNonblock),
+            Err((_, Errno::EWOULDBLOCK))
+        ));
+    }
+
+    #[test]
+    fn a_lock_file_put_at_a_held_locks_path_is_not_held_and_is_taken_or_refuses() {
+        let fixture = TempDir::new("locks-replaced");
+        let target = built(&fixture, &["debug", "release"]);
+        let mut locks = HeldLocks::default();
+        locks.take_found_at(&target).unwrap();
+        let replace = |lock: &Path| {
+            fs::remove_file(lock).unwrap();
+            fs::write(lock, "").unwrap();
+        };
+        let free = target.join("debug/.cargo-build-lock");
+        let busy = target.join("release/.cargo-build-lock");
+        replace(&free);
+        replace(&busy);
+        assert!(!locks.holds_file_at(&free), "its path is no lock held");
+
+        let building = hold_like_cargo(&busy);
+        assert_eq!(
+            locks.take_found_at(&target),
+            Err(CleanError::BuildRunning { lock: busy }),
+            "a build holds the one put in its place"
+        );
+        drop(building);
+        locks.take_found_at(&target).unwrap();
+
+        assert!(locks.holds_file_at(&free));
+        let starting = File::open(&free).unwrap();
         assert!(matches!(
             Flock::lock(starting, FlockArg::LockExclusiveNonblock),
             Err((_, Errno::EWOULDBLOCK))

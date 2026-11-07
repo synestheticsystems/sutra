@@ -42,7 +42,8 @@ fn clear_around(
     let mut whole = Vec::new();
     for Entry { name, kind } in listing(dir, path)? {
         let at = path.join(&name);
-        if locks.holds(&at) || Some(name.as_os_str()) == tag {
+        let held = is_held_lock(dir, &name, kind, locks).map_err(|err| io_error(&at, err))?;
+        if held || Some(name.as_os_str()) == tag {
             continue;
         }
         // A link is deleted, never entered.
@@ -103,6 +104,20 @@ fn remove_tree(
     match parent.remove_folder(name) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(io_error(&path, err)),
         _ => Ok(()),
+    }
+}
+
+/// Whether `name` in `dir`, which the listing says is a `kind`, is a lock file whose lock Sutra
+/// holds: the very file locked, and not one put at its path since.
+fn is_held_lock(dir: &OpenFolder, name: &OsStr, kind: Kind, locks: &HeldLocks) -> io::Result<bool> {
+    if kind != Kind::File {
+        return Ok(false);
+    }
+    match dir.stat(name) {
+        Ok(stat) => Ok(locks.holds(stat.identity())),
+        // Gone since the listing, so there is nothing to keep.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -334,7 +349,23 @@ mod tests {
         clear_at(&target, &mut locks, &FolderProgress::default()).unwrap();
 
         assert!(!target.join("release/deps").exists());
-        assert!(locks.holds(&target.join("release/.cargo-build-lock")));
+        assert!(locks.holds_file_at(&target.join("release/.cargo-build-lock")));
+    }
+
+    #[test]
+    fn a_profile_folder_made_again_since_the_locks_has_its_new_locks_taken_before_it_is_cleared() {
+        let fixture = TempDir::new("removal-profile-made-again");
+        let target = built(&fixture, &["debug"]);
+        let mut locks = take_all_in(&target);
+        // A script removed the profile folder, and a build that has yet to lock made it again.
+        fs::remove_dir_all(target.join("debug")).unwrap();
+        built(&fixture, &["debug"]);
+        let new_lock = target.join("debug/.cargo-build-lock");
+
+        clear_at(&target, &mut locks, &FolderProgress::default()).unwrap();
+
+        assert!(!target.join("debug/deps").exists());
+        assert!(locks.holds_file_at(&new_lock), "so the build waits for it");
     }
 
     /// Every path below `root`, relative to it.

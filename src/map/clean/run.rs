@@ -360,6 +360,25 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_folder_a_build_made_again_since_the_locks_stops_the_delete_untouched() {
+        let fixture = TempDir::new("run-profile-made-again");
+        let target = built(&fixture, &["debug"]);
+        let locked = lock_folders(&[&target]).unwrap();
+        // A script removed the profile folder whose locks Sutra holds, and a build made it again
+        // and holds the new lock files at the same paths, while the target folder stays the same.
+        fs::remove_dir_all(target.join("debug")).unwrap();
+        built(&fixture, &["debug"]);
+        let busy = target.join("debug/.cargo-build-lock");
+        let _building = hold_like_cargo(&busy);
+
+        assert_eq!(
+            locked.delete(&Progress::default()),
+            Err(CleanError::BuildRunning { lock: busy })
+        );
+        assert!(target.join("debug/deps/libapp.rlib").exists());
+    }
+
+    #[test]
     fn a_build_that_started_in_a_new_profile_folder_since_the_locks_stops_the_delete_untouched() {
         let fixture = TempDir::new("run-new-profile");
         let target = built(&fixture, &["debug"]);

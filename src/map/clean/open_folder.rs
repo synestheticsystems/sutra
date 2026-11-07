@@ -78,7 +78,7 @@ impl OpenFolder {
 
     /// Which folder this is.
     pub(super) fn identity(&self) -> io::Result<Identity> {
-        self.0.metadata().map(|meta| Identity::of(&meta))
+        Identity::of_file(&self.0)
     }
 
     /// What the folder holds, listed in full before any of it is deleted, as a folder read while
@@ -136,6 +136,11 @@ impl OpenFolder {
 }
 
 impl Identity {
+    /// Which file `file`, open, is.
+    pub(super) fn of_file(file: &File) -> io::Result<Identity> {
+        file.metadata().map(|meta| Identity::of(&meta))
+    }
+
     fn of(meta: &Metadata) -> Identity {
         Identity {
             device: meta.dev(),
@@ -145,6 +150,15 @@ impl Identity {
 }
 
 impl Stat {
+    /// Which file the name names, as `Identity::of_file` tells it of the file open.
+    pub(super) fn identity(&self) -> Identity {
+        // As `std`'s `MetadataExt::dev` widens the device to read it.
+        Identity {
+            device: self.0.st_dev as u64,
+            inode: self.0.st_ino,
+        }
+    }
+
     pub(super) fn kind(&self) -> Kind {
         let kind = SFlag::from_bits_truncate(self.0.st_mode) & SFlag::S_IFMT;
         if kind == SFlag::S_IFDIR {
@@ -218,6 +232,30 @@ mod tests {
         assert_eq!(names[0].kind, Kind::File);
         assert!(!fixture.path("app.old/target/debug").exists());
         assert!(elsewhere.exists(), "the link's folder is untouched");
+    }
+
+    #[test]
+    fn a_file_is_one_identity_whether_its_name_is_read_or_the_file_opened() {
+        let fixture = TempDir::new("open-folder-identity");
+        let folder = fixture.dir("debug");
+        fixture.write("debug/.cargo-lock", "");
+        fixture.write("debug/.cargo-build-lock", "");
+        let opened = OpenFolder::at(&folder).unwrap();
+        let lock = OsStr::new(".cargo-lock");
+
+        let by_name = opened.stat(lock).unwrap().identity();
+
+        assert_eq!(
+            Identity::of_file(&opened.file(lock).unwrap()).unwrap(),
+            by_name
+        );
+        assert_ne!(
+            opened
+                .stat(OsStr::new(".cargo-build-lock"))
+                .unwrap()
+                .identity(),
+            by_name
+        );
     }
 
     #[test]
