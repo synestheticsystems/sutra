@@ -398,7 +398,7 @@ pub(super) mod tests {
         let folder = fixture.path("app/target");
         let plan = clean::plan(
             &folder,
-            &fixture.path("app"),
+            clean::ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
             &clean::Reach::Anywhere,
         )

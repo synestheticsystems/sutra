@@ -73,6 +73,13 @@ impl Project {
         Some(size)
     }
 
+    /// Whether the folder is a Cargo build folder and nothing else, as a scratch folder that
+    /// `CARGO_TARGET_DIR` named is: cargo tagged the folder itself, so its one build folder is the
+    /// folder whole (see `scan::find_artifacts_throughout`), and it holds no source of its own.
+    pub fn is_its_own_build_folder(&self) -> bool {
+        self.artifacts.iter().any(|dir| dir.path == self.path)
+    }
+
     /// The engine's order, and every sort's last tiebreak: newest activity first, unknown
     /// activity last, then by name and path.
     pub fn newest_first(a: &Project, b: &Project) -> Ordering {
@@ -324,6 +331,17 @@ mod tests {
             ..crate::map::test_support::agent_session("e26ca359-da00", AgentStatus::Busy)
         });
         assert_eq!(space.name(), "Foundry Agent Studio architecture");
+    }
+
+    #[test]
+    fn a_folder_cargo_tagged_whole_is_its_own_build_folder_and_one_holding_a_target_is_not() {
+        let cache = "/private/tmp/claude-501/-Users-me/e26ca359/scratchpad/target-567-fix";
+        let alone = Project {
+            artifacts: vec![cargo_target(cache, measured(700))],
+            ..project_at(cache)
+        };
+        assert!(alone.is_its_own_build_folder());
+        assert!(!sized(measured(300), measured(700)).is_its_own_build_folder());
     }
 
     #[test]

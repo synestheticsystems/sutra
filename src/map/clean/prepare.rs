@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::run::{FolderIdentity, LockedPlan};
-use super::{CargoEnv, CleanError, CleanPlan, Plan, PlanError, Reach, cargo_rules, lock, plan};
+use super::{
+    CargoEnv, CleanError, CleanPlan, ItsProject, Plan, PlanError, Reach, cargo_rules, lock, plan,
+};
 use crate::map::{ArtifactKind, DirUsage, FolderAccess, Project, Snapshot, disk};
 
 /// A clean worked out and ready to go. It holds no lock: a build that starts while a question is
@@ -133,10 +135,27 @@ fn plan_unless_busy(
     } else {
         Reach::Anywhere
     };
+    let project = its_project(clicked, project, map);
     let plan = plan(clicked, project, env, &reach).map_err(PrepareError::Plan)?;
     // Taken only to refuse now, not once the clean's turn comes, when a build is using a folder.
     let identities = lock(&plan).map_err(PrepareError::Locks)?.identities();
     Ok((plan, identities))
+}
+
+/// What the project at `project` is to `clicked`, a build folder in it, as `map` shows them: the
+/// folder itself when the map shows the project as its own build folder, and else a project holding
+/// source. A project the map does not show counts as holding source, so its clean keeps it.
+fn its_project<'a>(clicked: &Path, project: &'a Path, map: &Snapshot) -> ItsProject<'a> {
+    let standing_alone = clicked == project
+        && map
+            .projects
+            .iter()
+            .any(|on_map| on_map.path == project && on_map.is_its_own_build_folder());
+    if standing_alone {
+        ItsProject::Itself
+    } else {
+        ItsProject::At(project)
+    }
 }
 
 fn prepared(
@@ -277,11 +296,11 @@ mod tests {
 
     use super::*;
     use crate::map::clean::locks::tests::hold_like_cargo;
-    use crate::map::clean::{CleanPlan, Origin, PlannedFolder, Progress, Refusal};
+    use crate::map::clean::{CleanPlan, Held, Origin, PlannedFolder, Progress, Refusal};
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, cargo_target, project_at, snapshot_of, usage,
     };
-    use crate::map::{KeptOutBy, Measurement, PrivateFolder};
+    use crate::map::{ArtifactDir, KeptOutBy, Measurement, PrivateFolder, scan};
 
     /// A package building in the fixture's `shared` folder.
     fn package_building_in_shared(fixture: &TempDir, dir: &str) {
@@ -468,9 +487,8 @@ mod tests {
     #[test]
     fn a_scratch_build_folder_no_workspace_holds_is_emptied_but_never_while_a_build_uses_it() {
         let fixture = TempDir::new("prepare-scratch");
-        let session = fixture.dir("claude-501/-Users-me/e26ca359");
         let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
-        fixture.write(&format!("{scratchpad}/notes.md"), "kept");
+        fixture.write(&format!("{scratchpad}/r567/notes.md"), "kept");
         fixture.write(
             &format!("{scratchpad}/r567/target/CACHEDIR.TAG"),
             CACHEDIR_TAG,
@@ -480,20 +498,21 @@ mod tests {
             &format!("{scratchpad}/r567/target/debug/deps/libfoundry.rlib"),
             [3; 64 * 1024],
         );
-        let target = fixture.path(&format!("{scratchpad}/r567/target"));
+        let scratch_folder = fixture.path(&format!("{scratchpad}/r567"));
+        let target = scratch_folder.join("target");
         let map = snapshot_of(Vec::new());
         let env = fixture.cargo_env();
 
         let building = hold_like_cargo(&lock);
         assert_eq!(
-            prepare(&target, &session, &map, &env),
+            prepare(&target, &scratch_folder, &map, &env),
             Err(PrepareError::Locks(CleanError::BuildRunning {
                 lock: lock.clone()
             }))
         );
         drop(building);
 
-        let prepared = prepare(&target, &session, &map, &env).unwrap();
+        let prepared = prepare(&target, &scratch_folder, &map, &env).unwrap();
         assert!(!prepared.sharing.reaches_other_projects(), "so no question");
         let cleaned = prepared
             .lock()
@@ -504,7 +523,72 @@ mod tests {
         assert!(cleaned.folders[0].bytes >= 64 * 1024);
         assert!(target.join("CACHEDIR.TAG").exists() && lock.exists());
         assert!(!target.join("debug/deps").exists());
-        assert!(fixture.path(&format!("{scratchpad}/notes.md")).exists());
+        assert!(scratch_folder.join("notes.md").exists());
+    }
+
+    #[test]
+    fn a_scratch_folder_cargo_tagged_whole_is_found_its_own_build_folder_and_emptied_as_one() {
+        let fixture = TempDir::new("prepare-standing-alone");
+        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
+        fixture.write(
+            &format!("{scratchpad}/target-567-fix/CACHEDIR.TAG"),
+            CACHEDIR_TAG,
+        );
+        let lock = fixture.write(
+            &format!("{scratchpad}/target-567-fix/debug/.cargo-build-lock"),
+            "",
+        );
+        fixture.write(
+            &format!("{scratchpad}/target-567-fix/debug/deps/libfoundry.rlib"),
+            [3; 64 * 1024],
+        );
+        let folder = fixture.path(&format!("{scratchpad}/target-567-fix"));
+        // Discovery searches a scratch folder for its build folders this way.
+        let found = scan::find_artifacts_throughout(&folder);
+        assert_eq!(found, [(folder.clone(), ArtifactKind::CargoTarget)]);
+        let artifacts = found.into_iter().map(|(path, kind)| ArtifactDir {
+            path,
+            kind,
+            measurement: Measurement::Pending,
+        });
+        let map = snapshot_of(vec![Project {
+            artifacts: artifacts.collect(),
+            ..project_at(&folder)
+        }]);
+
+        let prepared = prepare(&folder, &folder, &map, &fixture.cargo_env()).unwrap();
+        let cleaned = prepared
+            .lock()
+            .unwrap()
+            .delete(&Progress::default())
+            .unwrap();
+
+        assert!(cleaned.folders[0].bytes >= 64 * 1024);
+        assert!(folder.join("CACHEDIR.TAG").exists() && lock.exists());
+        assert!(!folder.join("debug/deps").exists());
+    }
+
+    #[test]
+    fn a_folder_the_map_does_not_show_as_its_own_build_folder_keeps_its_project() {
+        let fixture = TempDir::new("prepare-not-standing-alone");
+        let tag = fixture.write("scratchpad/target-567-fix/CACHEDIR.TAG", CACHEDIR_TAG);
+        let folder = tag.parent().unwrap().to_path_buf();
+
+        assert_eq!(
+            prepare(
+                &folder,
+                &folder,
+                &snapshot_of(Vec::new()),
+                &fixture.cargo_env()
+            ),
+            Err(PrepareError::Plan(PlanError::Refused {
+                folder: folder.clone(),
+                reason: Refusal::Holds {
+                    held: Held::Project,
+                    path: folder,
+                },
+            }))
+        );
     }
 
     #[test]

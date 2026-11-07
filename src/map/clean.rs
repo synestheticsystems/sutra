@@ -21,13 +21,15 @@
 //!     folder cargo made, it goes under the same locks, and a question says what it is: left over
 //!     from an earlier build, or where another workspace builds. A folder no workspace holds at
 //!     all, as one `CARGO_TARGET_DIR` named in a scratch folder, is a cache by cargo's own tag,
-//!     and its delete empties it as any clean does, keeping its tag and lock files.
+//!     and its delete empties it as any clean does, keeping its tag and lock files. Such a cache
+//!     can be a scratch folder whole, and then a project of its own (`ItsProject::Itself`).
 //!
 //! Where Sutra refuses a folder cargo would delete (`safety`), each refusal naming the folder:
 //!   - a folder that config or the environment named, when cargo never marked it as its own
 //!     with a `CACHEDIR.TAG` (cargo checks the tag only for `--target-dir`, so a typo such as
 //!     `target-dir = "."` would make it delete source code);
-//!   - a folder that holds the workspace, the project, the home folder or `CARGO_HOME`;
+//!   - a folder that holds the workspace, the project, the home folder or `CARGO_HOME`, the
+//!     project kept unless it is the cache being cleaned;
 //!   - a folder that is a symlink, where cargo would remove the link alone and free nothing;
 //!   - in the store edition, a folder outside the folders the user granted.
 //!
@@ -53,7 +55,7 @@ pub use idle::{
 };
 pub use prepare::{PrepareError, Prepared, Sharing, prepare, prepare_each};
 pub use run::{CleanError, Cleaned, Freed, LockedPlan, Progress, lock};
-pub use safety::{Held, Reach, Refusal};
+pub use safety::{Held, ItsProject, Reach, Refusal};
 
 /// What deleting the clicked folder means.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,11 +118,11 @@ pub enum PlanError {
     Refused { folder: PathBuf, reason: Refusal },
 }
 
-/// Work out what cleaning `clicked`, a build folder in the project at `project`, deletes. The
-/// environment cargo would see is `env`; `reach` is where Sutra may delete.
+/// Work out what cleaning `clicked`, a build folder of `project`, deletes. The environment cargo
+/// would see is `env`; `reach` is where Sutra may delete.
 pub fn plan(
     clicked: &Path,
-    project: &Path,
+    project: ItsProject,
     env: &CargoEnv,
     reach: &Reach,
 ) -> Result<Plan, PlanError> {
@@ -145,7 +147,8 @@ pub fn plan(
         Err(PlanError::Cargo(CargoRefusal::NoManifest { .. })) => None,
         Err(err) => return Err(err),
     };
-    let protected = |workspace: Option<&Path>| safety::Protected::new(workspace, project, env);
+    let protected =
+        |workspace: Option<&Path>| safety::Protected::new(workspace, project, beside, env);
     match cargo_clean {
         Some(clean) if clean.folders.iter().any(|folder| folder.path == clicked) => {
             let protected = protected(Some(&clean.workspace));
@@ -178,7 +181,7 @@ mod tests {
 
         let plan = plan(
             &target,
-            &fixture.path("app"),
+            ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
             &Reach::Anywhere,
         )
@@ -206,7 +209,7 @@ mod tests {
 
         let plan = plan(
             &stale,
-            &fixture.path("ws"),
+            ItsProject::At(&fixture.path("ws")),
             &fixture.cargo_env(),
             &Reach::Anywhere,
         )
@@ -232,7 +235,7 @@ mod tests {
 
         let plan = plan(
             &orphan,
-            &fixture.path("loose"),
+            ItsProject::At(&fixture.path("loose")),
             &fixture.cargo_env(),
             &Reach::Anywhere,
         )
@@ -250,26 +253,39 @@ mod tests {
     #[test]
     fn a_folder_cargo_tagged_under_any_name_in_no_workspace_is_deleted_alone_and_a_copy_is_not() {
         let fixture = TempDir::new("clean-plan-scratch");
-        let session = fixture.dir("claude-501/-Users-me/e26ca359");
-        let named_otherwise = fixture.write(
-            "claude-501/-Users-me/e26ca359/scratchpad/target-567-fix/CACHEDIR.TAG",
+        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
+        let scratch_folder = |name: &str| fixture.path(&format!("{scratchpad}/{name}"));
+        // A scratch folder `CARGO_TARGET_DIR` named, its own project, and one inside another.
+        let alone = fixture.write(
+            &format!("{scratchpad}/target-567-fix/CACHEDIR.TAG"),
             CACHEDIR_TAG,
         );
-        let named_otherwise = named_otherwise.parent().unwrap().to_path_buf();
+        let alone = alone.parent().unwrap().to_path_buf();
+        let inside = fixture.write(&format!("{scratchpad}/r567/out/CACHEDIR.TAG"), CACHEDIR_TAG);
+        let inside = inside.parent().unwrap().to_path_buf();
         // A build folder copied without its tag, as `cp -R target/debug` leaves one.
-        let copied = fixture.dir("claude-501/-Users-me/e26ca359/scratchpad/mutation/target/debug");
+        let copied = fixture.dir(&format!("{scratchpad}/mutation/target/debug"));
         let copied = copied.parent().unwrap().to_path_buf();
         let env = fixture.cargo_env();
 
         assert_eq!(
-            plan(&named_otherwise, &session, &env, &Reach::Anywhere),
+            plan(&alone, ItsProject::Itself, &env, &Reach::Anywhere),
             Ok(Plan::DeleteFolder {
-                folder: named_otherwise,
+                folder: alone,
                 cargo_clean: None
             })
         );
+        let r567 = scratch_folder("r567");
         assert_eq!(
-            plan(&copied, &session, &env, &Reach::Anywhere),
+            plan(&inside, ItsProject::At(&r567), &env, &Reach::Anywhere),
+            Ok(Plan::DeleteFolder {
+                folder: inside,
+                cargo_clean: None
+            })
+        );
+        let mutation = scratch_folder("mutation");
+        assert_eq!(
+            plan(&copied, ItsProject::At(&mutation), &env, &Reach::Anywhere),
             Err(PlanError::Refused {
                 folder: copied,
                 reason: Refusal::NotCargoMade
@@ -286,7 +302,7 @@ mod tests {
         assert_eq!(
             plan(
                 &gone,
-                &fixture.path("app"),
+                ItsProject::At(&fixture.path("app")),
                 &fixture.cargo_env(),
                 &Reach::Anywhere
             ),
@@ -307,7 +323,7 @@ mod tests {
 
         let refused = plan(
             &target,
-            &fixture.path("app"),
+            ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
             &Reach::Anywhere,
         );
@@ -334,14 +350,24 @@ mod tests {
         let env = fixture.cargo_env();
         let gone = fixture.path("app/nothing");
         assert_eq!(
-            plan(&gone, &fixture.path("app"), &env, &Reach::Anywhere),
+            plan(
+                &gone,
+                ItsProject::At(&fixture.path("app")),
+                &env,
+                &Reach::Anywhere
+            ),
             Err(PlanError::Gone { folder: gone })
         );
 
         fixture.restrict(&fixture.path("app"), 0o000);
 
         assert_eq!(
-            plan(&target, &fixture.path("app"), &env, &Reach::Anywhere),
+            plan(
+                &target,
+                ItsProject::At(&fixture.path("app")),
+                &env,
+                &Reach::Anywhere
+            ),
             Err(PlanError::Unreadable {
                 path: target,
                 kind: io::ErrorKind::PermissionDenied,
@@ -359,7 +385,7 @@ mod tests {
 
         let refused = plan(
             &target,
-            &fixture.path("app"),
+            ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
             &Reach::Anywhere,
         );

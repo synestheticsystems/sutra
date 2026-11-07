@@ -9,7 +9,9 @@
 //!     `crates/cargo-util/src/paths.rs:802-815`), which every tool's tag starts with; Sutra asks
 //!     also for the words that say cargo wrote it (`scan::holds_cargo_tag`). Cargo's default
 //!     `target` beside the root manifest needs no tag.
-//!   - No folder may hold the workspace, the project, the home folder or `CARGO_HOME`.
+//!   - No folder may hold the workspace, the project, the home folder or `CARGO_HOME`. A cache
+//!     standing alone, a build folder that is a project of its own (`ItsProject::Itself`), has no
+//!     project around it to keep: its clean empties it as any clean empties a build folder.
 //!   - A symlink is refused: cargo would remove the link alone, which frees nothing.
 //!   - In the store edition, a folder outside the granted folders is refused before anything is
 //!     tried, rather than failing halfway.
@@ -31,6 +33,19 @@ pub enum Reach<'a> {
     Anywhere,
     /// Only inside these folders: the store edition, inside the folders the user granted.
     Within(&'a [PathBuf]),
+}
+
+/// The project a build folder to clean is in, which says what its clean must keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItsProject<'a> {
+    /// The project at this folder, which holds source of its own, so no clean may take the folder
+    /// with it.
+    At(&'a Path),
+    /// The build folder itself: a Cargo cache standing alone, as a scratch folder that
+    /// `CARGO_TARGET_DIR` named is (see `Project::is_its_own_build_folder`). There is no source in
+    /// it to keep, and its clean empties it as any clean empties a build folder, its tag and lock
+    /// files kept.
+    Itself,
 }
 
 /// Why Sutra will not delete a folder that `cargo clean` would.
@@ -66,15 +81,26 @@ pub(super) struct Protected {
 
 impl Protected {
     /// The workspace being cleaned (`None` for a folder no workspace holds), the project the
-    /// clicked folder is in, the home folder and `CARGO_HOME` as cargo would have it there.
-    pub(super) fn new(workspace: Option<&Path>, project: &Path, env: &CargoEnv) -> Protected {
+    /// clicked folder is in when it holds source, the home folder and `CARGO_HOME` as cargo would
+    /// have it there. Cargo runs at the workspace's root, else in the project, else beside the
+    /// clicked folder, at `beside`, as it runs for a cache standing alone.
+    pub(super) fn new(
+        workspace: Option<&Path>,
+        project: ItsProject,
+        beside: &Path,
+        env: &CargoEnv,
+    ) -> Protected {
         let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let cwd = workspace.unwrap_or(project);
+        let project = match project {
+            ItsProject::At(folder) => Some(folder),
+            ItsProject::Itself => None,
+        };
+        let cwd = workspace.or(project).unwrap_or(beside);
         let folders = workspace
             .map(|workspace| (Held::Workspace, canonical(workspace)))
             .into_iter()
+            .chain(project.map(|project| (Held::Project, canonical(project))))
             .chain([
-                (Held::Project, canonical(project)),
                 (Held::Home, canonical(&env.home)),
                 (Held::CargoHome, canonical(&env.cargo_home_at(cwd))),
             ])
@@ -167,6 +193,18 @@ mod tests {
         }
     }
 
+    /// What the clean of a build folder in the fixture's project at `project` keeps, `workspace`
+    /// the workspace it cleans.
+    fn protected_in(fixture: &TempDir, workspace: Option<&str>, project: &str) -> Protected {
+        let workspace = workspace.map(|workspace| fixture.path(workspace));
+        Protected::new(
+            workspace.as_deref(),
+            ItsProject::At(&fixture.path(project)),
+            fixture.root(),
+            &fixture.cargo_env(),
+        )
+    }
+
     fn reason(result: Result<(), PlanError>) -> Refusal {
         match result {
             Err(PlanError::Refused { reason, .. }) => reason,
@@ -178,11 +216,7 @@ mod tests {
     fn a_configured_folder_needs_cargos_tag_and_the_default_does_not() {
         let fixture = TempDir::new("safety-tag");
         fixture.dir("home/.cargo");
-        let protected = Protected::new(
-            Some(&fixture.path("app")),
-            &fixture.path("app"),
-            &fixture.cargo_env(),
-        );
+        let protected = protected_in(&fixture, Some("app"), "app");
         let tagged = fixture
             .write("out/CACHEDIR.TAG", CACHEDIR_TAG)
             .parent()
@@ -224,11 +258,7 @@ mod tests {
         fixture.dir("home/.cargo");
         fixture.dir("ws");
         fixture.dir("wt");
-        let protected = Protected::new(
-            Some(&fixture.path("ws")),
-            &fixture.path("wt"),
-            &fixture.cargo_env(),
-        );
+        let protected = protected_in(&fixture, Some("ws"), "wt");
         for (folder, held) in [
             ("ws", Held::Workspace),
             ("wt", Held::Project),
@@ -254,11 +284,7 @@ mod tests {
     fn links_files_and_folders_outside_the_grant_are_refused() {
         let fixture = TempDir::new("safety-kinds");
         fixture.dir("home/.cargo");
-        let protected = Protected::new(
-            Some(&fixture.path("app")),
-            &fixture.path("app"),
-            &fixture.cargo_env(),
-        );
+        let protected = protected_in(&fixture, Some("app"), "app");
         let default = |path: PathBuf| PlannedFolder {
             path,
             origin: Origin::Default,
@@ -294,7 +320,7 @@ mod tests {
     fn a_folder_deleted_alone_must_be_one_cargo_made() {
         let fixture = TempDir::new("safety-delete-folder");
         fixture.dir("home/.cargo");
-        let protected = Protected::new(None, &fixture.path("app"), &fixture.cargo_env());
+        let protected = protected_in(&fixture, None, "app");
         fixture.write("app/crates/a/Cargo.toml", "");
         let beside_manifest = fixture.dir("app/crates/a/target");
         let tagged = fixture.write("app/tools/target/CACHEDIR.TAG", CACHEDIR_TAG);
@@ -312,6 +338,41 @@ mod tests {
         assert_eq!(
             reason(check_delete_folder(&site, &protected, &Reach::Anywhere)),
             Refusal::NotCargoMade
+        );
+    }
+
+    #[test]
+    fn a_cache_standing_alone_is_emptied_whole_where_a_project_at_its_folder_is_kept() {
+        let fixture = TempDir::new("safety-standing-alone");
+        fixture.dir("home/.cargo");
+        let cache = fixture.write("scratchpad/target-567-fix/CACHEDIR.TAG", CACHEDIR_TAG);
+        let cache = cache.parent().unwrap().to_path_buf();
+        let tagged_home = fixture.write("home/CACHEDIR.TAG", CACHEDIR_TAG);
+        let tagged_home = tagged_home.parent().unwrap().to_path_buf();
+        let beside = fixture.path("scratchpad");
+        let env = fixture.cargo_env();
+        let alone = Protected::new(None, ItsProject::Itself, &beside, &env);
+        let in_project = Protected::new(None, ItsProject::At(&cache), &beside, &env);
+
+        assert_eq!(
+            check_delete_folder(&cache, &alone, &Reach::Anywhere),
+            Ok(())
+        );
+        assert_eq!(
+            reason(check_delete_folder(&cache, &in_project, &Reach::Anywhere)),
+            Refusal::Holds {
+                held: Held::Project,
+                path: cache.clone()
+            },
+            "a project holding source keeps its folder"
+        );
+        assert_eq!(
+            reason(check_delete_folder(&tagged_home, &alone, &Reach::Anywhere)),
+            Refusal::Holds {
+                held: Held::Home,
+                path: tagged_home.clone()
+            },
+            "and the home folder is kept whatever the project"
         );
     }
 }
