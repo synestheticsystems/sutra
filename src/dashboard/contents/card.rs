@@ -12,7 +12,7 @@ mod tray;
 
 pub use agents::{AgentBadge, AgentLook};
 pub use header::{Chip, ScratchMark};
-pub use lozenges::{UnitLook, UnitLozenge};
+pub use lozenges::{Lozenge, LozengeLook};
 pub use robots::Robot;
 pub use tray::{DiskUse, Tray, TrayFolder};
 
@@ -47,9 +47,9 @@ pub struct Card {
     pub age: Option<String>,
     /// Why the folder cannot be read, above the lozenges that sources outside it still show.
     pub unreadable: Option<Unreadable>,
-    /// What serves in the folder: its dev-runner units, then the ports its processes listen on.
-    /// The name keeps the word from when every lozenge was a unit's.
-    pub units: Vec<UnitLozenge>,
+    /// What serves in the folder: its dev-runner units, then the ports its processes listen on
+    /// and its Docker containers publish.
+    pub lozenges: Vec<Lozenge>,
     /// The card's tray along its bottom: the folder's disk use, then the agents in it, sessions
     /// before subagents.
     pub tray: Option<Tray>,
@@ -112,7 +112,7 @@ pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &Card
         chip: identity.chip,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
-        units: lozenges::lozenges(project, ctx),
+        lozenges: lozenges::lozenges(project, ctx),
         tray: tray::tray(
             project,
             sessions,

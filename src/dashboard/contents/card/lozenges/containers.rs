@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::{UnitLook, UnitLozenge, link, reach};
+use super::{Lozenge, LozengeLook, link, reach};
 use crate::dashboard::format;
 use crate::map::docker::{Container, PublishedPort};
 
@@ -27,7 +27,7 @@ pub(in crate::dashboard::contents) fn lozenges(
     on: CardOf,
     shown: &BTreeSet<u16>,
     home: &Path,
-) -> Vec<UnitLozenge> {
+) -> Vec<Lozenge> {
     containers
         .iter()
         .flat_map(|container| of(container, on, shown, home))
@@ -36,7 +36,7 @@ pub(in crate::dashboard::contents) fn lozenges(
 
 /// The lozenges of `container`: one for each TCP port it publishes but those in `shown`, or one
 /// with no port when it publishes none.
-fn of(container: &Container, on: CardOf, shown: &BTreeSet<u16>, home: &Path) -> Vec<UnitLozenge> {
+fn of(container: &Container, on: CardOf, shown: &BTreeSet<u16>, home: &Path) -> Vec<Lozenge> {
     let folder = match on {
         CardOf::Project(project) => container.folder_in(project),
         CardOf::Docker => container.folders().next(),
@@ -63,11 +63,11 @@ fn of(container: &Container, on: CardOf, shown: &BTreeSet<u16>, home: &Path) -> 
         .collect()
 }
 
-fn lozenge(container: &Container, port: Option<u16>, tooltip: Vec<String>) -> UnitLozenge {
-    UnitLozenge {
+fn lozenge(container: &Container, port: Option<u16>, tooltip: Vec<String>) -> Lozenge {
+    Lozenge {
         name: image_name(container).to_string(),
         port: port.map(|port| format!(":{port}")),
-        look: UnitLook::Up,
+        look: LozengeLook::Up,
         beside: None,
         muted: false,
         notifications_off: false,
@@ -143,7 +143,7 @@ mod tests {
             (lozenge.name.as_str(), lozenge.port.as_deref()),
             ("testdb", Some(":3306"))
         );
-        assert_eq!(lozenge.look, UnitLook::Up);
+        assert_eq!(lozenge.look, LozengeLook::Up);
         assert_eq!(lozenge.link.as_deref(), Some("http://localhost:3306"));
         assert_eq!(
             lozenge.tooltip,

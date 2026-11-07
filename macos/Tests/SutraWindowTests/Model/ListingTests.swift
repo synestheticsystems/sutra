@@ -24,7 +24,7 @@ struct ListingTests {
 
     @Test func aFoldedGroupListsItsLineAlone() {
         let folded = GroupFold.folded(
-            sessions: [], subagents: [], waiting: false, units: [], moreUnits: nil
+            sessions: [], subagents: [], waiting: false, lozenges: [], moreLozenges: nil
         )
         let rows = shown(.rows(rows: [.group(line: repository, fold: folded)]))
         #expect(rows == ["line app, folded"])
@@ -32,7 +32,7 @@ struct ListingTests {
 
     @Test func dockersCardIsARowOfItsOwnKnownAsTheOneDockerCard() {
         let docker = DockerCard(
-            name: "Docker", nameTooltip: "", age: nil, units: [], tray: nil,
+            name: "Docker", nameTooltip: "", age: nil, lozenges: [], tray: nil,
             location: "~/.docker/run/docker.sock"
         )
         var models = CardModels()
@@ -74,7 +74,7 @@ struct ListingTests {
     private func card(_ path: String) -> Card {
         Card(
             path: path, location: path, name: path, nameTooltip: "", chip: nil, age: nil,
-            unreadable: nil, units: [], tray: nil, waiting: false, menu: []
+            unreadable: nil, lozenges: [], tray: nil, waiting: false, menu: []
         )
     }
 

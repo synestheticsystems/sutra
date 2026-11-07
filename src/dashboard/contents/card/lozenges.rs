@@ -18,14 +18,14 @@ use crate::dashboard::format;
 use crate::map::Project;
 
 /// One lozenge, as `(web :3000)` reads: a dev-runner unit, a port a process listens on, or a Docker
-/// container, by a port it publishes. Its name keeps the word from when every lozenge was a unit's.
+/// container, by a port it publishes.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct UnitLozenge {
+pub struct Lozenge {
     /// The unit's name, the process's, or the short name of the image the container runs.
     pub name: String,
     /// The port as the window draws it after the name, colon included: `:3000`.
     pub port: Option<String>,
-    pub look: UnitLook,
+    pub look: LozengeLook,
     /// What a unit under way or in trouble says of itself.
     pub beside: Option<String>,
     /// The unit's announcements are muted. A process makes none.
@@ -38,7 +38,7 @@ pub struct UnitLozenge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum UnitLook {
+pub enum LozengeLook {
     /// Up: green, as a unit that is up, a port that is listening and a running container are.
     Up,
     /// On the way: blue, so amber stays for what needs the user.
@@ -54,7 +54,7 @@ pub enum UnitLook {
 pub(in crate::dashboard::contents) fn lozenges(
     project: &Project,
     ctx: &CardContext,
-) -> Vec<UnitLozenge> {
+) -> Vec<Lozenge> {
     let mut shown = BTreeSet::new();
     let mut lozenges = Vec::new();
     if let Some(env) = &project.environment {

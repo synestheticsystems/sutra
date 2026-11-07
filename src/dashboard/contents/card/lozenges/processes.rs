@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::path::Path;
 
-use super::{UnitLook, UnitLozenge, link, reach};
+use super::{Lozenge, LozengeLook, link, reach};
 use crate::dashboard::format;
 use crate::map::processes::ListeningProcess;
 
@@ -20,14 +20,14 @@ pub(super) fn lozenges(
     listening: &[ListeningProcess],
     shown: &BTreeSet<u16>,
     home: &Path,
-) -> Vec<UnitLozenge> {
+) -> Vec<Lozenge> {
     let ports: BTreeSet<u16> = listening.iter().flat_map(ListeningProcess::ports).collect();
     let ports = ports.difference(shown);
     ports.map(|&port| lozenge(port, listening, home)).collect()
 }
 
 /// The lozenge of `port`, which some of `listening` listen on.
-fn lozenge(port: u16, listening: &[ListeningProcess], home: &Path) -> UnitLozenge {
+fn lozenge(port: u16, listening: &[ListeningProcess], home: &Path) -> Lozenge {
     let on_port = |process: &&ListeningProcess| process.listens_on(port);
     let processes: Vec<&ListeningProcess> = listening.iter().filter(on_port).collect();
     let addresses: BTreeSet<IpAddr> = processes
@@ -42,10 +42,10 @@ fn lozenge(port: u16, listening: &[ListeningProcess], home: &Path) -> UnitLozeng
         tooltip.extend(process.command.as_deref().map(|run| shortened(run, home)));
         tooltip.push(format::tilde(&process.folder, home));
     }
-    UnitLozenge {
+    Lozenge {
         name: processes[0].name.clone(),
         port: Some(format!(":{port}")),
-        look: UnitLook::Up,
+        look: LozengeLook::Up,
         beside: None,
         muted: false,
         notifications_off: false,
@@ -95,7 +95,7 @@ mod tests {
 
         assert_eq!(lozenge.name, "node");
         assert_eq!(lozenge.port.as_deref(), Some(":5177"));
-        assert_eq!(lozenge.look, UnitLook::Up);
+        assert_eq!(lozenge.look, LozengeLook::Up);
         assert_eq!(lozenge.link.as_deref(), Some("http://localhost:5177"));
         assert_eq!(
             lozenge.tooltip,

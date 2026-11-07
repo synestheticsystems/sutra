@@ -10,7 +10,7 @@ mod group;
 
 pub use docker::DockerCard;
 pub use elsewhere::ElsewhereLine;
-pub use group::{GroupFold, GroupLine, MoreUnits, Parent};
+pub use group::{GroupFold, GroupLine, MoreLozenges, Parent};
 
 use std::path::PathBuf;
 

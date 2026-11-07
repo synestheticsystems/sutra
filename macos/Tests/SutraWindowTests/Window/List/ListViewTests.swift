@@ -137,7 +137,7 @@ struct ListViewTests {
     ) -> Card {
         Card(
             path: path, location: path, name: name, nameTooltip: "", chip: chip, age: "3h",
-            unreadable: nil, units: [],
+            unreadable: nil, lozenges: [],
             tray: Tray(
                 disk: DiskUse(
                     total: "1.2 GB", totalTooltip: nil, warning: nil, folders: [], progress: nil

@@ -110,8 +110,8 @@ struct Arrangement: Equatable {
             sessions: cards.flatMap { $0.sessionBadges(at: moment) },
             subagents: cards.flatMap { $0.subagentBadges(at: moment) },
             waiting: cards.contains { $0.waiting(at: moment) },
-            units: units.prefix(2).map(\.lozenge),
-            moreUnits: rest.isEmpty ? nil : MoreUnits(
+            lozenges: units.prefix(2).map(\.lozenge),
+            moreLozenges: rest.isEmpty ? nil : MoreLozenges(
                 label: "+\(rest.count)",
                 tooltip: rest.map { "\($0.name) :\($0.port)" }.joined(separator: "\n")
             )

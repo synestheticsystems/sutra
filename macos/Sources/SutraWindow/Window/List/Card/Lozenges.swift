@@ -1,15 +1,16 @@
 import SutraCore
 import SwiftUI
 
-/// One dev-runner unit, as `(web :3000)` reads: the capsule's colour says its state. Beside it
-/// stands what a unit under way or in trouble says of itself, and a sign for each announcement the
-/// user switched off. A click opens the unit in the browser.
-struct UnitLozengeView: View {
-    let lozenge: UnitLozenge
+/// One lozenge, as `(web :3000)` reads: a dev-runner unit, a port a process listens on, or a Docker
+/// container's port. The capsule's colour says its state. Beside it stands what a unit under way or
+/// in trouble says of itself, and a sign for each announcement the user switched off. A click opens
+/// the port in the browser.
+struct LozengeView: View {
+    let lozenge: Lozenge
 
     var body: some View {
         HStack(spacing: 6) {
-            UnitCapsule(lozenge: lozenge)
+            LozengeCapsule(lozenge: lozenge)
             if let beside = lozenge.beside {
                 Text(beside)
                     .font(.callout)
@@ -30,20 +31,24 @@ struct UnitLozengeView: View {
     }
 }
 
-/// A unit's capsule alone, as `(web :3000)` reads, its colour saying the unit's state: what a
-/// folded line shows of the servers in the cards it holds.
-struct UnitCapsule: View {
-    let lozenge: UnitLozenge
+/// A lozenge's capsule alone, as `(web :3000)` reads: its name and port in the ink of its state, on
+/// a capsule of that state's fill. What a folded line shows of the servers in the cards it holds.
+struct LozengeCapsule: View {
+    let lozenge: Lozenge
 
     var body: some View {
-        Lozenge(ink: lozenge.look.ink, fill: lozenge.look.fill) {
-            HStack(spacing: 3) {
-                Text(lozenge.name)
-                if let port = lozenge.port {
-                    Text(port).monospaced()
-                }
+        HStack(spacing: 3) {
+            Text(lozenge.name)
+            if let port = lozenge.port {
+                Text(port).monospaced()
             }
         }
+        .font(.callout.weight(.medium))
+        .foregroundStyle(lozenge.look.ink)
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(lozenge.look.fill))
     }
 }
 
@@ -58,23 +63,6 @@ private struct SwitchedOff: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .accessibilityLabel(meaning)
-    }
-}
-
-/// A lozenge's shape: `label` in `ink` on a capsule of `fill`.
-private struct Lozenge<Label: View>: View {
-    let ink: Color
-    let fill: Color
-    @ViewBuilder let label: () -> Label
-
-    var body: some View {
-        label()
-            .font(.callout.weight(.medium))
-            .foregroundStyle(ink)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(fill))
     }
 }
 

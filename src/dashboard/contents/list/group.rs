@@ -9,7 +9,7 @@
 
 mod fold;
 
-pub use fold::{GroupFold, MoreUnits};
+pub use fold::{GroupFold, MoreLozenges};
 
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::contents::card::{self, CardContext, Naming};

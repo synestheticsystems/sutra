@@ -52,15 +52,15 @@ private struct Happening: View {
     let card: Card
 
     var body: some View {
-        if card.unreadable != nil || !card.units.isEmpty {
+        if card.unreadable != nil || !card.lozenges.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 if let unreadable = card.unreadable {
                     UnreadableLine(unreadable: unreadable)
                 }
-                if !card.units.isEmpty {
+                if !card.lozenges.isEmpty {
                     WrappingLine(spacing: 6) {
-                        ForEach(Array(card.units.enumerated()), id: \.offset) { _, unit in
-                            UnitLozengeView(lozenge: unit)
+                        ForEach(Array(card.lozenges.enumerated()), id: \.offset) { _, lozenge in
+                            LozengeView(lozenge: lozenge)
                         }
                     }
                 }

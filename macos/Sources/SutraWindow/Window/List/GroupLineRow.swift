@@ -19,9 +19,9 @@ struct GroupLineRow: View {
             header(open: true)
                 .padding(.horizontal, FoldingLine.inset)
                 .padding(.vertical, FoldingLine.padding)
-        case .folded(let sessions, let subagents, let waiting, let units, let moreUnits):
+        case .folded(let sessions, let subagents, let waiting, let lozenges, let moreLozenges):
             HStack(spacing: 12) {
-                header(open: false, units: units, moreUnits: moreUnits)
+                header(open: false, lozenges: lozenges, moreLozenges: moreLozenges)
                 if !sessions.isEmpty || !subagents.isEmpty {
                     // Laid out first and never cut, as on a card's tray.
                     TrayAgents(sessions: sessions, subagents: subagents)
@@ -46,10 +46,10 @@ struct GroupLineRow: View {
 
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
     /// the name and the total, in a session's scratch mark; folded, the servers running in its
-    /// cards after them, `units` drawn and `moreUnits` counted. A click on a server here opens the
-    /// cards, where a server opens in the browser.
+    /// cards after them, `lozenges` drawn and `moreLozenges` counted. A click on a server here
+    /// opens the cards, where a server opens in the browser.
     private func header(
-        open: Bool, units: [UnitLozenge] = [], moreUnits: MoreUnits? = nil
+        open: Bool, lozenges: [Lozenge] = [], moreLozenges: MoreLozenges? = nil
     ) -> some View {
         Button {
             dashboard.perform(.toggleFold(parent: line.parent))
@@ -70,13 +70,13 @@ struct GroupLineRow: View {
                             Text(total)
                         }
                     }
-                    ForEach(Array(units.enumerated()), id: \.offset) { _, unit in
-                        UnitCapsule(lozenge: unit)
-                            .hoverTip(unit.tooltip)
+                    ForEach(Array(lozenges.enumerated()), id: \.offset) { _, lozenge in
+                        LozengeCapsule(lozenge: lozenge)
+                            .hoverTip(lozenge.tooltip)
                     }
-                    if let moreUnits {
-                        Text(moreUnits.label)
-                            .hoverTip(moreUnits.tooltip)
+                    if let moreLozenges {
+                        Text(moreLozenges.label)
+                            .hoverTip(moreLozenges.tooltip)
                     }
                 }
             }

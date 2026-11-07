@@ -27,7 +27,7 @@ extension Project {
             chip: nestedBranch == nil ? worktree.map(\.chip) : nil,
             age: Words.age(of: activity, at: now),
             unreadable: nil,
-            units: units.map(\.lozenge),
+            lozenges: units.map(\.lozenge),
             tray: Tray(
                 disk: diskUse,
                 sessions: sessionBadges(at: moment),
@@ -91,8 +91,8 @@ extension Worktree {
 
 extension Unit {
     /// Its lozenge, up and ready, which opens its port in the browser on a click.
-    var lozenge: UnitLozenge {
-        UnitLozenge(
+    var lozenge: Lozenge {
+        Lozenge(
             name: name, port: ":\(port)", look: .up, beside: nil, muted: false,
             notificationsOff: false, tooltip: "ready", link: "http://localhost:\(port)"
         )

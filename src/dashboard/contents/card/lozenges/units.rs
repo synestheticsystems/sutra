@@ -3,18 +3,18 @@
 //! stands what a unit in trouble or under way says of itself, and a mark for each announcement
 //! switched off; the words for the rest are in its tooltip.
 
-use super::{UnitLook, UnitLozenge, link};
+use super::{Lozenge, LozengeLook, link};
 use crate::model::{Environment, State, UnitStatus};
 use crate::notifications::Notifier;
 
 /// The lozenges of `env`'s units, in the order it lists them.
-pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<UnitLozenge> {
+pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<Lozenge> {
     let stopped = env.has_stopped();
     env.units
         .iter()
         .map(|unit| {
             let port = env.port_for(&unit.name);
-            UnitLozenge {
+            Lozenge {
                 name: unit.name.clone(),
                 port: port.map(|port| format!(":{port}")),
                 look: look(&unit.state, stopped),
@@ -37,13 +37,13 @@ fn worth_saying(state: &State) -> bool {
 /// Up, on the way, failed, or still for the rest. A stopped environment's process is gone, so what
 /// it last published is no longer news, and only a failure, which may say why it stopped, keeps
 /// its look.
-fn look(state: &State, environment_stopped: bool) -> UnitLook {
+fn look(state: &State, environment_stopped: bool) -> LozengeLook {
     match state {
-        State::Failed => UnitLook::Failed,
-        _ if environment_stopped => UnitLook::Still,
-        State::Running | State::Ready => UnitLook::Up,
-        State::Building | State::Starting => UnitLook::Starting,
-        State::Stopped | State::None | State::Other(_) => UnitLook::Still,
+        State::Failed => LozengeLook::Failed,
+        _ if environment_stopped => LozengeLook::Still,
+        State::Running | State::Ready => LozengeLook::Up,
+        State::Building | State::Starting => LozengeLook::Starting,
+        State::Stopped | State::None | State::Other(_) => LozengeLook::Still,
     }
 }
 
@@ -79,11 +79,11 @@ mod tests {
 
     #[test]
     fn a_stopped_environments_last_states_look_still_except_a_failure() {
-        assert_eq!(look(&State::Ready, false), UnitLook::Up);
-        assert_eq!(look(&State::Ready, true), UnitLook::Still);
-        assert_eq!(look(&State::Building, false), UnitLook::Starting);
-        assert_eq!(look(&State::Building, true), UnitLook::Still);
-        assert_eq!(look(&State::Failed, true), UnitLook::Failed);
+        assert_eq!(look(&State::Ready, false), LozengeLook::Up);
+        assert_eq!(look(&State::Ready, true), LozengeLook::Still);
+        assert_eq!(look(&State::Building, false), LozengeLook::Starting);
+        assert_eq!(look(&State::Building, true), LozengeLook::Still);
+        assert_eq!(look(&State::Failed, true), LozengeLook::Failed);
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
 
         assert_eq!(lozenges[0].port.as_deref(), Some(":3000"));
         assert_eq!(lozenges[0].link.as_deref(), Some("http://localhost:3000"));
-        assert_eq!(lozenges[0].look, UnitLook::Still, "its process is gone");
+        assert_eq!(lozenges[0].look, LozengeLook::Still, "its process is gone");
         assert_eq!(lozenges[0].beside.as_deref(), Some("Compiling"));
         assert_eq!(lozenges[1].port, None);
         assert_eq!(lozenges[1].beside, None, "a unit that is up says no more");

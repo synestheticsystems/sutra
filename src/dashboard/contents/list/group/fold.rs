@@ -4,7 +4,7 @@
 //! first of their lozenges up or on their way stand after its total, with a count of the rest.
 
 use crate::dashboard::contents::card::{CardContext, agents, lozenges, subagents};
-use crate::dashboard::{AgentBadge, Card, UnitLook, UnitLozenge};
+use crate::dashboard::{AgentBadge, Card, Lozenge, LozengeLook};
 use crate::map::Project;
 
 /// What stands under a group's line: its cards, or, while the group is folded shut, none, the line
@@ -24,15 +24,15 @@ pub enum GroupFold {
         /// it holds, dev-runner units, ports processes listen on and containers alike, in the
         /// cards' order, as their cards draw them, so folding a group shut never hides that a
         /// server runs in it.
-        units: Vec<UnitLozenge>,
+        lozenges: Vec<Lozenge>,
         /// The lozenges up or on their way past those two; `None` while there are none.
-        more_units: Option<MoreUnits>,
+        more_lozenges: Option<MoreLozenges>,
     },
 }
 
 /// The lozenges a folded line counts past the ones it draws.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct MoreUnits {
+pub struct MoreLozenges {
     /// How many, as `+2` reads.
     pub label: String,
     /// Each by its name and port, a line each, as `api :8787` reads.
@@ -42,40 +42,41 @@ pub struct MoreUnits {
 /// What the line of a folded group shows of `cards`, the cards it holds: a robot for each agent in
 /// them, every session before every subagent, each in the order their cards would stand them, and
 /// whether one of the sessions waits on the user, as would make its card throb; and the servers at
-/// work in them (see `live_units`).
+/// work in them (see `live_lozenges`).
 pub(super) fn folded(cards: &[&Project], ctx: &CardContext) -> GroupFold {
     let sessions = cards
         .iter()
         .flat_map(|card| agents::badges(&card.agents, ctx.now));
     let at_work = cards.iter().flat_map(|card| &card.subagents);
     let waiting = agents::any_waiting(cards.iter().flat_map(|card| &card.agents));
-    let (units, more_units) = live_units(cards, ctx);
+    let (lozenges, more_lozenges) = live_lozenges(cards, ctx);
     GroupFold::Folded {
         sessions: sessions.collect(),
         subagents: subagents::badges(at_work, ctx.now),
         waiting,
-        units,
-        more_units,
+        lozenges,
+        more_lozenges,
     }
 }
 
 /// How many lozenges a folded line draws: enough to say that a server runs, and which, and few
 /// enough to leave the line its name.
-const UNITS_ON_A_FOLDED_LINE: usize = 2;
+const LOZENGES_ON_A_FOLDED_LINE: usize = 2;
 
 /// The lozenges up or on their way in `cards`, as their cards draw them, in the cards' order: the
-/// first `UNITS_ON_A_FOLDED_LINE` of them, and what counts the rest.
-fn live_units(cards: &[&Project], ctx: &CardContext) -> (Vec<UnitLozenge>, Option<MoreUnits>) {
+/// first `LOZENGES_ON_A_FOLDED_LINE` of them, and what counts the rest.
+fn live_lozenges(cards: &[&Project], ctx: &CardContext) -> (Vec<Lozenge>, Option<MoreLozenges>) {
     let lozenges = cards.iter().flat_map(|card| lozenges::lozenges(card, ctx));
-    let live = lozenges.filter(|unit| matches!(unit.look, UnitLook::Up | UnitLook::Starting));
-    let mut shown: Vec<UnitLozenge> = live.collect();
-    let rest = shown.split_off(UNITS_ON_A_FOLDED_LINE.min(shown.len()));
+    let live =
+        lozenges.filter(|lozenge| matches!(lozenge.look, LozengeLook::Up | LozengeLook::Starting));
+    let mut shown: Vec<Lozenge> = live.collect();
+    let rest = shown.split_off(LOZENGES_ON_A_FOLDED_LINE.min(shown.len()));
     let more = (!rest.is_empty()).then(|| {
-        let named = rest.iter().map(|unit| match &unit.port {
-            Some(port) => format!("{} {port}", unit.name),
-            None => unit.name.clone(),
+        let named = rest.iter().map(|lozenge| match &lozenge.port {
+            Some(port) => format!("{} {port}", lozenge.name),
+            None => lozenge.name.clone(),
         });
-        MoreUnits {
+        MoreLozenges {
             label: format!("+{}", rest.len()),
             tooltip: named.collect::<Vec<_>>().join("\n"),
         }
@@ -178,12 +179,14 @@ mod tests {
 
         let (_, fold) = first_group(&map, &folds);
         let GroupFold::Folded {
-            units, more_units, ..
+            lozenges,
+            more_lozenges,
+            ..
         } = fold
         else {
             panic!("folded: {fold:?}");
         };
-        let shown: Vec<(&str, Option<&str>)> = units
+        let shown: Vec<(&str, Option<&str>)> = lozenges
             .iter()
             .map(|unit| (unit.name.as_str(), unit.port.as_deref()))
             .collect();
@@ -193,8 +196,8 @@ mod tests {
             "up or on its way, in the cards' order; not the stopped worker"
         );
         assert_eq!(
-            more_units,
-            Some(MoreUnits {
+            more_lozenges,
+            Some(MoreLozenges {
                 label: "+1".to_string(),
                 tooltip: "docs :4000".to_string(),
             })
@@ -217,12 +220,12 @@ mod tests {
 
         let (_, fold) = first_group(&map, &folds);
 
-        let GroupFold::Folded { units, .. } = fold else {
+        let GroupFold::Folded { lozenges, .. } = fold else {
             panic!("folded: {fold:?}");
         };
-        let shown: Vec<(&str, Option<&str>)> = units
+        let shown: Vec<(&str, Option<&str>)> = lozenges
             .iter()
-            .map(|unit| (unit.name.as_str(), unit.port.as_deref()))
+            .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
             .collect();
         assert_eq!(shown, [("node", Some(":5177"))]);
     }

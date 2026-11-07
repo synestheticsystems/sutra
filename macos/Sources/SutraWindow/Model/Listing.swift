@@ -72,8 +72,8 @@ public enum Row: Identifiable, Equatable {
 public enum Fold: Equatable {
     case open
     case folded(
-        sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool, units: [UnitLozenge],
-        moreUnits: MoreUnits?
+        sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool, lozenges: [Lozenge],
+        moreLozenges: MoreLozenges?
     )
 }
 
@@ -150,11 +150,13 @@ struct CardModels {
                     }
                 case .group(
                     let line,
-                    .folded(let sessions, let subagents, let waiting, let units, let moreUnits)
+                    .folded(
+                        let sessions, let subagents, let waiting, let lozenges, let moreLozenges
+                    )
                 ):
                     let fold = Fold.folded(
-                        sessions: sessions, subagents: subagents, waiting: waiting, units: units,
-                        moreUnits: moreUnits
+                        sessions: sessions, subagents: subagents, waiting: waiting,
+                        lozenges: lozenges, moreLozenges: moreLozenges
                     )
                     shown.append(.groupLine(line: line, fold: fold))
                 case .docker(let card):

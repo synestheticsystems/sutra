@@ -26,10 +26,10 @@ struct DockerCardView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(card.age == nil)
                 }
-                if !card.units.isEmpty {
+                if !card.lozenges.isEmpty {
                     WrappingLine(spacing: 6) {
-                        ForEach(Array(card.units.enumerated()), id: \.offset) { _, unit in
-                            UnitLozengeView(lozenge: unit)
+                        ForEach(Array(card.lozenges.enumerated()), id: \.offset) { _, lozenge in
+                            LozengeView(lozenge: lozenge)
                         }
                     }
                 }

@@ -69,7 +69,7 @@ extension AgentLook {
     }
 }
 
-extension UnitLook {
+extension LozengeLook {
     var ink: Color {
         switch self {
         case .up: Hue.green.ink

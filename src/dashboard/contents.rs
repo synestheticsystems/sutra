@@ -22,12 +22,14 @@ pub(super) mod toolbar;
 pub use action::Action;
 pub use banner::Banner;
 pub use card::{
-    AgentBadge, AgentLook, Card, Chip, DiskUse, Robot, ScratchMark, Tray, TrayFolder, UnitLook,
-    UnitLozenge, Unreadable, UnreadableLook,
+    AgentBadge, AgentLook, Card, Chip, DiskUse, Lozenge, LozengeLook, Robot, ScratchMark, Tray,
+    TrayFolder, Unreadable, UnreadableLook,
 };
 pub use dialog::Dialog;
 pub use footer::Footer;
-pub use list::{DockerCard, ElsewhereLine, GroupFold, GroupLine, List, ListRow, MoreUnits, Parent};
+pub use list::{
+    DockerCard, ElsewhereLine, GroupFold, GroupLine, List, ListRow, MoreLozenges, Parent,
+};
 pub use menu::{MenuAction, MenuEntry};
 pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings};
 pub use toolbar::{CleanControl, DiskGauge, GaugeLook, SortChoice, SortControl, Toolbar};

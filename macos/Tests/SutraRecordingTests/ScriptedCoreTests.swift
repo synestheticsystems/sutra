@@ -40,15 +40,16 @@ struct ScriptedCoreTests {
         let folded = ["cedar-web: folded", "harbor-api", "lantern-docs", "quiet:3"]
         #expect(shown(core.contents()) == folded)
         guard case .rows(let rows) = core.contents().list,
-              case .group(_, .folded(let sessions, let subagents, let waiting, let units, let more))
-                = rows[0]
+              case .group(
+                  _, .folded(let sessions, let subagents, let waiting, let lozenges, let more)
+              ) = rows[0]
         else {
             Issue.record("the repository's line comes first, folded")
             return
         }
         #expect(sessions.count == 3 && subagents.count == 2 && !waiting)
         // The site its main worktree serves stays in sight on the line.
-        #expect(units.map(\.name) == ["web"] && more == nil)
+        #expect(lozenges.map(\.name) == ["web"] && more == nil)
         core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
         #expect(shown(core.contents()) == takeOpening)
         #expect(window.changes == 2)

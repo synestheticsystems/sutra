@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use crate::dashboard::contents::card::lozenges::containers::{self, CardOf};
 use crate::dashboard::contents::card::{CardContext, worth_showing};
 use crate::dashboard::listing::DOCKER;
-use crate::dashboard::{DiskUse, Tray, TrayFolder, UnitLozenge, format};
+use crate::dashboard::{DiskUse, Lozenge, Tray, TrayFolder, format};
 use crate::map::Docker;
 use crate::map::docker::{DockerDisk, Store};
 
@@ -25,9 +25,8 @@ pub struct DockerCard {
     pub name_tooltip: String,
     /// How long ago the newest container on the card was made, as `8d` reads.
     pub age: Option<String>,
-    /// The containers running for no project, a lozenge for each port one publishes, by name. The
-    /// name keeps the word from when every lozenge was a unit's.
-    pub units: Vec<UnitLozenge>,
+    /// The containers running for no project, a lozenge for each port one publishes, by name.
+    pub lozenges: Vec<Lozenge>,
     /// The disk Docker takes, as a project's tray holds its folder's: `None` until Docker has said.
     pub tray: Option<Tray>,
     /// The socket Docker is read through, with `~` for the home folder: shown while the pointer is
@@ -49,7 +48,7 @@ pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
                        Docker takes"
             .to_string(),
         age: newest.map(|then| format::age(then, ctx.now)),
-        units: containers::lozenges(&docker.containers, CardOf::Docker, &ports, ctx.home),
+        lozenges: containers::lozenges(&docker.containers, CardOf::Docker, &ports, ctx.home),
         tray: docker.disk.map(|disk| Tray {
             disk: Some(disk_use(&disk)),
             sessions: Vec::new(),
@@ -217,12 +216,12 @@ mod tests {
 
         assert_eq!(card.name, "Docker");
         assert_eq!(card.age.as_deref(), Some("9d"));
-        let units: Vec<(&str, Option<&str>)> = card
-            .units
+        let lozenges: Vec<(&str, Option<&str>)> = card
+            .lozenges
             .iter()
-            .map(|unit| (unit.name.as_str(), unit.port.as_deref()))
+            .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
             .collect();
-        assert_eq!(units, [("postgres", Some(":55596"))]);
+        assert_eq!(lozenges, [("postgres", Some(":55596"))]);
         assert_eq!(card.tray, None, "Docker has not said what it takes");
         assert_eq!(card.location, "~/.docker/run/docker.sock");
     }
