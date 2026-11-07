@@ -8,7 +8,10 @@ use crate::model::{Environment, State, UnitStatus};
 use crate::notifications::Notifier;
 
 /// The lozenges of `env`'s units, in the order it lists them.
-pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<UnitLozenge> {
+pub(in crate::dashboard::contents) fn lozenges(
+    env: &Environment,
+    notifier: &Notifier,
+) -> Vec<UnitLozenge> {
     let stopped = env.has_stopped();
     env.units
         .iter()

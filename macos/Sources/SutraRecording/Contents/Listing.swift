@@ -82,11 +82,7 @@ struct Arrangement: Equatable {
         let commonDir = repository.worktree.commonDir
         let parent = Parent.repository(commonDir: commonDir)
         let fold: GroupFold = if folded.contains(parent) {
-            .folded(
-                sessions: cards.flatMap { $0.sessionBadges(at: moment) },
-                subagents: cards.flatMap { $0.subagentBadges(at: moment) },
-                waiting: cards.contains { $0.waiting(at: moment) }
-            )
+            folded(cards, at: moment)
         } else {
             .open(cards: cards.map { $0.card(naming: .nested, at: moment) })
         }
@@ -102,6 +98,24 @@ struct Arrangement: Equatable {
             menu: []
         )
         return .group(line: line, fold: fold)
+    }
+
+    /// What a repository's line folded shut shows of `cards` at `moment`: their robots, the
+    /// throb while one waits, and the first two of their servers, every unit of the invented work
+    /// being up, with the rest counted.
+    private func folded(_ cards: [Project], at moment: TimeInterval) -> GroupFold {
+        let units = cards.flatMap(\.units)
+        let rest = units.dropFirst(2)
+        return .folded(
+            sessions: cards.flatMap { $0.sessionBadges(at: moment) },
+            subagents: cards.flatMap { $0.subagentBadges(at: moment) },
+            waiting: cards.contains { $0.waiting(at: moment) },
+            units: units.prefix(2).map(\.lozenge),
+            moreUnits: rest.isEmpty ? nil : MoreUnits(
+                label: "+\(rest.count)",
+                tooltip: rest.map { "\($0.name) :\($0.port)" }.joined(separator: "\n")
+            )
+        )
     }
 
     /// `projects` in the sort, every card alone, as the quiet section lists them in every sort.

@@ -176,11 +176,16 @@ pub enum ListRow {
     },
     /// The cards that share a parent, in the Activity sort, where two or more of a repository's, or
     /// any of a session's, are listed together: a line naming the parent, with the disk its cards
-    /// take, then the cards, nested under it, unless the line holds them folded. The line names what the cards share, so each
-    /// goes by what sets it apart: a worktree by its branch, or on no branch by its folder, and a
-    /// scratch folder by its own name. A click on the line folds the group shut, and another opens
-    /// it (`Action::ToggleFold`).
-    Group { line: GroupLine, fold: GroupFold },
+    /// take, then the cards, nested under it, unless the line holds them folded. The line names
+    /// what the cards share, so each goes by what sets it apart: a worktree by its branch, or on no
+    /// branch by its folder, and a scratch folder by its own name. A click on the line folds the
+    /// group shut, and another opens it (`Action::ToggleFold`).
+    Group {
+        line: GroupLine,
+        // Boxed, as a line and what it holds dwarf the other rows; the window receives it as a
+        // plain fold.
+        fold: Box<GroupFold>,
+    },
     /// The agents working outside every project, under `heading`: a line for each session, in the
     /// map's order, then one for each other folder subagents work in, in the order of the first
     /// subagent there. No folder has two lines of subagents, and none moves when a status changes.
@@ -234,7 +239,7 @@ pub enum Parent {
 }
 
 /// What stands under a group's line: its cards, or, while the group is folded shut, none, the line
-/// itself showing the agents in those cards.
+/// itself showing the agents and the dev servers in those cards.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum GroupFold {
     /// The cards, nested under the line, a repository's main worktree first.
@@ -246,7 +251,22 @@ pub enum GroupFold {
         subagents: Vec<AgentBadge>,
         /// One of those sessions waits on the user, so the line throbs as its card would.
         waiting: bool,
+        /// After the line's total, the lozenges of the first two dev-runner units up or on their
+        /// way in the cards it holds, in the cards' order, as their cards draw them, so folding a
+        /// group shut never hides that a server runs in it.
+        units: Vec<UnitLozenge>,
+        /// The units up or on their way past those two; `None` while there are none.
+        more_units: Option<MoreUnits>,
     },
+}
+
+/// The units a folded line counts past the ones it draws.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MoreUnits {
+    /// How many, as `+2` reads.
+    pub label: String,
+    /// Each by its name and port, a line each, as `api :8787` reads.
+    pub tooltip: String,
 }
 
 /// One project's card.

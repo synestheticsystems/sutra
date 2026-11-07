@@ -9,14 +9,7 @@ struct UnitLozengeView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Lozenge(ink: lozenge.look.ink, fill: lozenge.look.fill) {
-                HStack(spacing: 3) {
-                    Text(lozenge.name)
-                    if let port = lozenge.port {
-                        Text(port).monospaced()
-                    }
-                }
-            }
+            UnitCapsule(lozenge: lozenge)
             if let beside = lozenge.beside {
                 Text(beside)
                     .font(.callout)
@@ -34,6 +27,23 @@ struct UnitLozengeView: View {
         .opensLink(lozenge.link)
         .accessibilityValue(lozenge.tooltip)
         .hoverTip(lozenge.tooltip)
+    }
+}
+
+/// A unit's capsule alone, as `(web :3000)` reads, its colour saying the unit's state: what a
+/// folded line shows of the servers in the cards it holds.
+struct UnitCapsule: View {
+    let lozenge: UnitLozenge
+
+    var body: some View {
+        Lozenge(ink: lozenge.look.ink, fill: lozenge.look.fill) {
+            HStack(spacing: 3) {
+                Text(lozenge.name)
+                if let port = lozenge.port {
+                    Text(port).monospaced()
+                }
+            }
+        }
     }
 }
 

@@ -8,7 +8,7 @@ mod menu;
 mod robots;
 pub(super) mod subagents;
 mod tray;
-mod units;
+pub(super) mod units;
 
 pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};

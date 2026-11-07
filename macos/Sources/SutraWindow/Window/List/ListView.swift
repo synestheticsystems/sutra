@@ -102,8 +102,9 @@ private struct Chevron: View {
 /// mark of scratch on a session's line, then the cards, set in from the list's edge and hung from
 /// a guide that runs down from the chevron, so they read as the parent's at a glance. A click on
 /// the line folds the cards away, and another shows them again. Folded, the line holds the robots
-/// of the agents in its cards at its end, and throbs as their cards would while one of them waits
-/// on the user. A right click on a session's line offers to clean all its scratch.
+/// of the agents in its cards at its end and the servers running in them after its total, and
+/// throbs as their cards would while one of them waits on the user. A right click on a session's
+/// line offers to clean all its scratch.
 private struct CardGroup: View {
     let line: GroupLine
     let fold: Fold
@@ -131,9 +132,9 @@ private struct CardGroup: View {
                 .padding(.leading, Self.cardIndent)
                 .background(alignment: .topLeading) { guide }
             }
-        case .folded(let sessions, let subagents, let waiting):
+        case .folded(let sessions, let subagents, let waiting, let units, let moreUnits):
             HStack(spacing: 12) {
-                header(open: false)
+                header(open: false, units: units, moreUnits: moreUnits)
                 if !sessions.isEmpty || !subagents.isEmpty {
                     // Laid out first and never cut, as on a card's tray.
                     TrayAgents(sessions: sessions, subagents: subagents)
@@ -178,8 +179,12 @@ private struct CardGroup: View {
     }
 
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
-    /// the name, a session's scratch mark and the total.
-    private func header(open: Bool) -> some View {
+    /// the name and the total, in a session's scratch mark; folded, the servers running in its
+    /// cards after them, `units` drawn and `moreUnits` counted. A click on a server here opens the
+    /// cards, where a server opens in the browser.
+    private func header(
+        open: Bool, units: [UnitLozenge] = [], moreUnits: MoreUnits? = nil
+    ) -> some View {
         Button {
             dashboard.perform(.toggleFold(parent: line.parent))
         } label: {
@@ -198,6 +203,14 @@ private struct CardGroup: View {
                         } else {
                             Text(total)
                         }
+                    }
+                    ForEach(Array(units.enumerated()), id: \.offset) { _, unit in
+                        UnitCapsule(lozenge: unit)
+                            .hoverTip(unit.tooltip)
+                    }
+                    if let moreUnits {
+                        Text(moreUnits.label)
+                            .hoverTip(moreUnits.tooltip)
                     }
                 }
             }

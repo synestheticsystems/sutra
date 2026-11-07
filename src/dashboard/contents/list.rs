@@ -248,9 +248,10 @@ mod tests {
         let folded: Vec<(&str, bool)> = rows
             .iter()
             .map(|row| match row {
-                ListRow::Group { line, fold } => {
-                    (line.name.as_str(), matches!(fold, GroupFold::Folded { .. }))
-                }
+                ListRow::Group { line, fold } => (
+                    line.name.as_str(),
+                    matches!(**fold, GroupFold::Folded { .. }),
+                ),
                 row => panic!("only the three groups: {row:?}"),
             })
             .collect();

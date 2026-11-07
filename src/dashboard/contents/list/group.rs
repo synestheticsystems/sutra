@@ -3,16 +3,19 @@
 //! repository's line goes by its name; a session's by the session's name, with the mark of its
 //! scratch, which steps back once the session has ended, as whether it runs is what says whether
 //! its scratch may still be in use. A right click on a session's line cleans all its scratch.
-//! Folded shut, the line stands alone and still says what its cards would of their agents: their
-//! robots stand at its end, and it throbs while one of them waits on the user.
+//! Folded shut, the line stands alone and still says what its cards would of their agents and
+//! their dev servers: their robots stand at its end, it throbs while one of them waits on the user,
+//! and the servers running in them stand after its total.
 
 use crate::dashboard::cleaning::Cleaning;
-use crate::dashboard::contents::card::{self, CardContext, Naming, agents, subagents};
+use crate::dashboard::contents::card::{self, CardContext, Naming, agents, subagents, units};
 use crate::dashboard::listing::{self, Folds, Group};
 use crate::dashboard::{
-    Action, GroupFold, GroupLine, ListRow, MenuAction, MenuEntry, Parent, format,
+    Action, GroupFold, GroupLine, ListRow, MenuAction, MenuEntry, MoreUnits, Parent, UnitLook,
+    UnitLozenge, format,
 };
 use crate::map::{ArtifactDir, DirUsage, FolderSize, Project, ScratchSpace, Snapshot};
+use crate::notifications::Notifier;
 
 /// The row of `group`, on `map`, folded shut as `folds` says.
 pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
@@ -46,7 +49,7 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
             total: total_of(&group.members, cards),
             menu,
         },
-        fold,
+        fold: Box::new(fold),
     }
 }
 
@@ -107,18 +110,47 @@ fn session_tooltip(space: &ScratchSpace, name: &str, cards: &CardContext) -> Str
 
 /// What the line of a folded group shows of `cards`, the cards it holds: a robot for each agent in
 /// them, every session before every subagent, each in the order their cards would stand them, and
-/// whether one of the sessions waits on the user, as would make its card throb.
+/// whether one of the sessions waits on the user, as would make its card throb; and the dev
+/// servers at work in them (see `live_units`).
 fn folded(cards: &[&Project], ctx: &CardContext) -> GroupFold {
     let sessions = cards
         .iter()
         .flat_map(|card| agents::badges(&card.agents, ctx.now));
     let at_work = cards.iter().flat_map(|card| &card.subagents);
     let waiting = agents::any_waiting(cards.iter().flat_map(|card| &card.agents));
+    let (units, more_units) = live_units(cards, ctx.notifier);
     GroupFold::Folded {
         sessions: sessions.collect(),
         subagents: subagents::badges(at_work, ctx.now),
         waiting,
+        units,
+        more_units,
     }
+}
+
+/// How many units a folded line draws as lozenges: enough to say that a server runs, and which,
+/// and few enough to leave the line its name.
+const UNITS_ON_A_FOLDED_LINE: usize = 2;
+
+/// The dev-runner units up or on their way in `cards`, as their cards draw them, in the cards'
+/// order: the first `UNITS_ON_A_FOLDED_LINE` of them, and what counts the rest.
+fn live_units(cards: &[&Project], notifier: &Notifier) -> (Vec<UnitLozenge>, Option<MoreUnits>) {
+    let environments = cards.iter().filter_map(|card| card.environment.as_ref());
+    let lozenges = environments.flat_map(|environment| units::lozenges(environment, notifier));
+    let live = lozenges.filter(|unit| matches!(unit.look, UnitLook::Up | UnitLook::Starting));
+    let mut shown: Vec<UnitLozenge> = live.collect();
+    let rest = shown.split_off(UNITS_ON_A_FOLDED_LINE.min(shown.len()));
+    let more = (!rest.is_empty()).then(|| {
+        let named = rest.iter().map(|unit| match &unit.port {
+            Some(port) => format!("{} {port}", unit.name),
+            None => unit.name.clone(),
+        });
+        MoreUnits {
+            label: format!("+{}", rest.len()),
+            tooltip: named.collect::<Vec<_>>().join("\n"),
+        }
+    });
+    (shown, more)
 }
 
 /// What `members` take on disk between them, as their trays write it: the totals the trays show,
@@ -162,26 +194,30 @@ mod tests {
         }
     }
 
-    /// The row of the first group the Activity sort lists for `map`, with `folds`.
-    fn first_group(map: &Snapshot, folds: &Folds) -> ListRow {
+    /// The line and the fold of the first group the Activity sort lists for `map`, with `folds`.
+    fn first_group(map: &Snapshot, folds: &Folds) -> (GroupLine, GroupFold) {
         first_group_in(map, &Arrangement::default(), folds)
     }
 
-    /// The row of the first group the Activity sort lists for `map` as `arrangement` arranges it,
-    /// with `folds`.
-    fn first_group_in(map: &Snapshot, arrangement: &Arrangement, folds: &Folds) -> ListRow {
+    /// The line and the fold of the first group the Activity sort lists for `map` as `arrangement`
+    /// arranges it, with `folds`.
+    fn first_group_in(
+        map: &Snapshot,
+        arrangement: &Arrangement,
+        folds: &Folds,
+    ) -> (GroupLine, GroupFold) {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
         let listing = Listing::new(map, arrangement, &cleaning, now());
         let group = listing.rows.iter().find_map(|row| match row {
             Row::Group(group) => Some(group),
             _ => None,
         });
-        row(
-            group.expect("a group"),
-            map,
-            folds,
-            &context(&cleaning, &notifier),
-        )
+        let group = group.expect("a group");
+        let ListRow::Group { line, fold } = row(group, map, folds, &context(&cleaning, &notifier))
+        else {
+            panic!("a group's row is a group");
+        };
+        (line, *fold)
     }
 
     #[test]
@@ -199,11 +235,7 @@ mod tests {
             ],
             vec![],
         );
-        let ListRow::Group {
-            line,
-            fold: GroupFold::Open { cards },
-        } = first_group(&map, &Folds::default())
-        else {
+        let (line, GroupFold::Open { cards }) = first_group(&map, &Folds::default()) else {
             panic!("the group, open");
         };
         assert_eq!(
@@ -257,9 +289,7 @@ mod tests {
 
     #[test]
     fn a_sessions_group_starts_folded_under_its_name_with_its_scratch_mark_and_disk() {
-        let ListRow::Group { line, fold } = first_group(&foundry(true), &Folds::default()) else {
-            panic!("a group's row");
-        };
+        let (line, fold) = first_group(&foundry(true), &Folds::default());
         let session = "/private/tmp/claude-501/-code-app/e26ca359";
         assert_eq!(
             line.parent,
@@ -301,10 +331,7 @@ mod tests {
             &cleaning(),
             now(),
         );
-        let ListRow::Group {
-            line,
-            fold: GroupFold::Open { cards },
-        } = first_group_in(&foundry(false), &filtered, &folds)
+        let (line, GroupFold::Open { cards }) = first_group_in(&foundry(false), &filtered, &folds)
         else {
             panic!("the group, open");
         };
@@ -350,9 +377,7 @@ mod tests {
             )
         };
         let menu = |map: &Snapshot| {
-            let ListRow::Group { line, .. } = first_group(map, &Folds::default()) else {
-                panic!("a group's row");
-            };
+            let (line, _) = first_group(map, &Folds::default());
             line.menu
         };
 
@@ -403,13 +428,12 @@ mod tests {
         };
         folds.toggle(&parent, &map(AgentStatus::Waiting));
         let folded = |fix_status| {
-            let ListRow::Group { line, fold } = first_group(&map(fix_status), &folds) else {
-                panic!("a group's row");
-            };
+            let (line, fold) = first_group(&map(fix_status), &folds);
             let GroupFold::Folded {
                 sessions,
                 subagents,
                 waiting,
+                ..
             } = fold
             else {
                 panic!("folded: {fold:?}");
@@ -431,6 +455,65 @@ mod tests {
         );
         let (.., waiting) = folded(AgentStatus::Busy);
         assert!(!waiting, "no throb while no session waits");
+    }
+
+    #[test]
+    fn a_folded_group_shows_two_of_the_servers_up_in_its_cards_and_counts_the_rest() {
+        use crate::map::test_support::environment_at;
+        use crate::model::{Environment, UnitStatus};
+        let app = "/code/app/.git";
+        // Each unit as `name:status:port`, in the environment of the worktree at `path`.
+        let serving = |path: &str, units: &[(&str, &str, u16)]| Environment {
+            units: units
+                .iter()
+                .map(|(name, status, _)| UnitStatus::parse(name, status))
+                .collect(),
+            ports: units
+                .iter()
+                .map(|(name, _, port)| (name.to_string(), *port))
+                .collect(),
+            ..environment_at(path)
+        };
+        let mut main = main_worktree(app, "main", project("app", 1));
+        main.environment = Some(serving(
+            "/code/app",
+            &[("web", "ready", 5173), ("worker", "stopped", 9000)],
+        ));
+        let mut fix = linked_worktree(app, "fix", project("app-fix", 1));
+        fix.environment = Some(serving(
+            "/code/app-fix",
+            &[("api", "starting", 8787), ("docs", "running", 4000)],
+        ));
+        let map = snapshot(vec![main, fix], vec![]);
+        let mut folds = Folds::default();
+        let parent = Parent::Repository {
+            common_dir: app.to_string(),
+        };
+        folds.toggle(&parent, &map);
+
+        let (_, fold) = first_group(&map, &folds);
+        let GroupFold::Folded {
+            units, more_units, ..
+        } = fold
+        else {
+            panic!("folded: {fold:?}");
+        };
+        let shown: Vec<(&str, Option<&str>)> = units
+            .iter()
+            .map(|unit| (unit.name.as_str(), unit.port.as_deref()))
+            .collect();
+        assert_eq!(
+            shown,
+            [("web", Some(":5173")), ("api", Some(":8787"))],
+            "up or on its way, in the cards' order; not the stopped worker"
+        );
+        assert_eq!(
+            more_units,
+            Some(MoreUnits {
+                label: "+1".to_string(),
+                tooltip: "docs :4000".to_string(),
+            })
+        );
     }
 
     #[test]

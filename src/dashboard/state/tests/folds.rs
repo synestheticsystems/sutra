@@ -51,7 +51,7 @@ fn groups(state: &State) -> Vec<String> {
         panic!("no rows");
     };
     let groups = rows.into_iter().filter_map(|row| match row {
-        ListRow::Group { line, fold } => Some(match fold {
+        ListRow::Group { line, fold } => Some(match *fold {
             GroupFold::Open { .. } => format!("{}: open", line.name),
             GroupFold::Folded { .. } => format!("{}: folded", line.name),
         }),

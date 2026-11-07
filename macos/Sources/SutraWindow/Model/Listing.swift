@@ -55,19 +55,23 @@ public enum Row: Identifiable, Equatable {
 }
 
 /// What stands under a group's line, as the window keeps it: the models of the group's cards, or,
-/// folded shut, the core's record of the agents in them, which the line shows.
+/// folded shut, the core's record of the agents and the servers in them, which the line shows.
 public enum Fold: Equatable {
     case open([CardModel])
-    case folded(sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool)
+    case folded(
+        sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool, units: [UnitLozenge],
+        moreUnits: MoreUnits?
+    )
 
     public static func == (lhs: Fold, rhs: Fold) -> Bool {
         switch (lhs, rhs) {
         // The same models are the same cards, whatever they now say: each card redraws itself.
         case (.open(let lhsCards), .open(let rhsCards)):
             lhsCards.elementsEqual(rhsCards, by: ===)
-        case (.folded(let lhsSessions, let lhsSubagents, let lhsWaiting),
-              .folded(let rhsSessions, let rhsSubagents, let rhsWaiting)):
+        case (.folded(let lhsSessions, let lhsSubagents, let lhsWaiting, let lhsUnits, let lhsMore),
+              .folded(let rhsSessions, let rhsSubagents, let rhsWaiting, let rhsUnits, let rhsMore)):
             lhsSessions == rhsSessions && lhsSubagents == rhsSubagents && lhsWaiting == rhsWaiting
+                && lhsUnits == rhsUnits && lhsMore == rhsMore
         default: false
         }
     }
@@ -125,8 +129,11 @@ struct CardModels {
                 switch fold {
                 case .open(let cards):
                     .open(cards.map(model(of:)))
-                case .folded(let sessions, let subagents, let waiting):
-                    .folded(sessions: sessions, subagents: subagents, waiting: waiting)
+                case .folded(let sessions, let subagents, let waiting, let units, let moreUnits):
+                    .folded(
+                        sessions: sessions, subagents: subagents, waiting: waiting, units: units,
+                        moreUnits: moreUnits
+                    )
                 }
             }
             let shown = rows.map { row -> Row in
