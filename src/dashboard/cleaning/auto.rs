@@ -11,10 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use nix::sys::statvfs::statvfs;
-
 use super::{By, Cleaning, Report, words};
 use crate::dashboard::KeepFreeChoice;
+use crate::dashboard::disk_space::DiskSpace;
 use crate::map::Snapshot;
 use crate::map::clean::{self, CargoEnv, CleanError, IdleFolder, PrepareError, Prepared};
 
@@ -91,11 +90,9 @@ pub(in crate::dashboard) fn keep_free_choices() -> Vec<KeepFreeChoice> {
         .collect()
 }
 
-/// How many bytes are free on the volume holding `path`, as the volume counts them: Finder also
-/// counts what macOS could purge if it had to, and that is not there for a build to use until then.
+/// How many bytes are free on the volume holding `path` (see `DiskSpace`).
 pub(in crate::dashboard) fn free_bytes(path: &Path) -> io::Result<u64> {
-    let volume = statvfs(path).map_err(io::Error::from)?;
-    Ok(u64::from(volume.blocks_available()) * volume.fragment_size())
+    DiskSpace::of(path).map(|space| space.free)
 }
 
 /// The volume holding `path`.

@@ -1,9 +1,13 @@
 //! The toolbar: the filter field while ⌘F shows it, the sort, the clean of idle build folders, the
-//! sound and notification toggles, and in the store edition the folder Sutra watches.
+//! sound and notification toggles, in the store edition the folder Sutra watches, and the gauge of
+//! how full the disk is.
+
+mod gauge;
 
 use std::path::{Path, PathBuf};
 
 use crate::dashboard::cleaning::{self, IdleOffer};
+use crate::dashboard::disk_space::DiskSpace;
 use crate::dashboard::listing::{Arrangement, Listing};
 use crate::dashboard::{
     Action, CleanControl, MenuAction, MenuEntry, SortChoice, SortControl, SortOrder, Toolbar,
@@ -11,8 +15,8 @@ use crate::dashboard::{
 };
 use crate::notifications::Notifier;
 
-/// The toolbar, with `listing` `None` until the first map arrives, and `clean` as
-/// `clean_control` works it out.
+/// The toolbar, with `listing` `None` until the first map arrives, `clean` as `clean_control`
+/// works it out, and `disk` as last read.
 pub(in crate::dashboard) fn toolbar(
     listing: Option<&Listing>,
     arrangement: &Arrangement,
@@ -20,6 +24,7 @@ pub(in crate::dashboard) fn toolbar(
     notifier: &Notifier,
     sandboxed: bool,
     home: &Path,
+    disk: Option<DiskSpace>,
 ) -> Toolbar {
     let map = listing.map(|listing| listing.snapshot);
     Toolbar {
@@ -48,6 +53,7 @@ pub(in crate::dashboard) fn toolbar(
         folder: map
             .filter(|_| sandboxed)
             .map(|map| watching(&map.roots, &map.skipped_private_folders, home)),
+        disk: disk.and_then(gauge::gauge),
     }
 }
 
@@ -274,6 +280,7 @@ mod tests {
                 &notifier,
                 sandboxed,
                 home,
+                None,
             )
         };
         let one = snapshot(vec![project("a", 1)], vec![]);

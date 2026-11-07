@@ -17,7 +17,7 @@ struct DashboardModelTests {
                     sort: nil, filter: nil,
                     clean: CleanControl(offered: false, busy: false, tooltip: "", menu: []),
                     muted: false, muteTooltip: "", notificationsOff: false,
-                    notificationsTooltip: "", folder: nil
+                    notificationsTooltip: "", folder: nil, disk: nil
                 ),
                 banner: nil, stopped: nil, list: .scanning, footer: nil, dialog: nil,
                 settings: SutraCore.Settings(keepFree: nil, keepFreeChoices: [], privateFolders: [])

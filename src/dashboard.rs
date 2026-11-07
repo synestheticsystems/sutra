@@ -10,6 +10,7 @@
 
 mod cleaning;
 mod contents;
+mod disk_space;
 mod format;
 mod listing;
 mod live;

@@ -23,6 +23,7 @@ use nix::unistd::Pid;
 
 use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
+use super::disk_space::DiskSpace;
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
 use super::{Action, PrivateFolderSwitch, Settings, WindowContents, format};
@@ -58,6 +59,8 @@ pub(super) struct State {
     cleaning: Cleaning,
     notifier: Notifier,
     dialogs: Dialogs,
+    /// The disk holding the home folder as last read, for the scope bar's gauge.
+    disk: Option<DiskSpace>,
 }
 
 impl State {
@@ -83,6 +86,7 @@ impl State {
                 format!("It won't clean by itself until you choose that again: {err}."),
             ));
         }
+        state.read_disk();
         state.start_engine();
         state
     }
@@ -111,6 +115,7 @@ impl State {
             arrangement: Arrangement::default(),
             notifier,
             dialogs: Dialogs::default(),
+            disk: None,
         }
     }
 
@@ -187,12 +192,19 @@ impl State {
         self.pass_on_clean_news();
     }
 
-    /// The clock ticked: while the map is live, see whether to clean by itself.
+    /// The clock ticked: read the disk again for its gauge, and while the map is live, see whether
+    /// to clean by itself.
     pub(super) fn tick(&mut self, at: Instant, now: SystemTime) {
+        self.read_disk();
         if let Some(map) = self.live_map().cloned() {
             self.cleaning.keep_free_space(&map, at, now, &self.home);
             self.pass_on_clean_news();
         }
+    }
+
+    /// Read how full the disk holding the home folder is, for the scope bar's gauge.
+    fn read_disk(&mut self) {
+        self.disk = DiskSpace::of(&self.home).ok();
     }
 
     /// Announce the agent waits that have lasted long enough by now.
@@ -246,6 +258,7 @@ impl State {
                 &self.notifier,
                 self.sandboxed,
                 &self.home,
+                self.disk,
             ),
             banner: map.and_then(|map| banner::banner(&map.problems, self.sandboxed, &self.home)),
             // With no map shown, the list says the engine stopped before its first.

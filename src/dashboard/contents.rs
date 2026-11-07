@@ -56,6 +56,31 @@ pub struct Toolbar {
     /// The store edition's folder button, with what it watches for its tooltip; `None` outside the
     /// App Sandbox, where Sutra reads the whole home folder, and until the first map arrives.
     pub folder: Option<String>,
+    /// How full the disk holding the home folder is; `None` until it is first read, or while the
+    /// volume does not answer.
+    pub disk: Option<DiskGauge>,
+}
+
+/// The gauge at the end of the scope bar: a bar filling with the share of the disk in use, and that
+/// share in words.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DiskGauge {
+    /// The share of the disk in use, from 0 to 1, to whole percents.
+    pub used: f32,
+    /// That share: `94%`.
+    pub label: String,
+    /// The disk in bytes: `1.8 TB of 2 TB in use, 160 GB free`.
+    pub tooltip: String,
+    pub look: GaugeLook,
+}
+
+/// How the gauge looks: plain while the disk has room, amber once little is free, red once almost
+/// nothing is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GaugeLook {
+    Roomy,
+    Tight,
+    Full,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
