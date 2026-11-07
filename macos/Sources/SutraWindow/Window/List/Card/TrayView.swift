@@ -42,7 +42,7 @@ struct TrayView: View {
                         .layoutPriority(2)
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, Surface.contentInset)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Surface.tray)

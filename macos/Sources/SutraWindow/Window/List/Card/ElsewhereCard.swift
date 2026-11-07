@@ -39,10 +39,10 @@ struct ElsewhereCard: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Surface.contentInset)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(1)
+        .padding(Surface.edgeWidth)
         .background { CardSurface(waiting: waiting) }
     }
 }

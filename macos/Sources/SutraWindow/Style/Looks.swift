@@ -131,6 +131,12 @@ enum Surface {
     /// A card's thin edge, and the track a bar fills along.
     static let edge = Color(nsColor: .separatorColor)
 
+    /// How wide a card's edge is, inside which its contents stand.
+    static let edgeWidth: CGFloat = 1
+
+    /// How far a card's contents, its header and its tray, stand in from inside its edge.
+    static let contentInset: CGFloat = 14
+
     /// The hairline an open group's cards hang from: firmer than a card's edge, so it reads
     /// on the bare window, and fainter than any text.
     static let guide = Color(nsColor: .tertiaryLabelColor).opacity(0.6)

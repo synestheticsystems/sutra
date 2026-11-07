@@ -142,7 +142,10 @@ private struct CardGroup: View {
                         .layoutPriority(1)
                 }
             }
-            .padding(.horizontal, FoldingLine.inset)
+            .padding(.leading, FoldingLine.inset)
+            // The robots end where a card's tray ends them, so every robot on the list stands in
+            // one column.
+            .padding(.trailing, Surface.edgeWidth + Surface.contentInset)
             .padding(.vertical, FoldingLine.padding)
             // Open, the cards of the agents that wait throb themselves; folded, the line throbs
             // for them.

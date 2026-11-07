@@ -18,19 +18,29 @@ struct AgentBadges: View {
 }
 
 /// The agents on a card's tray, or on a folded group's line: the sessions, whose faces move,
-/// then past a divider the subagents, whose faces hold still.
+/// then past a divider the subagents, whose faces hold still. Each row is drawn only while it
+/// holds a robot: an empty one would still take the stack's spacing, and stand its tray's robots
+/// off the column every other tray's stand in.
 struct TrayAgents: View {
     let sessions: [AgentBadge]
     let subagents: [AgentBadge]
 
     var body: some View {
         HStack(spacing: 6) {
-            AgentBadges(badges: sessions, moves: true)
-            if !sessions.isEmpty && !subagents.isEmpty {
-                Divider()
-                    .frame(height: 12)
+            if !sessions.isEmpty {
+                AgentBadges(badges: sessions, moves: true)
             }
-            AgentBadges(badges: subagents, moves: false)
+            if !sessions.isEmpty && !subagents.isEmpty {
+                // In the secondary grey, as the separator's grey is too faint to tell the two
+                // kinds of robot apart.
+                Rectangle()
+                    .fill(Color(nsColor: .secondaryLabelColor))
+                    .frame(width: 1, height: 12)
+                    .accessibilityHidden(true)
+            }
+            if !subagents.isEmpty {
+                AgentBadges(badges: subagents, moves: false)
+            }
         }
     }
 }

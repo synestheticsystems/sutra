@@ -27,7 +27,7 @@ public struct CardView: View {
                 CardHeader(card: card, hovered: forcedHover ?? pointerOver)
                 Happening(card: card)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, Surface.contentInset)
             .padding(.vertical, 12)
             if let tray = card.tray {
                 TrayView(tray: tray, location: card.location, hovered: forcedHover ?? pointerOver)
@@ -36,7 +36,7 @@ public struct CardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipShape(.rect(cornerRadius: Surface.cornerRadius - 1))
         // Inside the edge, so the tray and the seam bar never cover it.
-        .padding(1)
+        .padding(Surface.edgeWidth)
         .background { CardSurface(waiting: card.waiting) }
         .contextMenu { MenuEntries(entries: card.menu, dashboard: dashboard, folder: card.path) }
         .onHover { over in
