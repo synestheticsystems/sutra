@@ -24,9 +24,10 @@ extension Arrangement {
                 notificationsOff: false,
                 notificationsTooltip: "Disable notifications",
                 folder: "Watching ~ (not Desktop or Downloads)",
-                disk: DiskGauge(
-                    used: 0.61, label: "61%", tooltip: "1.2 TB of 2 TB in use, 780 GB free",
-                    look: .roomy
+                disk: .read(
+                    used: 0.61, label: "61%",
+                    tooltip: "Macintosh HD: 1.2 TB of 2 TB in use, 780 GB free", look: .roomy,
+                    floor: nil
                 )
             ),
             banner: nil,

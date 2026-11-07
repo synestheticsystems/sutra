@@ -4,19 +4,20 @@
 
 mod gauge;
 
+pub(in crate::dashboard) use gauge::gauge as disk_gauge;
+
 use std::path::{Path, PathBuf};
 
 use crate::dashboard::cleaning::{self, IdleOffer};
-use crate::dashboard::disk_space::DiskSpace;
 use crate::dashboard::listing::{Arrangement, Listing};
 use crate::dashboard::{
-    Action, CleanControl, MenuAction, MenuEntry, SortChoice, SortControl, SortOrder, Toolbar,
-    format,
+    Action, CleanControl, DiskGauge, MenuAction, MenuEntry, SortChoice, SortControl, SortOrder,
+    Toolbar, format,
 };
 use crate::notifications::Notifier;
 
 /// The toolbar, with `listing` `None` until the first map arrives, `clean` as `clean_control`
-/// works it out, and `disk` as last read.
+/// works it out, and `disk` as `disk_gauge` does, `None` before the disk's first reading.
 pub(in crate::dashboard) fn toolbar(
     listing: Option<&Listing>,
     arrangement: &Arrangement,
@@ -24,7 +25,7 @@ pub(in crate::dashboard) fn toolbar(
     notifier: &Notifier,
     sandboxed: bool,
     home: &Path,
-    disk: Option<DiskSpace>,
+    disk: Option<DiskGauge>,
 ) -> Toolbar {
     let map = listing.map(|listing| listing.snapshot);
     Toolbar {
@@ -53,7 +54,7 @@ pub(in crate::dashboard) fn toolbar(
         folder: map
             .filter(|_| sandboxed)
             .map(|map| watching(&map.roots, &map.skipped_private_folders, home)),
-        disk: disk.and_then(gauge::gauge),
+        disk,
     }
 }
 

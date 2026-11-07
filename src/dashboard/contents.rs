@@ -56,26 +56,37 @@ pub struct Toolbar {
     /// The store edition's folder button, with what it watches for its tooltip; `None` outside the
     /// App Sandbox, where Sutra reads the whole home folder, and until the first map arrives.
     pub folder: Option<String>,
-    /// How full the disk holding the home folder is; `None` until it is first read, or while the
-    /// volume does not answer.
+    /// How full the disk holding the home folder is, or why it could not be read; `None` until it
+    /// is first read.
     pub disk: Option<DiskGauge>,
 }
 
-/// The gauge at the end of the scope bar: a bar filling with the share of the disk in use, and that
-/// share in words.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct DiskGauge {
-    /// The share of the disk in use, from 0 to 1, to whole percents.
-    pub used: f32,
-    /// That share: `94%`.
-    pub label: String,
-    /// The disk in bytes: `1.8 TB of 2 TB in use, 160 GB free`.
-    pub tooltip: String,
-    pub look: GaugeLook,
+/// The gauge at the end of the scope bar: how full the disk holding the home folder is. It is the
+/// summary of what the Disk sort lists, so a click on it chooses that sort
+/// (`Action::SetSort`).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum DiskGauge {
+    /// A bar filling with the share of the disk in use, and that share in words.
+    Read {
+        /// The share of the disk in use, from 0 to 1, to whole percents.
+        used: f32,
+        /// That share: `94%`.
+        label: String,
+        /// The disk by its name, then in bytes, then the free space Sutra keeps, if it keeps any:
+        /// `Macintosh HD: 1.8 TB of 2 TB in use, 160 GB free`.
+        tooltip: String,
+        look: GaugeLook,
+        /// The share of the disk in use at which only the free space Sutra keeps by cleaning by
+        /// itself is left, from 0 to 1: a tick on the bar's track. `None` while it keeps none, or
+        /// would keep more than the disk holds.
+        floor: Option<f32>,
+    },
+    /// The disk could not be read: an alert sign in the bar's place, and why in its tooltip.
+    Unavailable { tooltip: String },
 }
 
-/// How the gauge looks: plain while the disk has room, amber once little is free, red once almost
-/// nothing is.
+/// How the gauge looks: plain while the disk has room, dark once little is free, red once almost
+/// nothing is. Amber is left for an agent that wants the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum GaugeLook {
     Roomy,

@@ -21,7 +21,12 @@ struct ScopeBar: View {
                     if let filter = toolbar.filter {
                         FilterField(initial: filter, dashboard: dashboard, focus: filterFocus)
                     } else if let disk = toolbar.disk {
-                        DiskGaugeView(gauge: disk)
+                        DiskGaugeView(
+                            gauge: disk,
+                            chooseDiskSort: toolbar.sort.map { _ in
+                                { dashboard.perform(.setSort(order: .disk)) }
+                            }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
@@ -32,42 +37,96 @@ struct ScopeBar: View {
     }
 }
 
-/// How full the disk is: a drive, a bar filling with the share in use, and that share; amber once
-/// little is left, red once almost nothing is. Its tooltip says how much in bytes.
+/// How full the disk is: a drive, a bar filling with the share in use, and that share. It darkens
+/// once little is left, and turns red once almost nothing is; amber stays for an agent that wants
+/// the user. A tick on the track marks where the free space Sutra keeps begins. When the disk
+/// cannot be read, an alert sign stands in the bar's place. The tooltip names the disk and says
+/// how much in bytes, or why it could not be read. The gauge sums up what the Disk sort lists, so
+/// a click on it chooses that sort, while the list has a sort to choose.
 private struct DiskGaugeView: View {
     let gauge: DiskGauge
+    /// Chooses the Disk sort; `nil` while the list has no sort to choose.
+    let chooseDiskSort: (() -> Void)?
+
+    private static let barWidth: CGFloat = 56
 
     var body: some View {
+        if let chooseDiskSort {
+            Button(action: chooseDiskSort) { reading }
+                .buttonStyle(.plain)
+        } else {
+            reading
+        }
+    }
+
+    private var reading: some View {
         HStack(spacing: 6) {
             Image(systemName: "internaldrive")
                 .foregroundStyle(.secondary)
-            FillBar(progress: gauge.used, fill: fill, thickness: 5)
-                .clipShape(.capsule)
-                .frame(width: 56)
-            Text(gauge.label)
-                .font(.callout)
-                .monospacedDigit()
-                .foregroundStyle(ink)
+            switch gauge {
+            case .read(let used, let label, _, let look, let floor):
+                FillBar(progress: used, fill: Self.fill(look), thickness: 5)
+                    .clipShape(.capsule)
+                    .overlay(alignment: .leading) {
+                        if let floor {
+                            FloorTick(at: floor, width: Self.barWidth)
+                        }
+                    }
+                    .frame(width: Self.barWidth)
+                Text(label)
+                    .font(.callout)
+                    // Darker and heavier asks for a look without claiming the user.
+                    .fontWeight(look == .tight ? .semibold : .regular)
+                    .monospacedDigit()
+                    .foregroundStyle(Self.ink(look))
+            case .unavailable:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .symbolRenderingMode(.multicolor)
+            }
         }
+        .contentShape(.rect)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(gauge.tooltip)
-        .hoverTip(gauge.tooltip)
+        .accessibilityLabel(tooltip)
+        .hoverTip(tooltip)
     }
 
-    private var fill: Color {
-        switch gauge.look {
+    private var tooltip: String {
+        switch gauge {
+        case .read(_, _, let tooltip, _, _): tooltip
+        case .unavailable(let tooltip): tooltip
+        }
+    }
+
+    private static func fill(_ look: GaugeLook) -> Color {
+        switch look {
         case .roomy: .secondary
-        case .tight: Color(nsColor: Hue.amber.base)
+        case .tight: .primary
         case .full: Color(nsColor: Hue.red.base)
         }
     }
 
-    private var ink: Color {
-        switch gauge.look {
+    private static func ink(_ look: GaugeLook) -> Color {
+        switch look {
         case .roomy: .secondary
-        case .tight: Hue.amber.ink
+        case .tight: .primary
         case .full: Hue.red.ink
         }
+    }
+}
+
+/// The mark on the gauge's track where the free space Sutra keeps begins: a hairline in the
+/// primary ink, a little taller than the track, so it reads as a mark rather than as fill.
+private struct FloorTick: View {
+    /// The share of the disk in use at which the kept free space begins, from 0 to 1.
+    let at: Float
+    let width: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(.primary)
+            .frame(width: 1, height: 9)
+            .offset(x: width * CGFloat(min(max(at, 0), 1)) - 0.5)
+            .accessibilityHidden(true)
     }
 }
 

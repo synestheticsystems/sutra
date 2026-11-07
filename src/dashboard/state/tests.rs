@@ -4,6 +4,7 @@
 
 mod cards;
 mod folds;
+mod gauge;
 mod maps;
 mod settings;
 

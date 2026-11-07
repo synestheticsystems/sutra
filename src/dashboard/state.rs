@@ -23,7 +23,7 @@ use nix::unistd::Pid;
 
 use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
-use super::disk_space::DiskSpace;
+use super::disk_space::{Volume, VolumeUnread};
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
 use super::{Action, Parent, PrivateFolderSwitch, Settings, WindowContents, format};
@@ -61,8 +61,10 @@ pub(super) struct State {
     cleaning: Cleaning,
     notifier: Notifier,
     dialogs: Dialogs,
-    /// The disk holding the home folder as last read, for the scope bar's gauge.
-    disk: Option<DiskSpace>,
+    /// The volume holding the home folder as last read, for the scope bar's gauge, or why it could
+    /// not be read; `None` before the first reading. Each reading replaces the last, so a failure
+    /// read again changes nothing on screen, and the first that works again clears it.
+    disk: Option<Result<Volume, VolumeUnread>>,
 }
 
 impl State {
@@ -211,9 +213,9 @@ impl State {
         }
     }
 
-    /// Read how full the disk holding the home folder is, for the scope bar's gauge.
+    /// Read the volume holding the home folder, for the scope bar's gauge.
     fn read_disk(&mut self) {
-        self.disk = DiskSpace::of(&self.home).ok();
+        self.disk = Some(Volume::of(&self.home));
     }
 
     /// Announce the agent waits that have lasted long enough by now.
@@ -257,6 +259,8 @@ impl State {
             self.cleaning.is_preparing_idle(),
             self.cleaning.keep_free_floor(),
         );
+        let floor = self.cleaning.keep_free_floor();
+        let disk = self.disk.as_ref();
         WindowContents {
             title: heading::title(waiting, self.engine_stopped),
             dock_badge: heading::dock_badge(waiting, self.engine_stopped),
@@ -267,7 +271,7 @@ impl State {
                 &self.notifier,
                 self.sandboxed,
                 &self.home,
-                self.disk,
+                disk.map(|reading| toolbar::disk_gauge(reading, floor)),
             ),
             banner: map.and_then(|map| banner::banner(&map.problems, self.sandboxed, &self.home)),
             // With no map shown, the list says the engine stopped before its first.
