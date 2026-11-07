@@ -10,11 +10,8 @@ struct CardHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             // The chip moves under the name before it pushes the age out.
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) { name; chip }
-                VStack(alignment: .leading, spacing: 4) { name; chip }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            NameAndChip { name; chip }
+                .frame(maxWidth: .infinity, alignment: .leading)
             // The age and the buttons share one place as wide as the wider of them, so the name
             // and the chip never reflow when the pointer comes or goes, and a card never grows
             // under the pointer and pushes the cards below it away.
@@ -69,6 +66,77 @@ struct CardHeader: View {
         case nil:
             EmptyView()
         }
+    }
+}
+
+/// A card's name and its chip: side by side on their first baselines where both fit at their ideal
+/// widths, otherwise the chip under the name, each cut to the width there is. Laid out by hand
+/// rather than by `ViewThatFits`, which builds the views of whichever arrangement fits while it
+/// measures. The stack around the name measures it at several widths in each pass of layout, so a
+/// pass can tear one arrangement down and build the other, and that change sets off another pass.
+/// A layout only measures and places.
+struct NameAndChip: Layout {
+    /// The room between the name and the chip beside it.
+    private static let besideSpacing: CGFloat = 8
+    /// The room between the name and the chip under it.
+    private static let underSpacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(of: subviews, within: proposal.width).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let arrangement = arrangement(of: subviews, within: proposal.width)
+        for (subview, origin) in zip(subviews, arrangement.origins) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                proposal: arrangement.proposal
+            )
+        }
+    }
+
+    private struct Arrangement {
+        /// Where each subview's top leading corner goes.
+        var origins: [CGPoint] = []
+        /// What each subview is offered: its ideal size side by side, the width there is one
+        /// under another.
+        var proposal: ProposedViewSize
+        var size: CGSize = .zero
+    }
+
+    /// The subviews side by side if their ideal widths fit in `width`, any width when `nil`, or
+    /// else one under another.
+    private func arrangement(of subviews: Subviews, within width: CGFloat?) -> Arrangement {
+        let ideal = subviews.map { $0.dimensions(in: .unspecified) }
+        let besideWidth = ideal.reduce(0) { $0 + $1.width }
+            + Self.besideSpacing * CGFloat(max(ideal.count - 1, 0))
+        if besideWidth <= width ?? .infinity {
+            let baselines = ideal.map { $0[VerticalAlignment.firstTextBaseline] }
+            let baseline = baselines.max() ?? 0
+            let descent = zip(ideal, baselines).map { $0.height - $1 }.max() ?? 0
+            var beside = Arrangement(
+                proposal: .unspecified, size: CGSize(width: besideWidth, height: baseline + descent)
+            )
+            var x: CGFloat = 0
+            for (dimensions, own) in zip(ideal, baselines) {
+                beside.origins.append(CGPoint(x: x, y: baseline - own))
+                x += dimensions.width + Self.besideSpacing
+            }
+            return beside
+        }
+        var under = Arrangement(proposal: ProposedViewSize(width: width, height: nil))
+        for subview in subviews {
+            let size = subview.sizeThatFits(under.proposal)
+            let y = under.origins.isEmpty ? 0 : under.size.height + Self.underSpacing
+            under.origins.append(CGPoint(x: 0, y: y))
+            under.size = CGSize(width: max(under.size.width, size.width), height: y + size.height)
+        }
+        return under
     }
 }
 
