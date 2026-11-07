@@ -103,7 +103,8 @@ private struct Chevron: View {
 /// down from the chevron, so they read as the parent's at a glance. A click on the line folds the
 /// cards away, and another shows them again. Folded, the line holds the robots of the agents in
 /// its cards at its end, and throbs as their cards would while one of them waits on the user. A
-/// session's line steps back once the session has ended, as a robot at rest does.
+/// session's line steps back once the session has ended, as a robot at rest does, and a right click
+/// on it offers to clean all its scratch.
 private struct CardGroup: View {
     let line: GroupLine
     let fold: Fold
@@ -207,6 +208,8 @@ private struct CardGroup: View {
         }
         .buttonStyle(.plain)
         .hoverTip(line.tooltip)
+        // A session's line offers to clean all its scratch; a repository's offers nothing.
+        .contextMenu { MenuEntries(entries: line.menu, dashboard: dashboard) }
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(open ? "Open" : "Folded")
     }

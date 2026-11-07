@@ -2,14 +2,17 @@
 //! then the cards, each going by what sets it apart, as the line names what they share. A
 //! repository's line goes by its name; a session's by the session's name, with the mark of its
 //! scratch, and the whole line steps back once the session has ended, as whether it runs is what
-//! says whether its scratch may still be in use. Folded shut, the line stands alone and still says
-//! what its cards would of their agents: their robots stand at its end, and it throbs while one of
-//! them waits on the user.
+//! says whether its scratch may still be in use. A right click on a session's line cleans all its
+//! scratch. Folded shut, the line stands alone and still says what its cards would of their
+//! agents: their robots stand at its end, and it throbs while one of them waits on the user.
 
+use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::contents::card::{self, CardContext, Naming, agents, subagents};
 use crate::dashboard::listing::{self, Folds, Group};
-use crate::dashboard::{GroupFold, GroupLine, ListRow, Parent, format};
-use crate::map::{FolderSize, Project, ScratchSpace, Snapshot};
+use crate::dashboard::{
+    Action, GroupFold, GroupLine, ListRow, MenuAction, MenuEntry, Parent, format,
+};
+use crate::map::{ArtifactDir, DirUsage, FolderSize, Project, ScratchSpace, Snapshot};
 
 /// The row of `group`, on `map`, folded shut as `folds` says.
 pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
@@ -24,11 +27,14 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
                 .collect(),
         }
     };
-    let (tooltip, scratch) = match group.parent {
-        listing::Parent::Repository(repo) => (format::tilde(repo.folder(), cards.home), None),
+    let (tooltip, scratch, menu) = match group.parent {
+        listing::Parent::Repository(repo) => {
+            (format::tilde(repo.folder(), cards.home), None, Vec::new())
+        }
         listing::Parent::Session(space) => (
             session_tooltip(space, &group.name, cards),
             Some(card::scratch_mark(space, None)),
+            clean_all(space, &group.members, cards.cleaning),
         ),
     };
     ListRow::Group {
@@ -38,9 +44,44 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
             tooltip,
             scratch,
             total: total_of(&group.members, cards),
+            menu,
         },
         fold,
     }
+}
+
+/// What a right click on the line of `space`'s session offers: one Clean All, of every build folder
+/// in `members`, the session's scratch folders on the map, that a card would offer to clean, with
+/// what they hold between them; nothing while none is on offer.
+fn clean_all(space: &ScratchSpace, members: &[&Project], cleaning: &Cleaning) -> Vec<MenuEntry> {
+    let offered: Vec<&ArtifactDir> = members
+        .iter()
+        .flat_map(|member| &member.artifacts)
+        .filter(|dir| card::offers_clean(dir, cleaning))
+        .collect();
+    if offered.is_empty() {
+        return Vec::new();
+    }
+    let sized: Vec<&DirUsage> = offered
+        .iter()
+        .filter_map(|dir| dir.measurement.usage())
+        .collect();
+    let title = if sized.is_empty() {
+        "Clean All".to_string()
+    } else {
+        let bytes = sized.iter().map(|usage| usage.bytes).sum();
+        // What a folder not sized yet, or not read in full, holds adds to the sum unseen.
+        let partial = sized.len() < offered.len() || sized.iter().any(|u| u.unreadable_dirs > 0);
+        format!("Clean All ({})", format::size(bytes, partial))
+    };
+    let session_folder = format::path_text(&space.session_folder);
+    vec![MenuEntry::Item {
+        title,
+        checked: false,
+        action: MenuAction::Dashboard {
+            action: Action::CleanScratch { session_folder },
+        },
+    }]
 }
 
 /// The parent as the window knows it, by the text of the folder it is known by.
@@ -107,7 +148,7 @@ mod tests {
     };
     use crate::dashboard::listing::{Arrangement, Listing, Row};
     use crate::dashboard::{AgentLook, Chip, ScratchMark};
-    use crate::map::test_support::{cargo_target, measured, project_at, usage};
+    use crate::map::test_support::{cargo_target, measured, node_modules, project_at, usage};
     use crate::map::{AgentStatus, DirUsage, Measurement};
     use crate::notifications::Notifier;
 
@@ -252,6 +293,66 @@ mod tests {
             .map(|card| (card.name.as_str(), card.chip.as_ref()))
             .collect();
         assert_eq!(names, [("r567", None), ("target-567", None)]);
+    }
+
+    #[test]
+    fn a_sessions_line_offers_to_clean_all_its_scratchs_build_folders_and_a_repositorys_nothing() {
+        let with = |folder: &str, artifacts: Vec<ArtifactDir>| Project {
+            artifacts,
+            ..scratch_folder("e26ca359", folder, project("", 1))
+        };
+        let scratchpad = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad";
+        let r567 = format!("{scratchpad}/r567");
+        let fix = format!("{scratchpad}/target-567-fix");
+        let map = |fix_measurement| {
+            snapshot(
+                vec![
+                    with(
+                        "r567",
+                        vec![
+                            cargo_target(format!("{r567}/target"), measured(60_000_000_000)),
+                            node_modules(format!("{r567}/ui/node_modules"), measured(1 << 30)),
+                        ],
+                    ),
+                    with("target-567-fix", vec![cargo_target(&fix, fix_measurement)]),
+                ],
+                vec![],
+            )
+        };
+        let menu = |map: &Snapshot| {
+            let ListRow::Group { line, .. } = first_group(map, &Folds::default()) else {
+                panic!("a group's row");
+            };
+            line.menu
+        };
+
+        let [MenuEntry::Item { title, action, .. }] = &menu(&map(measured(30_000_000_000)))[..]
+        else {
+            panic!("one line");
+        };
+        assert_eq!(title, "Clean All (90 GB)", "the two Cargo build folders");
+        assert_eq!(
+            *action,
+            MenuAction::Dashboard {
+                action: Action::CleanScratch {
+                    session_folder: "/private/tmp/claude-501/-code-app/e26ca359".to_string()
+                }
+            }
+        );
+        let [MenuEntry::Item { title, .. }] = &menu(&map(Measurement::Measuring))[..] else {
+            panic!("one line");
+        };
+        assert_eq!(title, "Clean All (\u{2265}60 GB)", "one not sized yet");
+
+        let app = "/code/app/.git";
+        let repository = snapshot(
+            vec![
+                main_worktree(app, "main", project("app", 1)),
+                linked_worktree(app, "fix", project("app-fix", 1)),
+            ],
+            vec![],
+        );
+        assert_eq!(menu(&repository), []);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::{Action, MenuAction, MenuEntry, format};
 use crate::map::clean::WORTH_CLEANING_BYTES;
-use crate::map::{ArtifactKind, Project};
+use crate::map::{ArtifactDir, ArtifactKind, Project};
 use crate::model::Environment;
 use crate::notifications::Notifier;
 
@@ -27,12 +27,7 @@ pub(super) fn entries(
         project
             .artifacts
             .iter()
-            .filter(|dir| dir.kind == ArtifactKind::CargoTarget && cleaning.state_of(dir).is_none())
-            .filter(|dir| {
-                dir.measurement
-                    .usage()
-                    .is_none_or(|usage| usage.bytes >= WORTH_CLEANING_BYTES)
-            })
+            .filter(|dir| offers_clean(dir, cleaning))
             .map(|dir| {
                 let name = format::artifact_name(dir, &project.path);
                 let title = match dir.measurement.usage() {
@@ -85,6 +80,16 @@ pub(super) fn entries(
         menu.extend(section);
     }
     menu
+}
+
+/// Whether the menu offers to clean `dir`: a Cargo build folder no clean is at work on, which
+/// holds enough to be worth a clean, or is not sized yet.
+pub(in crate::dashboard) fn offers_clean(dir: &ArtifactDir, cleaning: &Cleaning) -> bool {
+    let worth_it = dir
+        .measurement
+        .usage()
+        .is_none_or(|usage| usage.bytes >= WORTH_CLEANING_BYTES);
+    dir.kind == ArtifactKind::CargoTarget && cleaning.state_of(dir).is_none() && worth_it
 }
 
 /// Whether the menu offers to terminate `env`: its process lives, and Sutra runs outside the App

@@ -206,6 +206,9 @@ pub struct GroupLine {
     /// The disk the parent's cards on the map take between them, listed or not, as their trays
     /// write it: the sizes measured so far, added up, and `None` before the first.
     pub total: Option<String>,
+    /// What a right click offers: on a session's line, the clean of every build folder in its
+    /// scratch that a card would offer, while one is on offer; nothing on a repository's.
+    pub menu: Vec<MenuEntry>,
 }
 
 /// What a group's cards share: the parent whose fate decides theirs, which its line stands for.
@@ -467,6 +470,12 @@ pub enum Action {
     /// Clean the build folder at `folder`.
     Clean {
         folder: String,
+    },
+    /// Clean every build folder the scratch folders of the session whose folder is
+    /// `session_folder` hold, as a click on each one's card would, so each goes only where it
+    /// would go alone.
+    CleanScratch {
+        session_folder: String,
     },
     /// Clean every idle build folder, after one question.
     CleanIdle,

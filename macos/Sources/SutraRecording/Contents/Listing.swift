@@ -98,7 +98,8 @@ struct Arrangement: Equatable {
             name: (folder as NSString).lastPathComponent,
             tooltip: Words.tilde(folder),
             scratch: nil,
-            total: Words.size(worktrees.reduce(0) { $0 + $1.bytes })
+            total: Words.size(worktrees.reduce(0) { $0 + $1.bytes }),
+            menu: []
         )
         return .group(line: line, fold: fold)
     }

@@ -188,7 +188,12 @@ impl Cleaning {
     ) {
         match report {
             Report::Prepared { clicked, prepared } => {
-                self.asking(&clicked, prepared, map, now, home);
+                // A thread that ended with no word has none for any of its folders.
+                let mut each = prepared.map(Vec::into_iter);
+                for folder in &clicked {
+                    let prepared = each.as_mut().and_then(Iterator::next);
+                    self.asking(folder, prepared, map, now, home);
+                }
             }
             Report::IdlePrepared(found) => self.asking_idle(found),
             Report::UnaskedPrepared {

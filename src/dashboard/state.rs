@@ -28,7 +28,7 @@ use super::listing::{Arrangement, Listing};
 use super::live::Event;
 use super::{Action, Parent, PrivateFolderSwitch, Settings, WindowContents, format};
 use crate::map::grant::{self, GrantError, Roots};
-use crate::map::{PrivateFolder, Snapshot, clean};
+use crate::map::{ArtifactDir, PrivateFolder, Project, Snapshot, clean};
 use crate::notifications::Notifier;
 use dialogs::Dialogs;
 use settings::SavedSettings;
@@ -126,6 +126,7 @@ impl State {
     pub(super) fn perform(&mut self, action: Action, now: SystemTime) {
         match action {
             Action::Clean { folder } => self.clean(&folder),
+            Action::CleanScratch { session_folder } => self.clean_scratch(&session_folder),
             Action::CleanIdle => self.clean_idle(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
             Action::SetSort { order } => {
@@ -452,6 +453,29 @@ impl State {
         };
         self.cleaning
             .start(project, dir, Arc::clone(&map), &self.home);
+    }
+
+    /// The user chose Clean All on the line of the session whose folder reads `session_folder`, as
+    /// the line named it with `format::path_text`: clean each build folder of the session's scratch
+    /// folders that the line offered, as their cards would.
+    fn clean_scratch(&mut self, session_folder: &str) {
+        let Some(map) = self.snapshot.clone() else {
+            return;
+        };
+        let in_the_session = |project: &&Project| {
+            let space = project.scratch.as_ref();
+            space.is_some_and(|space| format::is_path_text(&space.session_folder, session_folder))
+        };
+        let cleaning = &self.cleaning;
+        let clicked: Vec<(&Project, &ArtifactDir)> = map
+            .projects
+            .iter()
+            .filter(in_the_session)
+            .flat_map(|project| project.artifacts.iter().map(move |dir| (project, dir)))
+            .filter(|(_, dir)| card::offers_clean(dir, cleaning))
+            .collect();
+        self.cleaning
+            .start_each(&clicked, Arc::clone(&map), &self.home);
     }
 
     /// The user chose the toolbar's clean of every idle build folder, at `now`.

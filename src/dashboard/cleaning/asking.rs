@@ -97,9 +97,8 @@ impl Clicked {
 }
 
 impl Cleaning {
-    /// The user clicked Clean on `dir`, a build folder of `project`. Its card shows the clean at
-    /// once, and what it means is worked out on a thread of its own, as `map` shows them: `asking`
-    /// then takes it from there.
+    /// The user clicked Clean on `dir`, a build folder of `project`, on its card (see
+    /// `start_each`).
     pub(in crate::dashboard) fn start(
         &mut self,
         project: &Project,
@@ -107,37 +106,61 @@ impl Cleaning {
         map: Arc<Snapshot>,
         home: &Path,
     ) {
-        let clicked = dir.path.clone();
+        self.start_each(&[(project, dir)], map, home);
+    }
+
+    /// The user clicked Clean on each of `clicked`, a build folder and the project it is in: on a
+    /// card, its one, or on a session's line, every build folder in the session's scratch. Each
+    /// card shows its clean at once, and what the cleans mean is worked out on one thread, as `map`
+    /// shows them: `asking` then takes each from there, as it would the one of a card.
+    pub(in crate::dashboard) fn start_each(
+        &mut self,
+        clicked: &[(&Project, &ArtifactDir)],
+        map: Arc<Snapshot>,
+        home: &Path,
+    ) {
         // A folder whose clean is worked out or asked about already, from its card or the
         // toolbar, waits for that: another click would only ask again.
-        if self.preparing.contains_key(&clicked) || self.questions.asks_about(&clicked) {
+        let clicked: Vec<Clicked> = clicked
+            .iter()
+            .filter(|(_, dir)| {
+                !self.preparing.contains_key(&dir.path) && !self.questions.asks_about(&dir.path)
+            })
+            .map(|(project, dir)| Clicked {
+                project: (*project).clone(),
+                dir: (*dir).clone(),
+                sandboxed: map.sandboxed,
+            })
+            .collect();
+        if clicked.is_empty() {
             return;
         }
-        let about = Clicked {
-            project: project.clone(),
-            dir: dir.clone(),
-            sandboxed: map.sandboxed,
-        };
-        let preparing = {
-            let (folder, project) = (clicked.clone(), project.path.clone());
-            let reported = clicked.clone();
-            let env = CargoEnv::of_this_process(home);
-            self.threads.run(
-                "sutra-clean-prepare",
-                move || clean::prepare(&folder, &project, &map, &env),
-                move |prepared| Report::Prepared {
-                    clicked: reported,
-                    prepared,
-                },
-            )
-        };
-        if let Err(err) = preparing {
-            let words = about.words(home);
-            self.alerts
-                .push(Alert::notice(words.cannot_clean(), err.to_string()));
-            return;
+        let folders: Vec<(PathBuf, PathBuf)> = clicked
+            .iter()
+            .map(|about| (about.dir.path.clone(), about.project.path.clone()))
+            .collect();
+        let reported = folders.iter().map(|(folder, _)| folder.clone()).collect();
+        let env = CargoEnv::of_this_process(home);
+        let preparing = self.threads.run(
+            "sutra-clean-prepare",
+            move || clean::prepare_each(&folders, &map, &env),
+            move |prepared| Report::Prepared {
+                clicked: reported,
+                prepared,
+            },
+        );
+        for about in clicked {
+            match &preparing {
+                Ok(()) => {
+                    self.preparing.insert(about.dir.path.clone(), about);
+                }
+                Err(err) => {
+                    let words = about.words(home);
+                    self.alerts
+                        .push(Alert::notice(words.cannot_clean(), err.to_string()));
+                }
+            }
         }
-        self.preparing.insert(clicked, about);
     }
 
     /// What the click on `clicked` means has been worked out, or its thread ended with no word
@@ -306,7 +329,9 @@ mod tests {
     };
     use crate::dashboard::cleaning::{CleanState, IdleOffer};
     use crate::map::clean::{Sharing, WORTH_CLEANING_BYTES};
-    use crate::map::test_support::{TempDir, at, cargo_target, measured, project_at, snapshot_of};
+    use crate::map::test_support::{
+        CACHEDIR_TAG, TempDir, at, cargo_target, measured, project_at, snapshot_of,
+    };
 
     /// A clean of `folders` that takes builds of the project `other` with it.
     fn reaching(folders: &[&Path], other: &str) -> Prepared {
@@ -354,6 +379,50 @@ mod tests {
         );
         assert_eq!(cleaning.running[0].clicked, folder);
         assert!(cleaning.take_alerts().is_empty());
+    }
+
+    #[test]
+    fn a_click_on_several_shows_on_each_card_at_once_and_each_goes_as_its_own_click_would() {
+        let fixture = TempDir::new("asking-each");
+        // Scratch folders with a build folder `CARGO_TARGET_DIR` named, which cargo tagged, or
+        // a copy of one, which it did not, and Sutra will not delete.
+        let scratch = |name: &str, tagged: bool| {
+            let tag = if tagged { CACHEDIR_TAG } else { "" };
+            fixture.write(&format!("{name}/target/CACHEDIR.TAG"), tag);
+            let dir = cargo_target(fixture.path(&format!("{name}/target")), measured(5_000));
+            let folder = Project {
+                artifacts: vec![dir.clone()],
+                ..project_at(fixture.path(name))
+            };
+            (folder, dir)
+        };
+        let (made, made_target) = scratch("r567", true);
+        let (copied, copied_target) = scratch("copied", false);
+        let map = Arc::new(snapshot_of(vec![made.clone(), copied.clone()]));
+        let (mut cleaning, inbox) = reporting();
+
+        let clicked = [(&made, &made_target), (&copied, &copied_target)];
+        cleaning.start_each(&clicked, map, fixture.root());
+        for dir in [&made_target, &copied_target] {
+            assert!(cleaning.state_of(dir).is_some(), "its card shows the clean");
+        }
+        let report = next_report(&inbox);
+        cleaning.receive(report, None, at(100), fixture.root());
+
+        assert_eq!(
+            cleaning.running[0].clicked, made_target.path,
+            "the one cargo made goes"
+        );
+        let alerts = cleaning.take_alerts();
+        let [Alert::Notice { title, .. }] = alerts.as_slice() else {
+            panic!("one notice, got {alerts:?}");
+        };
+        assert_eq!(title, "Can't clean target in copied");
+        assert_eq!(
+            cleaning.state_of(&copied_target),
+            None,
+            "it shows its size again"
+        );
     }
 
     #[test]

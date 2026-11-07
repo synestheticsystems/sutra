@@ -11,7 +11,7 @@ mod tray;
 mod units;
 
 pub(super) use header::scratch_mark;
-pub(in crate::dashboard) use menu::offers_terminate;
+pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

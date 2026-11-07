@@ -96,6 +96,20 @@ pub fn prepare(
     ))
 }
 
+/// Work out the clean of each of `clicked`, a build folder and the project it is in, in the order
+/// given, as `prepare` does for one: what each project's build deletes, which says who shares the
+/// folders, is worked out once for all of them.
+pub fn prepare_each(
+    clicked: &[(PathBuf, PathBuf)],
+    map: &Snapshot,
+    env: &CargoEnv,
+) -> Vec<Result<Prepared, PrepareError>> {
+    let builds = Builds::of(map, env);
+    let each = clicked.iter();
+    each.map(|(folder, project)| prepare_among(folder, project, map, env, &builds))
+        .collect()
+}
+
 /// `prepare`, among several that share what `builds` worked out.
 pub(super) fn prepare_among(
     clicked: &Path,
@@ -322,6 +336,49 @@ mod tests {
         assert!(prepared.sizes[0].is_some_and(|usage| usage.bytes >= 8192));
         // Panics unless the locks are free again, so a build can start while the question is open.
         let _building = hold_like_cargo(&target.join("debug/.cargo-lock"));
+    }
+
+    #[test]
+    fn each_clean_of_several_comes_as_its_own_would_and_in_their_order() {
+        let fixture = TempDir::new("prepare-each");
+        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
+        for folder in ["r567", "r593"] {
+            fixture.write(
+                &format!("{scratchpad}/{folder}/target/CACHEDIR.TAG"),
+                CACHEDIR_TAG,
+            );
+        }
+        let lock = fixture.write(&format!("{scratchpad}/r593/target/debug/.cargo-lock"), "");
+        let folder = |name: &str| fixture.path(&format!("{scratchpad}/{name}"));
+        let clicked = [
+            (folder("r567").join("target"), folder("r567")),
+            (folder("r593").join("target"), folder("r593")),
+        ];
+        let map = snapshot_of(Vec::new());
+        let env = fixture.cargo_env();
+        let _building = hold_like_cargo(&lock);
+
+        let each = prepare_each(&clicked, &map, &env);
+
+        let one = |(target, project): &(PathBuf, PathBuf)| prepare(target, project, &map, &env);
+        let alone: Vec<_> = clicked.iter().map(one).collect();
+        // Off the map, each folder is measured as it is worked out, so only its size's moment
+        // differs.
+        let worked_out = |prepared: &Result<Prepared, PrepareError>| {
+            let found = prepared.as_ref();
+            found
+                .map(|it| (it.plan.clone(), it.sharing.clone()))
+                .map_err(Clone::clone)
+        };
+        assert_eq!(
+            each.iter().map(worked_out).collect::<Vec<_>>(),
+            alone.iter().map(worked_out).collect::<Vec<_>>()
+        );
+        assert!(each[0].is_ok(), "the first is free to go");
+        assert!(
+            matches!(each[1], Err(PrepareError::Locks(_))),
+            "the second is building"
+        );
     }
 
     #[test]

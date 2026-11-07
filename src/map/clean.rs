@@ -51,7 +51,7 @@ pub use idle::{
     IdleClean, IdleCleans, IdleFolder, LeftOut, WORTH_CLEANING_BYTES, Why,
     can_tell_what_is_at_work, idle_folders, is_blocked_by_a_sharer, is_still_idle, prepare_idle,
 };
-pub use prepare::{PrepareError, Prepared, Sharing, prepare};
+pub use prepare::{PrepareError, Prepared, Sharing, prepare, prepare_each};
 pub use run::{CleanError, Cleaned, Freed, LockedPlan, Progress, lock};
 pub use safety::{Held, Reach, Refusal};
 

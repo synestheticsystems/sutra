@@ -46,6 +46,47 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
 }
 
 #[test]
+fn clean_all_on_a_sessions_line_starts_each_build_folder_of_its_scratch_that_a_card_would_offer() {
+    let fixture = TempDir::new("state-clean-scratch");
+    let (mut state, _inbox) = dashboard(&fixture);
+    // A scratch folder of the session `session_id` holding a build folder of `bytes`.
+    let scratch = |session_id: &str, folder: &str, bytes: u64| {
+        let session_folder = fixture.path(&format!("claude-501/-code-app/{session_id}"));
+        let path = session_folder.join("scratchpad").join(folder);
+        let target = cargo_target(path.join("target"), measured(bytes));
+        Project {
+            scratch: Some(crate::map::ScratchSpace {
+                session_folder,
+                session_id: session_id.to_string(),
+                started_in: "app".to_string(),
+                session: None,
+            }),
+            ..active_at(path, vec![target])
+        }
+    };
+    let map = snapshot_of(vec![
+        scratch("e26ca359", "r567", 5_000_000),
+        scratch("e26ca359", "tiny", 10),
+        scratch("0b1d4f00", "other", 5_000_000),
+    ]);
+    state.show(Arc::new(map.clone()), now());
+
+    let session_folder = format::path_text(&fixture.path("claude-501/-code-app/e26ca359"));
+    state.perform(Action::CleanScratch { session_folder }, now());
+
+    let cleaning: Vec<bool> = map
+        .projects
+        .iter()
+        .map(|project| state.cleaning.state_of(&project.artifacts[0]).is_some())
+        .collect();
+    assert_eq!(
+        cleaning,
+        [true, false, false],
+        "neither one too small to be worth it, nor another session's"
+    );
+}
+
+#[test]
 fn a_clean_chosen_on_a_folder_whose_name_is_not_text_starts_on_it_and_not_on_one_shown_alike() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -99,8 +140,8 @@ fn a_clean_reaching_other_projects_asks_once_and_the_answer_decides_it() {
     let ask = |state: &mut State| {
         clean(state, &target);
         let prepared = Report::Prepared {
-            clicked: target.clone(),
-            prepared: Some(Ok(reaching())),
+            clicked: vec![target.clone()],
+            prepared: Some(vec![Ok(reaching())]),
         };
         state.on_report(prepared, now());
         state.contents(now()).dialog.expect("a question")
