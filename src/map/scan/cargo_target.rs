@@ -53,7 +53,7 @@ fn is_in_cargo_home(folder: &Path) -> bool {
 
 /// Whether `folder` holds the `CACHEDIR.TAG` cargo writes into a folder it makes, and not a link
 /// to one (see `is_cargo_tag`).
-pub fn holds_cargo_tag(folder: &Path) -> bool {
+pub(super) fn holds_cargo_tag(folder: &Path) -> bool {
     let tag = folder.join(CACHEDIR_TAG_FILE);
     fs::symlink_metadata(&tag).is_ok_and(|meta| meta.is_file())
         && File::open(&tag).is_ok_and(|tag| is_cargo_tag(&tag))

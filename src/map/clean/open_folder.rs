@@ -36,6 +36,7 @@ pub(super) struct Entry {
     pub(super) kind: Kind,
 }
 
+/// What a name in a folder names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Folder,
