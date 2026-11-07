@@ -1,5 +1,6 @@
-//! What the list shows, in order: the projects in focus in the user's sort, the agents working
-//! outside every project, and one row standing for the quiet projects, which opens to list them.
+//! What the list shows, in order: the projects in focus in the user's sort (see `focus`), the
+//! agents working outside every project, and one row standing for the quiet projects, which opens
+//! to list them.
 //! A typed filter lists every project it admits instead. In the Activity sort, the cards of a
 //! parent with two or more of them above the quiet row, a repository's worktrees or a session's
 //! scratch folders, stand together in its group, under the line that names it. Judged at one
@@ -23,6 +24,7 @@ use std::time::SystemTime;
 
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
+use crate::dashboard::SortOrder;
 use crate::map::{AgentSession, Project, Snapshot, SubagentWithParent};
 
 /// One row of the list.
@@ -79,6 +81,8 @@ impl<'a> Elsewhere<'a> {
 
 pub(super) struct Listing<'a> {
     pub(super) snapshot: &'a Snapshot,
+    /// The sort the rows are laid out in, which also decides what is in focus.
+    pub(super) sort: SortOrder,
     pub(super) rows: Vec<Row<'a>>,
 }
 
@@ -129,7 +133,7 @@ impl<'a> Listing<'a> {
                 let (focused, quiet): (Vec<&Project>, Vec<&Project>) = snapshot
                     .projects
                     .iter()
-                    .partition(|project| in_focus(project, now));
+                    .partition(|project| in_focus(project, sort, now));
                 rows.extend(cards(Section::Main, focused));
                 rows.extend(Elsewhere::of(snapshot, |_| true).map(Row::Elsewhere));
                 if !quiet.is_empty() {
@@ -144,7 +148,11 @@ impl<'a> Listing<'a> {
                 }
             }
         }
-        Listing { snapshot, rows }
+        Listing {
+            snapshot,
+            sort,
+            rows,
+        }
     }
 
     /// The cards of each section, in the order on screen, with the cards of each group folded shut
@@ -338,7 +346,7 @@ mod tests {
         agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot, subagent_in,
     };
     use super::*;
-    use crate::map::{AgentStatus, Harness};
+    use crate::map::{AgentStatus, Harness, LARGE_FOLDER_BYTES};
 
     #[test]
     fn the_activity_sort_groups_two_or_more_worktrees_above_the_quiet_row_and_none_below_it() {
@@ -399,6 +407,42 @@ mod tests {
         assert_eq!(
             shown(&listing.rows),
             ["recent", "older", "elsewhere", "quiet:1"]
+        );
+    }
+
+    #[test]
+    fn the_scratch_of_a_session_that_ended_waits_behind_the_quiet_row_in_the_activity_sort_alone() {
+        use super::fixtures::{running_as, scratch_folder};
+        let large = |project: Project| Project {
+            own_files: crate::map::test_support::measured(LARGE_FOLDER_BYTES),
+            ..project
+        };
+        let map = snapshot(
+            vec![
+                large(scratch_folder("d5fa0639", "sim-target", project("", 1))),
+                running_as(
+                    "Foundry",
+                    scratch_folder("e26ca359", "r567", project("", 1)),
+                ),
+                large(quiet("forgotten")),
+            ],
+            vec![],
+        );
+        let listed = |sort| {
+            let mut arrangement = Arrangement::default();
+            arrangement.set_sort(sort, &map, now());
+            arrangement.toggle_quiet(Some(&map), now());
+            shown(&Listing::new(&map, &arrangement, now()).rows)
+        };
+        assert_eq!(
+            listed(SortOrder::Activity),
+            ["Foundry", "quiet:2", "app d5fa0639", "forgotten"],
+            "its activity a minute ago, and its size, are disk news"
+        );
+        assert_eq!(
+            listed(SortOrder::Disk),
+            ["app d5fa0639", "forgotten", "Foundry"],
+            "in focus by size where the sort is for disk"
         );
     }
 

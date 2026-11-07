@@ -1,10 +1,10 @@
 //! A group on the list: a line naming the parent the cards share, with the disk its cards take,
 //! then the cards, each going by what sets it apart, as the line names what they share. A
 //! repository's line goes by its name; a session's by the session's name, with the mark of its
-//! scratch, and the whole line steps back once the session has ended, as whether it runs is what
-//! says whether its scratch may still be in use. A right click on a session's line cleans all its
-//! scratch. Folded shut, the line stands alone and still says what its cards would of their
-//! agents: their robots stand at its end, and it throbs while one of them waits on the user.
+//! scratch, which steps back once the session has ended, as whether it runs is what says whether
+//! its scratch may still be in use. A right click on a session's line cleans all its scratch.
+//! Folded shut, the line stands alone and still says what its cards would of their agents: their
+//! robots stand at its end, and it throbs while one of them waits on the user.
 
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::contents::card::{self, CardContext, Naming, agents, subagents};
@@ -164,8 +164,14 @@ mod tests {
 
     /// The row of the first group the Activity sort lists for `map`, with `folds`.
     fn first_group(map: &Snapshot, folds: &Folds) -> ListRow {
+        first_group_in(map, &Arrangement::default(), folds)
+    }
+
+    /// The row of the first group the Activity sort lists for `map` as `arrangement` arranges it,
+    /// with `folds`.
+    fn first_group_in(map: &Snapshot, arrangement: &Arrangement, folds: &Folds) -> ListRow {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
-        let listing = Listing::new(map, &Arrangement::default(), now());
+        let listing = Listing::new(map, arrangement, now());
         let group = listing.rows.iter().find_map(|row| match row {
             Row::Group(group) => Some(group),
             _ => None,
@@ -278,10 +284,14 @@ mod tests {
             folder: "/private/tmp/claude-501/-code-app/e26ca359".to_string(),
         };
         folds.toggle(&session, &foundry(false));
+        // Quiet once its session has ended, the scratch has its line in the Activity sort only
+        // when a typed filter lists it.
+        let mut filtered = Arrangement::default();
+        filtered.set_filter_text("scratchpad".to_string(), Some(&foundry(false)), now());
         let ListRow::Group {
             line,
             fold: GroupFold::Open { cards },
-        } = first_group(&foundry(false), &folds)
+        } = first_group_in(&foundry(false), &filtered, &folds)
         else {
             panic!("the group, open");
         };
@@ -297,9 +307,12 @@ mod tests {
 
     #[test]
     fn a_sessions_line_offers_to_clean_all_its_scratchs_build_folders_and_a_repositorys_nothing() {
-        let with = |folder: &str, artifacts: Vec<ArtifactDir>| Project {
-            artifacts,
-            ..scratch_folder("e26ca359", folder, project("", 1))
+        let with = |folder: &str, artifacts: Vec<ArtifactDir>| {
+            let scratch = Project {
+                artifacts,
+                ..scratch_folder("e26ca359", folder, project("", 1))
+            };
+            running_as("Foundry", scratch)
         };
         let scratchpad = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad";
         let r567 = format!("{scratchpad}/r567");

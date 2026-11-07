@@ -21,13 +21,13 @@ struct Arrangement: Equatable {
     /// The list's rows at `moment`, as the live core lays them out: the projects in focus in the
     /// sort, then the row standing for the quiet projects, with them below it while it is open.
     func rows(at moment: TimeInterval) -> [ListRow] {
-        let focused = Scenario.projects.filter { $0.inFocus(at: moment) }
-        let quiet = Scenario.projects.filter { !$0.inFocus(at: moment) }
+        let focused = Scenario.projects.filter { $0.inFocus(in: sort, at: moment) }
+        let quiet = Scenario.projects.filter { !$0.inFocus(in: sort, at: moment) }
         var rows = layOut(focused, at: moment)
         if !quiet.isEmpty {
             rows.append(.quietProjects(
                 count: UInt32(quiet.count), open: quietShown, label: "\(quiet.count) quiet",
-                tooltip: Project.whatMakesOneQuiet
+                tooltip: Project.whatMakesOneQuiet(in: sort)
             ))
             if quietShown {
                 rows += arranged(quiet, at: moment).map { project in
@@ -155,22 +155,33 @@ private struct Repository {
 }
 
 extension Project {
-    /// What makes a project quiet, with the focus's thresholds spelled out.
-    fileprivate static let whatMakesOneQuiet = "No agent session, no dev-runner environment, "
-        + "no activity in the last \(Int(focusRecent / 86_400)) days, and less than "
-        + "\(Words.size(focusLargeBytes)) on disk"
+    /// What makes a project quiet in `sort`, with the focus's thresholds spelled out.
+    fileprivate static func whatMakesOneQuiet(in sort: SutraCore.SortOrder) -> String {
+        let days = Int(focusRecent / 86_400)
+        return switch sort {
+        case .activity:
+            "No agent session, no dev-runner environment, and no activity in the last \(days) "
+                + "days. Scratch from Claude Code sessions that have ended waits here too."
+        case .name, .disk:
+            "No agent session, no dev-runner environment, no activity in the last \(days) days, "
+                + "and less than \(Words.size(focusLargeBytes)) on disk"
+        }
+    }
 
     /// How recent its last activity must be to keep a project in focus.
     private static let focusRecent: TimeInterval = 7 * 86_400
-    /// How much its folder must hold to keep a project in focus on size alone.
+    /// How much its folder must hold to keep a project in focus on size alone, where the sort
+    /// weighs size.
     private static let focusLargeBytes: UInt64 = 1 << 30
 
-    /// Whether the live core keeps it in focus at `moment`: it has an agent or a dev environment,
-    /// activity within the last week, or a folder holding a gigabyte or more.
-    fileprivate func inFocus(at moment: TimeInterval) -> Bool {
-        !sessions.isEmpty || !subagents(at: moment).isEmpty || !units.isEmpty
+    /// Whether the live core keeps it in focus in `sort` at `moment`: it has an agent or a dev
+    /// environment, activity within the last week, or, by name or by size, a folder holding a
+    /// gigabyte or more. The invented work keeps no scratch, so none waits for its session's end.
+    fileprivate func inFocus(in sort: SutraCore.SortOrder, at moment: TimeInterval) -> Bool {
+        let large = sort != .activity && bytes >= Self.focusLargeBytes
+        return !sessions.isEmpty || !subagents(at: moment).isEmpty || !units.isEmpty
             || moment - lastActivity(at: moment) <= Self.focusRecent
-            || bytes >= Self.focusLargeBytes
+            || large
     }
 
     /// The five-minute slice of the clock holding its last activity at `moment`.

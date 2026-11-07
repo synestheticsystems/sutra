@@ -3,7 +3,9 @@
 //! the pointer is over the list.
 
 use super::*;
-use crate::dashboard::listing::fixtures::{linked_worktree, main_worktree, scratch_folder};
+use crate::dashboard::listing::fixtures::{
+    linked_worktree, main_worktree, running_as, scratch_folder,
+};
 use crate::dashboard::{GroupFold, Parent};
 use crate::map::test_support::snapshot_of;
 
@@ -79,17 +81,17 @@ fn a_group_folded_from_its_line_is_kept_folded_for_the_next_run_and_a_click_open
 fn a_sessions_scratch_starts_folded_and_an_opened_one_is_kept_open_for_the_next_run() {
     let fixture = TempDir::new("state-fold-scratch");
     let (mut state, _inbox) = dashboard(&fixture);
-    let scratch = |folder| scratch_folder("e26ca359", folder, active("", 1));
+    let scratch = |folder| running_as("Foundry", scratch_folder("e26ca359", folder, active("", 1)));
     let map = vec![scratch("r567"), scratch("r593")];
     state.show(Arc::new(snapshot_of(map)), now());
-    assert_eq!(groups(&state), ["app e26ca359: folded"]);
+    assert_eq!(groups(&state), ["Foundry: folded"]);
 
     let session = Parent::Session {
         folder: "/private/tmp/claude-501/-code-app/e26ca359".to_string(),
     };
     click_line(&mut state, session.clone());
 
-    assert_eq!(groups(&state), ["app e26ca359: open"]);
+    assert_eq!(groups(&state), ["Foundry: open"]);
     let saved = SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
     assert!(!saved.folds.is_folded(&session));
 }

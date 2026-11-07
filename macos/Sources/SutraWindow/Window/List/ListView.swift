@@ -103,8 +103,7 @@ private struct Chevron: View {
 /// down from the chevron, so they read as the parent's at a glance. A click on the line folds the
 /// cards away, and another shows them again. Folded, the line holds the robots of the agents in
 /// its cards at its end, and throbs as their cards would while one of them waits on the user. A
-/// session's line steps back once the session has ended, as a robot at rest does, and a right click
-/// on it offers to clean all its scratch.
+/// right click on a session's line offers to clean all its scratch.
 private struct CardGroup: View {
     let line: GroupLine
     let fold: Fold
@@ -179,8 +178,7 @@ private struct CardGroup: View {
     }
 
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
-    /// the name, a session's scratch mark and the total. Once a session has ended, its line steps
-    /// back.
+    /// the name, a session's scratch mark and the total.
     private func header(open: Bool) -> some View {
         Button {
             dashboard.perform(.toggleFold(parent: line.parent))
@@ -193,7 +191,10 @@ private struct CardGroup: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let scratch = line.scratch {
+                        // Once its session has ended, the mark steps back as a robot at rest does;
+                        // the line's words stay, as what the scratch holds is still there.
                         ScratchMarkView(mark: scratch)
+                            .opacity(scratch.sessionRuns ? 1 : Still.opacity)
                     }
                     if let total = line.total {
                         Text(total)
@@ -204,7 +205,6 @@ private struct CardGroup: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .opacity(line.scratch?.sessionRuns == false ? Still.opacity : 1)
         }
         .buttonStyle(.plain)
         .hoverTip(line.tooltip)

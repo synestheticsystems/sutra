@@ -200,8 +200,9 @@ pub struct GroupLine {
     /// Where a repository is, as `~/code/app` reads, which tells two clones of one remote apart;
     /// a session's name and whether it still runs, then its folder.
     pub tooltip: String,
-    /// On a session's line, the mark of its scratch, beside its name. While the mark says the
-    /// session has ended, the whole line steps back as a robot at rest does.
+    /// On a session's line, the mark of its scratch, beside its name. Once the session has ended,
+    /// the mark steps back as a robot at rest does, and the line's words do not: what the scratch
+    /// holds is still there to clean.
     pub scratch: Option<ScratchMark>,
     /// The disk the parent's cards on the map take between them, listed or not, as their trays
     /// write it: the sizes measured so far, added up, and `None` before the first.

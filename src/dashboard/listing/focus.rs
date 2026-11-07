@@ -1,32 +1,51 @@
-//! Which projects the list keeps in focus. Discovery casts a wide net, every worktree under the
-//! roots, which on a busy machine is hundreds of rows; focus keeps the ones worth a look, and the
-//! rest wait behind the quiet row.
+//! Which projects the list keeps in focus, in each sort. Discovery casts a wide net, every worktree
+//! under the roots, which on a busy machine is hundreds of rows; focus keeps the ones worth a look,
+//! and the rest wait behind the quiet row. What is worth a look depends on what the sort is for:
+//! the Activity sort shows the work going on, so what only takes disk waits there, as the gauge of
+//! the disk and the Disk sort show it.
 
 use std::time::{Duration, SystemTime};
 
+use crate::dashboard::SortOrder;
 use crate::map::{LARGE_FOLDER_BYTES, Project};
 
 /// How recent a project's last activity must be to keep it in focus. A first guess.
 pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Whether the project belongs in the focused view. A project is in focus when any of these holds:
-///   - a coding agent has a session or a subagent at work in it;
-///   - a dev-runner environment describes it, from `~/.dev-runner/` or its own `.dev-runner/`;
-///   - its last activity lies within `FOCUS_RECENT` of `now`;
-///   - its folder holds at least `LARGE_FOLDER_BYTES` (see `disk_bytes`), so a forgotten folder
-///     that fills the disk is not hidden. A large project joins the focus when the
-///     measurement that shows it lands.
+/// Whether the project belongs in the focused view of `sort`. In every sort, a project is in focus
+/// while a coding agent has a session or a subagent at work in it, or a dev-runner environment
+/// describes it, from `~/.dev-runner/` or its own `.dev-runner/`. Past that:
+///   - in the Activity sort, while its last activity lies within `FOCUS_RECENT` of `now`, unless it
+///     is the scratch of a session that has ended: that is disk news, not activity news, whatever
+///     its age or size;
+///   - in the Name and Disk sorts, while its last activity lies within `FOCUS_RECENT` of `now`, or
+///     its folder holds at least `LARGE_FOLDER_BYTES` (see `disk_bytes`), so a forgotten folder
+///     that fills the disk is not hidden. A large project joins the focus when the measurement
+///     that shows it lands.
 ///
 /// Both thresholds are first guesses, to tune once the focused view has been lived with.
-pub(super) fn in_focus(project: &Project, now: SystemTime) -> bool {
-    !project.agents.is_empty()
+pub(super) fn in_focus(project: &Project, sort: SortOrder, now: SystemTime) -> bool {
+    let at_work = !project.agents.is_empty()
         || !project.subagents.is_empty()
-        || project.environment.is_some()
-        || project.last_activity.is_some_and(|at| {
-            // A time ahead of the clock (a file touched with a future date) is recent.
-            now.duration_since(at).unwrap_or(Duration::ZERO) <= FOCUS_RECENT
-        })
-        || disk_bytes(project) >= LARGE_FOLDER_BYTES
+        || project.environment.is_some();
+    let recent = project.last_activity.is_some_and(|at| {
+        // A time ahead of the clock (a file touched with a future date) is recent.
+        now.duration_since(at).unwrap_or(Duration::ZERO) <= FOCUS_RECENT
+    });
+    at_work
+        || match sort {
+            SortOrder::Activity => recent && !is_ended_scratch(project),
+            SortOrder::Name | SortOrder::Disk => {
+                recent || disk_bytes(project) >= LARGE_FOLDER_BYTES
+            }
+        }
+}
+
+/// Whether `project` is a scratch folder whose session has ended, so that nothing will build in it
+/// again.
+fn is_ended_scratch(project: &Project) -> bool {
+    let space = project.scratch.as_ref();
+    space.is_some_and(|space| space.session.is_none())
 }
 
 /// What the Disk sort and the focus rule weigh: the whole folder once it is measured, and until
@@ -85,73 +104,113 @@ mod tests {
         }
     }
 
+    /// The sorts in which `project` is in focus.
+    fn focused_in(project: &Project) -> Vec<SortOrder> {
+        let sorts = SortOrder::ALL.into_iter();
+        sorts
+            .filter(|sort| in_focus(project, *sort, now()))
+            .collect()
+    }
+
     #[test]
-    fn a_project_that_misses_every_reason_is_out_of_focus() {
-        assert!(!in_focus(&out_of_focus(), now()));
+    fn a_project_that_misses_every_reason_is_out_of_focus_in_every_sort() {
+        assert_eq!(focused_in(&out_of_focus()), []);
         let never_active = Project {
             last_activity: None,
             ..out_of_focus()
         };
-        assert!(!in_focus(&never_active, now()));
+        assert_eq!(focused_in(&never_active), []);
     }
 
     #[test]
-    fn an_agent_session_brings_a_project_into_focus() {
+    fn an_agent_session_brings_a_project_into_focus_in_every_sort() {
         let working = Project {
             agents: vec![agent_session("thread-1", AgentStatus::Idle)],
             ..out_of_focus()
         };
-        assert!(in_focus(&working, now()));
+        assert_eq!(focused_in(&working), SortOrder::ALL);
     }
 
     #[test]
-    fn a_subagent_at_work_for_a_session_elsewhere_brings_a_project_into_focus() {
+    fn a_subagent_at_work_for_a_session_elsewhere_brings_a_project_into_focus_in_every_sort() {
         let session = agent_session("elsewhere", AgentStatus::Idle);
         let working = Project {
             subagents: vec![SubagentWithParent::new(subagent_at_work("a1"), &session)],
             ..out_of_focus()
         };
-        assert!(in_focus(&working, now()));
+        assert_eq!(focused_in(&working), SortOrder::ALL);
     }
 
     #[test]
-    fn a_dev_runner_environment_brings_a_project_into_focus() {
+    fn a_dev_runner_environment_brings_a_project_into_focus_in_every_sort() {
         let described = Project {
             environment: Some(environment_at("/code/app")),
             ..out_of_focus()
         };
-        assert!(in_focus(&described, now()));
+        assert_eq!(focused_in(&described), SortOrder::ALL);
     }
 
     #[test]
-    fn activity_within_focus_recent_brings_a_project_into_focus() {
+    fn activity_within_focus_recent_brings_a_project_into_focus_in_every_sort() {
         let at_the_edge = Project {
             last_activity: Some(now() - FOCUS_RECENT),
             ..out_of_focus()
         };
-        assert!(in_focus(&at_the_edge, now()));
+        assert_eq!(focused_in(&at_the_edge), SortOrder::ALL);
         let ahead_of_the_clock = Project {
             last_activity: Some(now() + Duration::from_secs(60)),
             ..out_of_focus()
         };
-        assert!(in_focus(&ahead_of_the_clock, now()));
+        assert_eq!(focused_in(&ahead_of_the_clock), SortOrder::ALL);
     }
 
     #[test]
-    fn build_folders_that_reach_large_folder_bytes_between_them_bring_a_project_into_focus() {
+    fn build_folders_that_reach_large_folder_bytes_bring_a_project_into_focus_by_name_and_disk() {
         let mut project = out_of_focus();
         project
             .artifacts
             .push(cargo_target("/code/app/crates/cli/target", measured(1)));
-        assert!(in_focus(&project, now()));
+        assert_eq!(focused_in(&project), [SortOrder::Name, SortOrder::Disk]);
     }
 
     #[test]
-    fn a_whole_folder_that_reaches_large_folder_bytes_brings_a_project_into_focus() {
+    fn a_whole_folder_that_reaches_large_folder_bytes_brings_a_project_into_focus_by_name_and_disk()
+    {
         let small_target_large_folder = sized(measured(LARGE_FOLDER_BYTES - 10), measured(10));
-        assert!(in_focus(&small_target_large_folder, now()));
+        assert_eq!(
+            focused_in(&small_target_large_folder),
+            [SortOrder::Name, SortOrder::Disk],
+            "the Activity sort leaves size to the gauge and the Disk sort"
+        );
         let one_byte_short = sized(measured(LARGE_FOLDER_BYTES - 11), measured(10));
-        assert!(!in_focus(&one_byte_short, now()));
+        assert_eq!(focused_in(&one_byte_short), []);
+    }
+
+    #[test]
+    fn the_scratch_of_a_session_that_ended_is_quiet_in_the_activity_sort_whatever_its_age_or_size()
+    {
+        use crate::dashboard::listing::fixtures::{running_as, scratch_folder};
+        let recent_and_large = Project {
+            last_activity: Some(now()),
+            ..sized(measured(LARGE_FOLDER_BYTES), measured(10))
+        };
+        let ended = scratch_folder("e26ca359", "r567", recent_and_large);
+        assert_eq!(focused_in(&ended), [SortOrder::Name, SortOrder::Disk]);
+        let running = running_as("Foundry", ended.clone());
+        assert_eq!(
+            focused_in(&running),
+            SortOrder::ALL,
+            "a running one's is news"
+        );
+        let reviewed = Project {
+            agents: vec![agent_session("thread-1", AgentStatus::Busy)],
+            ..ended
+        };
+        assert_eq!(
+            focused_in(&reviewed),
+            SortOrder::ALL,
+            "an agent at work in it is news"
+        );
     }
 
     #[test]

@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 use super::card::{self, CardContext, Naming, agents};
 use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing, Row};
-use crate::dashboard::{List, ListRow, format};
+use crate::dashboard::{List, ListRow, SortOrder, format};
+use crate::map::LARGE_FOLDER_BYTES;
 use crate::map::grant::GrantError;
-use crate::map::{LARGE_FOLDER_BYTES, Snapshot};
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
@@ -44,13 +44,14 @@ pub(in crate::dashboard) fn list(
             rows: listing
                 .rows
                 .iter()
-                .map(|row| list_row(row, listing.snapshot, folds, cards))
+                .map(|row| list_row(row, listing, folds, cards))
                 .collect(),
         },
     }
 }
 
-fn list_row(row: &Row, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
+fn list_row(row: &Row, listing: &Listing, folds: &Folds, cards: &CardContext) -> ListRow {
+    let map = listing.snapshot;
     match row {
         Row::Project(project) => ListRow::Card {
             card: Box::new(card::card(project, Naming::Alone, map, cards)),
@@ -65,7 +66,7 @@ fn list_row(row: &Row, map: &Snapshot, folds: &Folds, cards: &CardContext) -> Li
             count: format::count(*count),
             open: *shown,
             label: how_many(*count),
-            tooltip: what_makes_one_quiet(),
+            tooltip: what_makes_one_quiet(listing.sort),
         },
     }
 }
@@ -100,15 +101,21 @@ fn how_many(count: usize) -> String {
     format!("{count} quiet")
 }
 
-/// What makes a project quiet, with the focus thresholds spelled out so the reader can tell why a
-/// project is behind the row.
-fn what_makes_one_quiet() -> String {
-    format!(
-        "No agent session, no dev-runner environment, no activity in the last {} days, and less \
-         than {} on disk",
-        FOCUS_RECENT.as_secs() / 86_400,
-        format::bytes(LARGE_FOLDER_BYTES),
-    )
+/// What makes a project quiet in `sort`, with the focus thresholds spelled out so the reader can
+/// tell why a project is behind the row (see `listing::focus`).
+fn what_makes_one_quiet(sort: SortOrder) -> String {
+    let days = FOCUS_RECENT.as_secs() / 86_400;
+    match sort {
+        SortOrder::Activity => format!(
+            "No agent session, no dev-runner environment, and no activity in the last {days} \
+             days. Scratch from Claude Code sessions that have ended waits here too."
+        ),
+        SortOrder::Name | SortOrder::Disk => format!(
+            "No agent session, no dev-runner environment, no activity in the last {days} days, \
+             and less than {} on disk",
+            format::bytes(LARGE_FOLDER_BYTES),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -123,7 +130,7 @@ mod tests {
         snapshot, subagent_in,
     };
     use crate::dashboard::{AgentLook, ElsewhereLine, GroupFold, Parent};
-    use crate::map::AgentStatus;
+    use crate::map::{AgentStatus, Snapshot};
     use crate::notifications::Notifier;
 
     const HOME: &str = "/Users/dev";
@@ -313,12 +320,40 @@ mod tests {
     }
 
     #[test]
-    fn the_quiet_row_counts_its_projects_and_says_what_makes_one_quiet() {
+    fn the_quiet_row_counts_its_projects_and_says_what_makes_one_quiet_in_its_sort() {
         assert_eq!(how_many(764), "764 quiet");
         assert_eq!(
-            what_makes_one_quiet(),
-            "No agent session, no dev-runner environment, no activity in the last 7 days, and \
-             less than 1.1 GB on disk"
+            what_makes_one_quiet(SortOrder::Activity),
+            "No agent session, no dev-runner environment, and no activity in the last 7 days. \
+             Scratch from Claude Code sessions that have ended waits here too."
+        );
+        let by_size = "No agent session, no dev-runner environment, no activity in the last 7 \
+                       days, and less than 1.1 GB on disk";
+        assert_eq!(what_makes_one_quiet(SortOrder::Name), by_size);
+        assert_eq!(what_makes_one_quiet(SortOrder::Disk), by_size);
+    }
+
+    #[test]
+    fn the_quiet_row_says_what_makes_one_quiet_in_the_sort_the_list_is_in() {
+        let map = snapshot(vec![project("recent", 1), quiet("old")], vec![]);
+        let tooltip = |sort| {
+            let mut arrangement = Arrangement::default();
+            arrangement.set_sort(sort, &map, now());
+            let List::Rows { rows } = listed(&map, &arrangement) else {
+                panic!("a map with projects lists them");
+            };
+            rows.into_iter().find_map(|row| match row {
+                ListRow::QuietProjects { tooltip, .. } => Some(tooltip),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            tooltip(SortOrder::Activity),
+            Some(what_makes_one_quiet(SortOrder::Activity))
+        );
+        assert_eq!(
+            tooltip(SortOrder::Disk),
+            Some(what_makes_one_quiet(SortOrder::Disk))
         );
     }
 }
