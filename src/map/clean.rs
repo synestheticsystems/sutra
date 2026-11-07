@@ -19,7 +19,9 @@
 //!   - A clicked folder that this clean would not delete gets a plain delete of that folder alone
 //!     (`Plan::DeleteFolder`), as no bare `cargo clean` of its workspace touches it. It must be a
 //!     folder cargo made, it goes under the same locks, and a question says what it is: left over
-//!     from an earlier build, or where another workspace builds.
+//!     from an earlier build, or where another workspace builds. A folder no workspace holds at
+//!     all, as one `CARGO_TARGET_DIR` named in a scratch folder, is a cache by cargo's own tag,
+//!     and its delete empties it as any clean does, keeping its tag and lock files.
 //!
 //! Where Sutra refuses a folder cargo would delete (`safety`), each refusal naming the folder:
 //!   - a folder that config or the environment named, when cargo never marked it as its own
@@ -59,9 +61,10 @@ pub enum Plan {
     /// The clicked folder is one a bare `cargo clean` deletes, and this is all that it deletes.
     CargoClean(CleanPlan),
     /// A plain delete of the clicked folder alone. A bare `cargo clean` of its workspace deletes
-    /// `cargo_clean` and not this folder, or no workspace holds the folder at all (`None`). It is
-    /// then left over from an earlier build or setup, or it is where another workspace builds,
-    /// which `Sharing` tells.
+    /// `cargo_clean` and not this folder, and it is then left over from an earlier build or setup,
+    /// or it is where another workspace builds, which `Sharing` tells. Or no workspace holds the
+    /// folder at all (`None`), and cargo builds there because `CARGO_TARGET_DIR` or
+    /// `--target-dir` says so.
     DeleteFolder {
         /// Canonical.
         folder: PathBuf,
@@ -241,6 +244,36 @@ mod tests {
                 folder: orphan,
                 cargo_clean: None
             }
+        );
+    }
+
+    #[test]
+    fn a_folder_cargo_tagged_under_any_name_in_no_workspace_is_deleted_alone_and_a_copy_is_not() {
+        let fixture = TempDir::new("clean-plan-scratch");
+        let session = fixture.dir("claude-501/-Users-me/e26ca359");
+        let named_otherwise = fixture.write(
+            "claude-501/-Users-me/e26ca359/scratchpad/target-567-fix/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        let named_otherwise = named_otherwise.parent().unwrap().to_path_buf();
+        // A build folder copied without its tag, as `cp -R target/debug` leaves one.
+        let copied = fixture.dir("claude-501/-Users-me/e26ca359/scratchpad/mutation/target/debug");
+        let copied = copied.parent().unwrap().to_path_buf();
+        let env = fixture.cargo_env();
+
+        assert_eq!(
+            plan(&named_otherwise, &session, &env, &Reach::Anywhere),
+            Ok(Plan::DeleteFolder {
+                folder: named_otherwise,
+                cargo_clean: None
+            })
+        );
+        assert_eq!(
+            plan(&copied, &session, &env, &Reach::Anywhere),
+            Err(PlanError::Refused {
+                folder: copied,
+                reason: Refusal::NotCargoMade
+            })
         );
     }
 

@@ -263,7 +263,7 @@ mod tests {
 
     use super::*;
     use crate::map::clean::locks::tests::hold_like_cargo;
-    use crate::map::clean::{CleanPlan, Origin, PlannedFolder, Refusal};
+    use crate::map::clean::{CleanPlan, Origin, PlannedFolder, Progress, Refusal};
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, cargo_target, project_at, snapshot_of, usage,
     };
@@ -406,6 +406,48 @@ mod tests {
             prepare(&target, &fixture.path("app"), &map, &fixture.cargo_env()),
             Err(PrepareError::Locks(CleanError::BuildRunning { lock: busy }))
         );
+    }
+
+    #[test]
+    fn a_scratch_build_folder_no_workspace_holds_is_emptied_but_never_while_a_build_uses_it() {
+        let fixture = TempDir::new("prepare-scratch");
+        let session = fixture.dir("claude-501/-Users-me/e26ca359");
+        let scratchpad = "claude-501/-Users-me/e26ca359/scratchpad";
+        fixture.write(&format!("{scratchpad}/notes.md"), "kept");
+        fixture.write(
+            &format!("{scratchpad}/r567/target/CACHEDIR.TAG"),
+            CACHEDIR_TAG,
+        );
+        let lock = fixture.write(&format!("{scratchpad}/r567/target/debug/.cargo-lock"), "");
+        fixture.write(
+            &format!("{scratchpad}/r567/target/debug/deps/libfoundry.rlib"),
+            [3; 64 * 1024],
+        );
+        let target = fixture.path(&format!("{scratchpad}/r567/target"));
+        let map = snapshot_of(Vec::new());
+        let env = fixture.cargo_env();
+
+        let building = hold_like_cargo(&lock);
+        assert_eq!(
+            prepare(&target, &session, &map, &env),
+            Err(PrepareError::Locks(CleanError::BuildRunning {
+                lock: lock.clone()
+            }))
+        );
+        drop(building);
+
+        let prepared = prepare(&target, &session, &map, &env).unwrap();
+        assert!(!prepared.sharing.reaches_other_projects(), "so no question");
+        let cleaned = prepared
+            .lock()
+            .unwrap()
+            .delete(&Progress::default())
+            .unwrap();
+
+        assert!(cleaned.folders[0].bytes >= 64 * 1024);
+        assert!(target.join("CACHEDIR.TAG").exists() && lock.exists());
+        assert!(!target.join("debug/deps").exists());
+        assert!(fixture.path(&format!("{scratchpad}/notes.md")).exists());
     }
 
     #[test]

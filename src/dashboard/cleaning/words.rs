@@ -10,6 +10,7 @@ pub(super) use idle::{IDLE_SEARCH_STOPPED, idle_question, nothing_to_ask};
 pub(super) use keep_free::{keep_free_choice, keep_free_question, made_room};
 pub(super) use outcome::{all_stopped, stopped};
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 
@@ -59,11 +60,14 @@ impl<'a> Context<'a> {
     ) -> Question {
         let mut question = match plan {
             Plan::CargoClean(clean) => self.cargo_clean_question(clean, sizes, &sharing.projects),
-            Plan::DeleteFolder { cargo_clean, .. } => {
+            Plan::DeleteFolder {
+                folder,
+                cargo_clean,
+            } => {
                 let size = sizes
                     .first()
                     .map_or("an unknown size".to_string(), size_text);
-                self.delete_folder_question(cargo_clean.as_ref(), &size, &sharing.projects)
+                self.delete_folder_question(folder, cargo_clean.as_ref(), &size, &sharing.projects)
             }
         };
         question.detail.push_str(&unknown_sharers(sharing));
@@ -108,10 +112,15 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The question for a folder no bare `cargo clean` of its own workspace deletes. When another
-    /// workspace builds there, the folder is no leftover, and the question says whose builds go.
+    /// The question for `folder`, which no bare `cargo clean` of its own workspace deletes. When
+    /// another workspace builds there, the folder is no leftover, and the question says whose
+    /// builds go. A `target` its workspace's clean passes over is left over from an earlier build.
+    /// Any other folder is where cargo builds because `CARGO_TARGET_DIR` or `--target-dir` says so,
+    /// in no workspace or beside one, and only its tag let it be cleaned, so the question says it
+    /// is a cache.
     fn delete_folder_question(
         &self,
+        folder: &Path,
         cargo_clean: Option<&CleanPlan>,
         size: &str,
         sharers: &[String],
@@ -127,30 +136,52 @@ impl<'a> Context<'a> {
                 action: "Clean".to_string(),
             };
         }
-        let why = match cargo_clean {
-            Some(clean) if !clean.folders.is_empty() => {
-                let elsewhere: Vec<String> =
-                    clean.folders.iter().map(|f| self.folder(&f.path)).collect();
-                format!(
-                    "cargo clean in {} deletes {}, not this folder, so this one is left over \
-                     from an earlier build.",
-                    self.workspace(&clean.workspace),
-                    list(&elsewhere)
-                )
-            }
-            Some(clean) => format!(
-                "cargo clean in {} doesn't delete this folder, so it's left over from an earlier \
-                 build.",
-                self.workspace(&clean.workspace)
-            ),
-            None => "No Cargo.toml is beside this folder or above it, so cargo clean never \
-                     deletes it. It's left over from an earlier build."
-                .to_string(),
-        };
-        Question {
+        let leftover = |why: String| Question {
             title: format!("Clean the leftover {} in {}?", self.name, self.project.name),
             detail: format!("{why}\n\nCleaning it frees {size}."),
             action: "Clean".to_string(),
+        };
+        let cache = |why: String| Question {
+            title: format!("Clean {} in {}?", self.name, self.project.name),
+            detail: format!(
+                "{why} Cargo tagged it as its cache, and fills it again the next time it builds \
+                 there.\n\nCleaning it frees {size}."
+            ),
+            action: "Clean".to_string(),
+        };
+        let cargos_default = folder.file_name() == Some(OsStr::new("target"));
+        match cargo_clean {
+            Some(clean) if clean.folders.is_empty() => {
+                let why = format!(
+                    "cargo clean in {} doesn't delete this folder",
+                    self.workspace(&clean.workspace)
+                );
+                if cargos_default {
+                    leftover(format!("{why}, so it's left over from an earlier build."))
+                } else {
+                    cache(format!("{why}."))
+                }
+            }
+            Some(clean) => {
+                let elsewhere: Vec<String> =
+                    clean.folders.iter().map(|f| self.folder(&f.path)).collect();
+                let why = format!(
+                    "cargo clean in {} deletes {}, not this folder",
+                    self.workspace(&clean.workspace),
+                    list(&elsewhere)
+                );
+                if cargos_default {
+                    leftover(format!(
+                        "{why}, so this one is left over from an earlier build."
+                    ))
+                } else {
+                    cache(format!("{why}."))
+                }
+            }
+            None => cache(
+                "No Cargo.toml is beside this folder or above it, so no cargo clean reaches it."
+                    .to_string(),
+            ),
         }
     }
 
@@ -448,18 +479,66 @@ mod tests {
             folder: PathBuf::from("/Users/dev/code/app/crates/a/target"),
             cargo_clean: None,
         };
-        assert!(
-            words
-                .question(&orphan, &[size(1_000)], &sharing(&[]))
-                .detail
-                .starts_with("No Cargo.toml is beside this folder or above it")
-        );
         let shared = words.question(&orphan, &[size(1_000)], &sharing(&["fwd"]));
         assert_eq!(shared.title, "Clean crates/a/target in app?");
         assert_eq!(
             shared.detail,
             "Builds of fwd are in this folder, so it isn't left over.\n\n\
              Cleaning it frees 1 KB, and those builds go with it."
+        );
+    }
+
+    #[test]
+    fn a_folder_no_workspace_holds_is_said_to_be_cargos_cache_and_no_leftover() {
+        let project = Project {
+            name: "foundry e26ca359".to_string(),
+            ..project_at("/private/tmp/claude-501/-Users-dev-vt-foundry/e26ca359")
+        };
+        let clicked = cargo_target(
+            project.path.join("scratchpad/target-567-fix"),
+            Measurement::Pending,
+        );
+        let words = Context::new(&project, &clicked, Path::new(HOME), false);
+        let orphan = Plan::DeleteFolder {
+            folder: clicked.path.clone(),
+            cargo_clean: None,
+        };
+
+        assert_eq!(
+            words.question(&orphan, &[size(84_000_000_000)], &sharing(&[])),
+            Question {
+                title: "Clean scratchpad/target-567-fix in foundry e26ca359?".to_string(),
+                detail: "No Cargo.toml is beside this folder or above it, so no cargo clean \
+                         reaches it. Cargo tagged it as its cache, and fills it again the next \
+                         time it builds there.\n\nCleaning it frees 84 GB."
+                    .to_string(),
+                action: "Clean".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_folder_cargo_tagged_by_another_name_beside_a_workspace_is_its_cache_and_no_leftover() {
+        let project = project();
+        let words = Context::new(&project, &clicked("target-mas"), Path::new(HOME), false);
+        let named_otherwise = Plan::DeleteFolder {
+            folder: PathBuf::from("/Users/dev/code/app/target-mas"),
+            cargo_clean: Some(CleanPlan {
+                workspace: project.path.clone(),
+                folders: vec![planned("/Users/dev/code/app/target", Origin::Default)],
+            }),
+        };
+
+        assert_eq!(
+            words.question(&named_otherwise, &[size(3_000_000_000)], &sharing(&[])),
+            Question {
+                title: "Clean target-mas in app?".to_string(),
+                detail: "cargo clean in app deletes target, not this folder. Cargo tagged it as \
+                         its cache, and fills it again the next time it builds there.\n\n\
+                         Cleaning it frees 3 GB."
+                    .to_string(),
+                action: "Clean".to_string(),
+            }
         );
     }
 
