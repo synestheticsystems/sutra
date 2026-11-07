@@ -396,7 +396,7 @@ pub(super) mod tests {
         fixture.write("app/Cargo.toml", "[package]\nname = \"p\"\n");
         fixture.write("app/target/debug/big", [1; 64 * 1024]);
         let folder = fixture.path("app/target");
-        let plan = clean::plan(
+        let checked = clean::plan(
             &folder,
             clean::ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
@@ -405,7 +405,7 @@ pub(super) mod tests {
         .unwrap();
         let started_from = usage(1_000_000);
         let prepared = Prepared::for_test(
-            plan.clone(),
+            checked.plan.clone(),
             vec![Some(started_from)],
             clean::Sharing::default(),
         );
@@ -422,7 +422,7 @@ pub(super) mod tests {
             by: By::User,
             progress: Arc::clone(&progress),
         }];
-        clean::lock(&plan).unwrap().delete(&progress).unwrap();
+        checked.lock().unwrap().delete(&progress).unwrap();
 
         let freed = progress.bytes_freed_in(&folder);
         assert!(freed >= 64 * 1024);

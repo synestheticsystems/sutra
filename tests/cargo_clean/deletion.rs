@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sutra::map::clean::{self, Plan, Progress};
+use sutra::map::clean::{Plan, Progress};
 
 use super::fixture::{Entry, Fixture, copy_tree, tree};
 
@@ -44,7 +44,7 @@ fn cargo_listing(fixture: &Fixture, project: &str) -> BTreeSet<PathBuf> {
 
 /// Every path Sutra's clean of `clicked` deletes: each planned folder and all below it.
 fn sutra_listing(fixture: &Fixture, clicked: &Path) -> BTreeSet<PathBuf> {
-    let Plan::CargoClean(plan) = fixture.plan(clicked).expect("a plan") else {
+    let Plan::CargoClean(plan) = fixture.plan(clicked).expect("a plan").plan else {
         panic!("{} is cargo clean's folder", clicked.display());
     };
     let mut listing = BTreeSet::new();
@@ -71,7 +71,8 @@ fn assert_same_but_for_the_skeleton(fixture: &Fixture, project: &str) {
     let plan = fixture
         .plan(&by_sutra.join(project).join("target"))
         .expect("a plan");
-    let cleaned = clean::lock(&plan)
+    let cleaned = plan
+        .lock()
         .expect("no build runs")
         .delete(&Progress::default())
         .expect("the clean finishes");
@@ -222,11 +223,13 @@ fn a_folder_cargo_clean_leaves_is_cleared_alone_when_clicked() {
     let left_over = member.join("target");
     let workspace_builds = tree(&workspace.join("target"));
 
-    let plan = fixture.plan(&left_over).expect("a plan");
+    let checked = fixture.plan(&left_over).expect("a plan");
 
+    let plan = &checked.plan;
     assert!(matches!(plan, Plan::DeleteFolder { .. }), "{plan:?}");
     assert_eq!(plan.folders(), [left_over.as_path()]);
-    clean::lock(&plan)
+    checked
+        .lock()
         .expect("no build is running")
         .delete(&Progress::default())
         .expect("the delete");

@@ -22,7 +22,7 @@ use rayon::prelude::*;
 
 pub use artifacts::{find_artifacts, find_artifacts_throughout};
 pub use boundary::{Boundary, MacOsAnswer, folder_access};
-pub use cargo_target::{CACHEDIR_TAG_FILE, holds_cargo_tag, is_cargo_target};
+pub use cargo_target::{CACHEDIR_TAG_FILE, holds_cargo_tag, is_cargo_tag, is_cargo_target};
 pub use git::{git_activity, repo_info};
 pub use scratch::{SessionFolder, scratch_folders, scratch_root, session_folders};
 

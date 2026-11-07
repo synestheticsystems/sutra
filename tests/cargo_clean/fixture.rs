@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-use sutra::map::clean::{self, CargoEnv, CleanPlan, ItsProject, Plan, Reach};
+use sutra::map::clean::{self, CargoEnv, CheckedPlan, CleanPlan, ItsProject, Plan, Reach};
 
 /// Cargo's tag, as it writes it into a build folder it creates.
 pub const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
@@ -118,8 +118,8 @@ impl Fixture {
         }
     }
 
-    /// Sutra's plan for cleaning `clicked`, anywhere Sutra may delete.
-    pub fn plan(&self, clicked: &Path) -> Result<Plan, clean::PlanError> {
+    /// Sutra's plan for cleaning `clicked`, anywhere Sutra may delete, its folders checked.
+    pub fn plan(&self, clicked: &Path) -> Result<CheckedPlan, clean::PlanError> {
         clean::plan(
             clicked,
             ItsProject::At(&self.root),
@@ -131,7 +131,7 @@ impl Fixture {
     /// What `cargo clean` deletes for the workspace Sutra planned `clicked` in, whether the
     /// clicked folder is part of it or not.
     pub fn cargo_clean_of(&self, clicked: &Path) -> CleanPlan {
-        match self.plan(clicked).expect("a plan") {
+        match self.plan(clicked).expect("a plan").plan {
             Plan::CargoClean(clean) => clean,
             Plan::DeleteFolder {
                 cargo_clean: Some(clean),

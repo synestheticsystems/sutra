@@ -11,7 +11,7 @@
 //! are `flock(2)` locks, the call cargo makes through std's `File::lock` on macOS.
 
 use std::ffi::OsStr;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rayon::prelude::*;
 
 use super::CleanError;
+use super::open_folder::{Kind, OpenFolder};
 use crate::map::scan;
 
 /// The files cargo locks in a profile folder.
@@ -38,33 +39,30 @@ struct HeldLock {
 }
 
 impl HeldLocks {
-    /// Find the lock files in `folders` and take each not held yet.
-    pub(super) fn take_found(&mut self, folders: &[&Path]) -> Result<(), CleanError> {
-        for folder in folders {
-            self.take_all(find(folder)?)?;
-        }
-        Ok(())
-    }
-
-    /// Take each of `paths` not held yet, a file that is gone skipped (its folder went with it).
-    /// When a build holds one, those this call took are let go again and the build's lock is
-    /// named.
-    pub(super) fn take_all(&mut self, paths: Vec<PathBuf>) -> Result<(), CleanError> {
+    /// Find the lock files in `folder`, at `path`, and take each not held yet. Returns whether the
+    /// folder holds any lock file, held before or taken now. When a build holds one, those this
+    /// call took are let go again and the build's lock is named.
+    pub(super) fn take_found(
+        &mut self,
+        folder: &OpenFolder,
+        path: &Path,
+    ) -> Result<bool, CleanError> {
+        let found = find(folder, path)?;
+        let holds_any = !found.is_empty();
         let before = self.held.len();
-        for path in paths {
-            if self.holds(&path) {
+        for lock in found {
+            if self.holds(&lock.path) {
                 continue;
             }
-            match take(path) {
-                Ok(Some(lock)) => self.held.push(lock),
-                Ok(None) => {}
+            match take(lock) {
+                Ok(held) => self.held.push(held),
                 Err(err) => {
                     self.held.truncate(before);
                     return Err(err);
                 }
             }
         }
-        Ok(())
+        Ok(holds_any)
     }
 
     pub(super) fn holds(&self, path: &Path) -> bool {
@@ -72,21 +70,22 @@ impl HeldLocks {
     }
 }
 
-/// Lock `path` exclusively without waiting; `None` when the file is gone.
-fn take(path: PathBuf) -> Result<Option<HeldLock>, CleanError> {
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            let kind = err.kind();
-            return Err(CleanError::Io { path, kind });
-        }
-    };
+/// A lock file found, opened as the search found it, so that its lock is taken on that file and
+/// not on whatever stands at its path by then.
+#[derive(Debug)]
+struct LockFile {
+    path: PathBuf,
+    file: File,
+}
+
+/// Lock `lock` exclusively without waiting.
+fn take(lock: LockFile) -> Result<HeldLock, CleanError> {
+    let LockFile { path, file } = lock;
     match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-        Ok(flock) => Ok(Some(HeldLock {
+        Ok(flock) => Ok(HeldLock {
             path,
             _flock: flock,
-        })),
+        }),
         Err((_, Errno::EWOULDBLOCK)) => Err(CleanError::BuildRunning { lock: path }),
         // A volume that cannot lock files at all (`Unsupported`) cannot tell a running build
         // from an idle folder either, so the clean stops there too.
@@ -97,42 +96,53 @@ fn take(path: PathBuf) -> Result<Option<HeldLock>, CleanError> {
     }
 }
 
-/// Every lock file in `folder`, at any depth. A build's profile folders lie wherever its target
-/// folder does, and that can be anywhere in a build folder Sutra deletes, even inside another
-/// build's profile folder, so no folder is passed over. Only folder entries are read, never a
-/// file's metadata or contents: a `target` of 8,200 folders and 115,000 entries took 60 ms on
-/// discovery's threads and 145 ms on one (M4 Max, 2026-11-04). A folder that cannot be listed could
-/// hide a lock, so it fails the search.
-pub(super) fn find(folder: &Path) -> Result<Vec<PathBuf>, CleanError> {
-    scan::on_discovery_threads(|| find_in(folder))
+/// Every lock file in `folder`, at `path`, at any depth, each opened. A build's profile folders lie
+/// wherever its target folder does, and that can be anywhere in a build folder Sutra deletes, even
+/// inside another build's profile folder, so no folder is passed over. Each folder is entered
+/// through the one holding it, never along a path, and only folder entries are read and lock files
+/// opened, never another file's metadata or contents: a `target` of 8,200 folders and 115,000
+/// entries took 60 ms on discovery's threads and 145 ms on one (M4 Max, 2026-11-04). A folder that
+/// cannot be listed could hide a lock, so it fails the search.
+fn find(folder: &OpenFolder, path: &Path) -> Result<Vec<LockFile>, CleanError> {
+    scan::on_discovery_threads(|| find_in(folder, path))
 }
 
-fn find_in(dir: &Path) -> Result<Vec<PathBuf>, CleanError> {
-    let io_error = |err: io::Error| CleanError::Io {
-        path: dir.to_path_buf(),
+fn find_in(dir: &OpenFolder, path: &Path) -> Result<Vec<LockFile>, CleanError> {
+    let io_error = |at: PathBuf, err: io::Error| CleanError::Io {
+        path: at,
         kind: err.kind(),
     };
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        // Removed since its parent was listed.
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(io_error(err)),
-    };
+    let entries = dir
+        .entries()
+        .map_err(|err| io_error(path.to_path_buf(), err))?;
     let mut locks = Vec::new();
     let mut subfolders = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(io_error)?;
-        // `file_type` does not follow symlinks, so a linked folder is never entered.
-        let kind = entry.file_type().map_err(io_error)?;
-        if kind.is_file() && is_lock_name(&entry.file_name()) {
-            locks.push(entry.path());
-        } else if kind.is_dir() {
-            subfolders.push(entry.path());
+        match entry.kind {
+            Kind::File if is_lock_name(&entry.name) => {
+                let at = path.join(&entry.name);
+                match dir.file(&entry.name) {
+                    Ok(file) => locks.push(LockFile { path: at, file }),
+                    // Gone since the listing, with the folder that held it.
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(io_error(at, err)),
+                }
+            }
+            Kind::Folder => subfolders.push(entry.name),
+            Kind::File | Kind::Other => {}
         }
     }
     let below = subfolders
         .par_iter()
-        .map(|subfolder| find_in(subfolder))
+        .map(|name| {
+            let at = path.join(name);
+            match dir.folder(name) {
+                Ok(subfolder) => find_in(&subfolder, &at),
+                // Removed since its parent was listed.
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(err) => Err(io_error(at, err)),
+            }
+        })
         .collect::<Result<Vec<_>, _>>()?;
     locks.extend(below.into_iter().flatten());
     Ok(locks)
@@ -146,6 +156,22 @@ fn is_lock_name(name: &OsStr) -> bool {
 pub(super) mod tests {
     use super::*;
     use crate::map::test_support::TempDir;
+
+    impl HeldLocks {
+        /// `take_found` in the folder at `path`, opened for it.
+        pub(in crate::map::clean) fn take_found_at(
+            &mut self,
+            path: &Path,
+        ) -> Result<bool, CleanError> {
+            self.take_found(&OpenFolder::at(path).unwrap(), path)
+        }
+    }
+
+    /// The lock files `find` finds in the folder at `path`, by path.
+    fn found_in(path: &Path) -> Result<Vec<PathBuf>, CleanError> {
+        let found = find(&OpenFolder::at(path).unwrap(), path)?;
+        Ok(found.into_iter().map(|lock| lock.path).collect())
+    }
 
     /// Hold `lock` as a running cargo 1.99 does: `.cargo-lock` shared, the others exclusively.
     pub(in crate::map::clean) fn hold_like_cargo(lock: &Path) -> Flock<File> {
@@ -194,7 +220,7 @@ pub(super) mod tests {
         let linked = fixture.write("elsewhere/debug/.cargo-lock", "");
         std::os::unix::fs::symlink(linked.parent().unwrap(), target.join("linked")).unwrap();
 
-        let mut found = find(&target).unwrap();
+        let mut found = found_in(&target).unwrap();
         found.sort();
 
         let mut expected: Vec<PathBuf> = profiles
@@ -214,7 +240,7 @@ pub(super) mod tests {
         fixture.restrict(&sealed, 0o000);
 
         assert_eq!(
-            find(&target),
+            found_in(&target),
             Err(CleanError::Io {
                 path: sealed,
                 kind: io::ErrorKind::PermissionDenied,
@@ -230,7 +256,7 @@ pub(super) mod tests {
         let _building = hold_like_cargo(&busy);
 
         assert_eq!(
-            HeldLocks::default().take_found(&[&target]),
+            HeldLocks::default().take_found_at(&target),
             Err(CleanError::BuildRunning { lock: busy })
         );
     }
@@ -243,7 +269,7 @@ pub(super) mod tests {
         let _building = hold_like_cargo(&busy);
 
         assert_eq!(
-            HeldLocks::default().take_found(&[&target]),
+            HeldLocks::default().take_found_at(&target),
             Err(CleanError::BuildRunning { lock: busy })
         );
     }
@@ -257,14 +283,18 @@ pub(super) mod tests {
             let _building = hold_like_cargo(&busy);
             let mut locks = HeldLocks::default();
             assert_eq!(
-                locks.take_found(&[&target]),
+                locks.take_found_at(&target),
                 Err(CleanError::BuildRunning { lock: busy }),
                 "{lock}"
             );
             assert!(locks.held.is_empty(), "{lock}");
         }
         let mut locks = HeldLocks::default();
-        assert_eq!(locks.take_found(&[&target]), Ok(()), "every build finished");
+        assert_eq!(
+            locks.take_found_at(&target),
+            Ok(true),
+            "every build finished"
+        );
         assert_eq!(locks.held.len(), 6);
     }
 
@@ -277,7 +307,7 @@ pub(super) mod tests {
             .map_err(|(_, errno)| errno)
             .unwrap();
         assert_eq!(
-            HeldLocks::default().take_found(&[&target]),
+            HeldLocks::default().take_found_at(&target),
             Err(CleanError::BuildRunning { lock })
         );
     }
@@ -287,8 +317,8 @@ pub(super) mod tests {
         let fixture = TempDir::new("locks-held");
         let target = built(&fixture, &["debug"]);
         let mut locks = HeldLocks::default();
-        locks.take_found(&[&target]).unwrap();
-        locks.take_found(&[&target]).unwrap();
+        locks.take_found_at(&target).unwrap();
+        locks.take_found_at(&target).unwrap();
         assert_eq!(
             locks.held.len(),
             3,

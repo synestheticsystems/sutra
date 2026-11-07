@@ -39,6 +39,7 @@
 mod cargo_rules;
 mod idle;
 mod locks;
+mod open_folder;
 mod prepare;
 mod removal;
 mod run;
@@ -48,13 +49,15 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use open_folder::Identity;
+
 pub use cargo_rules::{CargoEnv, CargoRefusal, IncludeProblem, Origin};
 pub use idle::{
     IdleClean, IdleCleans, IdleFolder, LeftOut, WORTH_CLEANING_BYTES, Why,
     can_tell_what_is_at_work, idle_folders, is_blocked_by_a_sharer, is_still_idle, prepare_idle,
 };
 pub use prepare::{PrepareError, Prepared, Sharing, prepare, prepare_each};
-pub use run::{CleanError, Cleaned, Freed, LockedPlan, Progress, lock};
+pub use run::{CleanError, Cleaned, Freed, LockedPlan, Progress};
 pub use safety::{Held, ItsProject, Reach, Refusal};
 
 /// What deleting the clicked folder means.
@@ -81,6 +84,23 @@ impl Plan {
             Plan::CargoClean(clean) => clean.folders.iter().map(|f| f.path.as_path()).collect(),
             Plan::DeleteFolder { folder, .. } => vec![folder.as_path()],
         }
+    }
+}
+
+/// A plan whose folders each passed their checks, and which folder each path led to as it
+/// passed, so that nothing put in a folder's place since is ever deleted for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedPlan {
+    pub plan: Plan,
+    /// Which folder each of `plan`'s paths led to as it passed, in the plan's order.
+    identities: Vec<Identity>,
+}
+
+impl CheckedPlan {
+    /// Take the locks for the delete, or refuse because a build holds one or a folder is no longer
+    /// the one checked.
+    pub fn lock(&self) -> Result<LockedPlan, CleanError> {
+        run::lock(&self.plan, &self.identities)
     }
 }
 
@@ -118,14 +138,14 @@ pub enum PlanError {
     Refused { folder: PathBuf, reason: Refusal },
 }
 
-/// Work out what cleaning `clicked`, a build folder of `project`, deletes. The environment cargo
-/// would see is `env`; `reach` is where Sutra may delete.
+/// Work out what cleaning `clicked`, a build folder of `project`, deletes, and check each folder it
+/// deletes. The environment cargo would see is `env`; `reach` is where Sutra may delete.
 pub fn plan(
     clicked: &Path,
     project: ItsProject,
     env: &CargoEnv,
     reach: &Reach,
-) -> Result<Plan, PlanError> {
+) -> Result<CheckedPlan, PlanError> {
     let gone = || PlanError::Gone {
         folder: clicked.to_path_buf(),
     };
@@ -152,17 +172,25 @@ pub fn plan(
     match cargo_clean {
         Some(clean) if clean.folders.iter().any(|folder| folder.path == clicked) => {
             let protected = protected(Some(&clean.workspace));
-            for folder in &clean.folders {
-                safety::check_planned(folder, &protected, reach)?;
-            }
-            Ok(Plan::CargoClean(clean))
+            let identities = clean
+                .folders
+                .iter()
+                .map(|folder| safety::check_planned(folder, &protected, reach))
+                .collect::<Result<_, _>>()?;
+            Ok(CheckedPlan {
+                plan: Plan::CargoClean(clean),
+                identities,
+            })
         }
         cargo_clean => {
             let workspace = cargo_clean.as_ref().map(|clean| clean.workspace.as_path());
-            safety::check_delete_folder(&clicked, &protected(workspace), reach)?;
-            Ok(Plan::DeleteFolder {
-                folder: clicked,
-                cargo_clean,
+            let identity = safety::check_delete_folder(&clicked, &protected(workspace), reach)?;
+            Ok(CheckedPlan {
+                plan: Plan::DeleteFolder {
+                    folder: clicked,
+                    cargo_clean,
+                },
+                identities: vec![identity],
             })
         }
     }
@@ -171,6 +199,7 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::clean::open_folder::OpenFolder;
     use crate::map::test_support::{CACHEDIR_TAG, TempDir};
 
     #[test]
@@ -179,7 +208,7 @@ mod tests {
         fixture.package("app");
         let target = fixture.dir("app/target");
 
-        let plan = plan(
+        let checked = plan(
             &target,
             ItsProject::At(&fixture.path("app")),
             &fixture.cargo_env(),
@@ -188,15 +217,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            plan,
+            checked.plan,
             Plan::CargoClean(CleanPlan {
                 workspace: fixture.path("app"),
                 folders: vec![PlannedFolder {
-                    path: target,
+                    path: target.clone(),
                     origin: Origin::Default,
                 }],
             })
         );
+        let target_now = OpenFolder::at(&target).unwrap().identity().unwrap();
+        assert_eq!(checked.identities, [target_now], "the folder that passed");
     }
 
     #[test]
@@ -213,7 +244,8 @@ mod tests {
             &fixture.cargo_env(),
             &Reach::Anywhere,
         )
-        .unwrap();
+        .unwrap()
+        .plan;
 
         let Plan::DeleteFolder {
             folder,
@@ -239,7 +271,8 @@ mod tests {
             &fixture.cargo_env(),
             &Reach::Anywhere,
         )
-        .unwrap();
+        .unwrap()
+        .plan;
 
         assert_eq!(
             plan,
@@ -267,9 +300,12 @@ mod tests {
         let copied = fixture.dir(&format!("{scratchpad}/mutation/target/debug"));
         let copied = copied.parent().unwrap().to_path_buf();
         let env = fixture.cargo_env();
+        let planned = |folder: &Path, project| {
+            plan(folder, project, &env, &Reach::Anywhere).map(|checked| checked.plan)
+        };
 
         assert_eq!(
-            plan(&alone, ItsProject::Itself, &env, &Reach::Anywhere),
+            planned(&alone, ItsProject::Itself),
             Ok(Plan::DeleteFolder {
                 folder: alone,
                 cargo_clean: None
@@ -277,7 +313,7 @@ mod tests {
         );
         let r567 = scratch_folder("r567");
         assert_eq!(
-            plan(&inside, ItsProject::At(&r567), &env, &Reach::Anywhere),
+            planned(&inside, ItsProject::At(&r567)),
             Ok(Plan::DeleteFolder {
                 folder: inside,
                 cargo_clean: None
@@ -285,7 +321,7 @@ mod tests {
         );
         let mutation = scratch_folder("mutation");
         assert_eq!(
-            plan(&copied, ItsProject::At(&mutation), &env, &Reach::Anywhere),
+            planned(&copied, ItsProject::At(&mutation)),
             Err(PlanError::Refused {
                 folder: copied,
                 reason: Refusal::NotCargoMade

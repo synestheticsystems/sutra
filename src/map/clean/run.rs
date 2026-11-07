@@ -3,10 +3,12 @@
 //! `cargo clean` takes no lock (`src/ops/cargo_clean.rs:125-139`) and deletes a running build's
 //! files from under it. Sutra refuses while a build runs, and makes a build that starts during
 //! the delete wait for it. In order:
-//!  1. Take every lock in the folders, or refuse when a build holds one (`lock`).
+//!  1. Open each folder, refusing one that is no longer the folder its checks passed, and take
+//!     every lock in the folders, or refuse when a build holds one (`lock`). Each folder stays
+//!     open from here on, and whatever follows reaches into it through that folder alone.
 //!  2. Measure the folders, while every link of a file is still there to share its size.
 //!  3. Find the locks again and take any that appeared while measuring took its seconds, still
-//!     refusing when a build holds one, and refuse a folder that is no longer the one measured.
+//!     refusing when a build holds one, and refuse a folder whose path no longer leads to it.
 //!     Nothing is deleted before this.
 //!  4. Delete everything but the lock files, the folders holding them and the folder's
 //!     `CACHEDIR.TAG` (`removal::clear`). A build starting now waits on Sutra's locks.
@@ -23,61 +25,68 @@
 //! (`$CARGO_HOME/.package-cache`): `cargo clean` does not, and holding it would stall every cargo
 //! command on the machine.
 
-use std::fs;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::locks::HeldLocks;
+use super::open_folder::{Identity, OpenFolder, is_not_a_folder};
 use super::{Plan, removal};
 use crate::map::disk;
 
-/// A plan's folders with every build lock in them held, ready to delete.
+/// A plan's folders, each held open as the folder its checks passed, with every build lock in them
+/// held, ready to delete.
 #[derive(Debug)]
 pub struct LockedPlan {
-    /// Each folder, and which folder its path led to when the locks were taken.
-    folders: Vec<(PathBuf, FolderIdentity)>,
+    folders: Vec<(PathBuf, OpenFolder)>,
     locks: HeldLocks,
 }
 
-/// Which folder a path leads to, so that a clean deletes the folder it was asked about and not one
-/// put in its place since, whether at that path or by a link anywhere above it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FolderIdentity {
-    device: u64,
-    inode: u64,
+/// Open each folder `plan` deletes, refusing one that is no longer the folder `identities` names
+/// for it, in the plan's order, and take every build lock in them without waiting, or refuse
+/// because a build holds one.
+pub(super) fn lock(plan: &Plan, identities: &[Identity]) -> Result<LockedPlan, CleanError> {
+    let mut folders = Vec::new();
+    for (index, path) in plan.folders().into_iter().enumerate() {
+        // A folder with no identity never passed its checks.
+        let identity = identities.get(index).ok_or_else(|| changed(path))?;
+        folders.push((path.to_path_buf(), open_as(path, *identity)?));
+    }
+    let mut locks = HeldLocks::default();
+    for (path, folder) in &folders {
+        locks.take_found(folder, path)?;
+    }
+    Ok(LockedPlan { folders, locks })
 }
 
-impl FolderIdentity {
-    /// Of the folder at `path`, which must be a folder and not a link to one.
-    fn of(path: &Path) -> Result<FolderIdentity, CleanError> {
-        let changed = || CleanError::Changed {
-            folder: path.to_path_buf(),
-        };
-        let meta = fs::symlink_metadata(path).map_err(|_| changed())?;
-        if !meta.is_dir() {
-            return Err(changed());
+/// The folder at `path`, held open, when it is the folder `identity` names.
+fn open_as(path: &Path, identity: Identity) -> Result<OpenFolder, CleanError> {
+    let folder = OpenFolder::at(path).map_err(|err| {
+        let gone = err.kind() == io::ErrorKind::NotFound;
+        if gone || is_not_a_folder(&err) {
+            changed(path)
+        } else {
+            io_error(path, &err)
         }
-        Ok(FolderIdentity {
-            device: meta.dev(),
-            inode: meta.ino(),
-        })
+    })?;
+    if folder.identity().map_err(|err| io_error(path, &err))? != identity {
+        return Err(changed(path));
+    }
+    Ok(folder)
+}
+
+fn changed(folder: &Path) -> CleanError {
+    CleanError::Changed {
+        folder: folder.to_path_buf(),
     }
 }
 
-/// Take every build lock in the folders `plan` deletes, without waiting, or refuse because a
-/// build holds one.
-pub fn lock(plan: &Plan) -> Result<LockedPlan, CleanError> {
-    let folders = plan.folders();
-    let mut locks = HeldLocks::default();
-    locks.take_found(&folders)?;
-    let folders = folders
-        .into_iter()
-        .map(|folder| Ok((folder.to_path_buf(), FolderIdentity::of(folder)?)))
-        .collect::<Result<_, CleanError>>()?;
-    Ok(LockedPlan { folders, locks })
+fn io_error(path: &Path, err: &io::Error) -> CleanError {
+    CleanError::Io {
+        path: path.to_path_buf(),
+        kind: err.kind(),
+    }
 }
 
 /// How far a clean has come, readable while it runs, so the card can show a folder shrinking.
@@ -166,47 +175,34 @@ pub enum CleanError {
 }
 
 impl LockedPlan {
-    /// Which folder each path led to when the locks were taken, in the plan's order.
-    pub(super) fn identities(&self) -> Vec<FolderIdentity> {
-        self.folders.iter().map(|(_, identity)| *identity).collect()
-    }
-
-    /// Refuse unless each path leads where `identities` says it did.
-    pub(super) fn check_still(&self, identities: &[FolderIdentity]) -> Result<(), CleanError> {
-        for ((folder, now), then) in self.folders.iter().zip(identities) {
-            if now != then {
-                return Err(CleanError::Changed {
-                    folder: folder.clone(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Delete the folders, counting each file in `progress` as it goes.
+    /// Delete the folders, counting each file in `progress` as it goes. A folder moved away
+    /// since its locks were taken, with another put at its path, is left as it is, and so is the
+    /// other.
     pub fn delete(self, progress: &Progress) -> Result<Cleaned, CleanError> {
         let LockedPlan { folders, mut locks } = self;
-        let paths: Vec<&Path> = folders.iter().map(|(path, _)| path.as_path()).collect();
-        let before = paths
+        let before = folders
             .iter()
-            .map(|folder| size_of(folder))
+            .map(|(path, _)| size_of(path))
             .collect::<Result<Vec<u64>, CleanError>>()?;
-        locks.take_found(&paths)?;
-        for (folder, identity) in &folders {
-            if FolderIdentity::of(folder)? != *identity {
-                return Err(CleanError::Changed {
-                    folder: folder.clone(),
-                });
-            }
-            removal::clear(folder, &mut locks, &progress.reach(folder))?;
+        for (path, folder) in &folders {
+            locks.take_found(folder, path)?;
         }
-        let freed = paths
+        // Each path must still lead to the folder held open, so that one put in its place is
+        // refused as it would be before the locks.
+        for (path, folder) in &folders {
+            let identity = folder.identity().map_err(|err| io_error(path, &err))?;
+            open_as(path, identity)?;
+        }
+        for (path, folder) in &folders {
+            removal::clear(folder, path, &mut locks, &progress.reach(path))?;
+        }
+        let freed = folders
             .iter()
             .zip(before)
-            .map(|(folder, before)| {
-                let left = size_of(folder)?;
+            .map(|((path, _), before)| {
+                let left = size_of(path)?;
                 Ok(Freed {
-                    folder: folder.to_path_buf(),
+                    folder: path.clone(),
                     bytes: before.saturating_sub(left),
                     left,
                 })
@@ -230,13 +226,16 @@ fn size_of(folder: &Path) -> Result<u64, CleanError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::map::clean::locks::tests::{built, hold_like_cargo};
-    use crate::map::clean::{CleanPlan, Origin, PlannedFolder};
-    use crate::map::test_support::TempDir;
+    use crate::map::clean::{CleanPlan, ItsProject, Origin, PlannedFolder, Reach, plan};
+    use crate::map::test_support::{CACHEDIR_TAG, TempDir};
 
-    fn plan_of(folders: &[&Path]) -> Plan {
-        Plan::CargoClean(CleanPlan {
+    /// Lock the clean of `folders`, each checked as the folder at its path now.
+    fn lock_folders(folders: &[&Path]) -> Result<LockedPlan, CleanError> {
+        let plan = Plan::CargoClean(CleanPlan {
             workspace: folders[0].parent().unwrap().to_path_buf(),
             folders: folders
                 .iter()
@@ -245,7 +244,31 @@ mod tests {
                     origin: Origin::Default,
                 })
                 .collect(),
-        })
+        });
+        let identities: Vec<Identity> = folders
+            .iter()
+            .map(|folder| OpenFolder::at(folder).unwrap().identity().unwrap())
+            .collect();
+        lock(&plan, &identities)
+    }
+
+    #[test]
+    fn a_cache_swapped_for_another_folder_after_its_checks_is_refused_before_its_locks() {
+        let fixture = TempDir::new("run-swapped-after-checks");
+        let cache = fixture.write("loose/out/CACHEDIR.TAG", CACHEDIR_TAG);
+        let cache = cache.parent().unwrap().to_path_buf();
+        let env = fixture.cargo_env();
+        let project = fixture.path("loose");
+        let checked = plan(&cache, ItsProject::At(&project), &env, &Reach::Anywhere).unwrap();
+        // An untagged folder put in its place, as preparing the clean goes on to its locks.
+        fs::rename(&cache, fixture.path("loose/out.old")).unwrap();
+        let precious = fixture.write("loose/out/precious.txt", "keep");
+
+        assert_eq!(
+            checked.lock().map(drop),
+            Err(CleanError::Changed { folder: cache })
+        );
+        assert!(precious.exists());
     }
 
     #[test]
@@ -259,7 +282,7 @@ mod tests {
         let before = [size_of(&target), size_of(&build_dir)];
         let progress = Progress::default();
 
-        let cleaned = lock(&plan_of(&[&target, &build_dir]))
+        let cleaned = lock_folders(&[&target, &build_dir])
             .unwrap()
             .delete(&progress)
             .unwrap();
@@ -309,10 +332,7 @@ mod tests {
         fs::hard_link(&original, target.join("debug/libapp.rlib")).unwrap();
         let progress = Progress::default();
 
-        let cleaned = lock(&plan_of(&[&target]))
-            .unwrap()
-            .delete(&progress)
-            .unwrap();
+        let cleaned = lock_folders(&[&target]).unwrap().delete(&progress).unwrap();
 
         let freed = cleaned.folders[0].bytes;
         assert!(
@@ -326,7 +346,7 @@ mod tests {
     fn a_folder_swapped_after_the_locks_stops_the_delete_with_both_untouched() {
         let fixture = TempDir::new("run-swapped");
         let target = built(&fixture, &["debug"]);
-        let locked = lock(&plan_of(&[&target])).unwrap();
+        let locked = lock_folders(&[&target]).unwrap();
         let moved = fixture.path("app/target.old");
         fs::rename(&target, &moved).unwrap();
         let other = fixture.write("app/target/other", "keep");
@@ -343,7 +363,7 @@ mod tests {
     fn a_build_that_started_in_a_new_profile_folder_since_the_locks_stops_the_delete_untouched() {
         let fixture = TempDir::new("run-new-profile");
         let target = built(&fixture, &["debug"]);
-        let locked = lock(&plan_of(&[&target])).unwrap();
+        let locked = lock_folders(&[&target]).unwrap();
         built(&fixture, &["release"]);
         let busy = target.join("release/.cargo-build-lock");
         let _building = hold_like_cargo(&busy);

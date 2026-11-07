@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
-use sutra::map::clean::{self, CleanError, Plan, Progress};
+use sutra::map::clean::{CheckedPlan, CleanError, Progress};
 
 use super::fixture::{Fixture, wait_until};
 
@@ -37,7 +37,7 @@ fn main() {
 "#;
 
 /// A package with the holding build script, built once, and the plan to clean its `target`.
-fn built_package(fixture: &Fixture) -> Plan {
+fn built_package(fixture: &Fixture) -> CheckedPlan {
     let app = fixture.package("app", "");
     fixture.write("app/build.rs", HOLDING_BUILD_SCRIPT);
     fixture.run(&app, &["build"]);
@@ -145,11 +145,11 @@ fn a_running_build_or_check_stops_the_clean_until_it_finishes() {
         let held = Held::start(&fixture, name, command);
         held.wait_until_building();
 
-        let refused = clean::lock(&plan).expect_err("a build is running");
+        let refused = plan.lock().expect_err("a build is running");
         assert!(lock_in(refused, &target), "{name}");
 
         held.release_and_finish();
-        assert!(clean::lock(&plan).is_ok(), "{name} finished");
+        assert!(plan.lock().is_ok(), "{name} finished");
     }
 }
 
@@ -161,14 +161,14 @@ fn a_build_deep_in_the_folder_or_inside_a_profile_folder_stops_the_clean() {
         let held = Held::start(&fixture, name, &["build", "--target-dir", target_dir]);
         held.wait_until_building();
 
-        let refused = clean::lock(&plan).expect_err("a build is running");
+        let refused = plan.lock().expect_err("a build is running");
         assert!(
             lock_in(refused, &fixture.path("app").join(target_dir).join("debug")),
             "{name}"
         );
 
         held.release_and_finish();
-        assert!(clean::lock(&plan).is_ok(), "{name} finished");
+        assert!(plan.lock().is_ok(), "{name} finished");
     }
 }
 
@@ -177,7 +177,7 @@ fn a_build_that_starts_during_the_clean_waits_then_builds_in_a_tagged_folder_on_
     let fixture = Fixture::new("lock-waiting");
     let plan = built_package(&fixture);
     let target = fixture.path("app/target");
-    let locked = clean::lock(&plan).unwrap();
+    let locked = plan.lock().unwrap();
     let waiting = Held::start(&fixture, "waiting", &["build"]);
     waiting.wait_until_blocked();
 
@@ -204,7 +204,7 @@ fn a_build_in_a_profile_folder_that_appears_after_the_locks_stops_the_delete() {
     let fixture = Fixture::new("lock-new-profile");
     let plan = built_package(&fixture);
     let target = fixture.path("app/target");
-    let locked = clean::lock(&plan).unwrap();
+    let locked = plan.lock().unwrap();
     let release = Held::start(&fixture, "release", &["build", "--release"]);
     release.wait_until_building();
 

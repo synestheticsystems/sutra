@@ -5,9 +5,11 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::run::{FolderIdentity, LockedPlan};
+use super::open_folder::Identity;
+use super::run::{self, LockedPlan};
 use super::{
-    CargoEnv, CleanError, CleanPlan, ItsProject, Plan, PlanError, Reach, cargo_rules, lock, plan,
+    CargoEnv, CheckedPlan, CleanError, CleanPlan, ItsProject, Plan, PlanError, Reach, cargo_rules,
+    plan,
 };
 use crate::map::{ArtifactKind, DirUsage, FolderAccess, Project, Snapshot, disk};
 
@@ -22,28 +24,32 @@ pub struct Prepared {
     /// project); `None` when even that fails.
     pub sizes: Vec<Option<DirUsage>>,
     pub sharing: Sharing,
-    /// Which folder each of `plan`'s paths led to as this was worked out.
-    identities: Vec<FolderIdentity>,
+    /// Which folder each of `plan`'s paths led to as it passed its checks.
+    identities: Vec<Identity>,
 }
 
 impl Prepared {
-    /// A clean as if worked out, for tests of what is said about it.
+    /// A clean as if worked out, for tests of what is said about it, its folders checked as they
+    /// are now. When one is not there, none is checked, and taking the locks refuses the clean as
+    /// it refuses one whose folder went.
     #[cfg(test)]
     pub(crate) fn for_test(plan: Plan, sizes: Vec<Option<DirUsage>>, sharing: Sharing) -> Prepared {
+        use super::open_folder::OpenFolder;
+        let identity = |folder: &Path| OpenFolder::at(folder)?.identity();
+        let identities: std::io::Result<Vec<Identity>> =
+            plan.folders().into_iter().map(identity).collect();
         Prepared {
             plan,
             sizes,
             sharing,
-            identities: Vec::new(),
+            identities: identities.unwrap_or_default(),
         }
     }
 
     /// Take the locks for the delete, or refuse because a build holds one or a folder is no longer
     /// the one this was worked out for.
     pub fn lock(&self) -> Result<LockedPlan, CleanError> {
-        let locked = lock(&self.plan)?;
-        locked.check_still(&self.identities)?;
-        Ok(locked)
+        run::lock(&self.plan, &self.identities)
     }
 }
 
@@ -88,14 +94,8 @@ pub fn prepare(
     map: &Snapshot,
     env: &CargoEnv,
 ) -> Result<Prepared, PrepareError> {
-    let (plan, identities) = plan_unless_busy(clicked, project, map, env)?;
-    Ok(prepared(
-        plan,
-        identities,
-        project,
-        map,
-        &Builds::of(map, env),
-    ))
+    let checked = plan_unless_busy(clicked, project, map, env)?;
+    Ok(prepared(checked, project, map, &Builds::of(map, env)))
 }
 
 /// Work out the clean of each of `clicked`, a build folder and the project it is in, in the order
@@ -120,8 +120,8 @@ pub(super) fn prepare_among(
     env: &CargoEnv,
     builds: &Builds,
 ) -> Result<Prepared, PrepareError> {
-    let (plan, identities) = plan_unless_busy(clicked, project, map, env)?;
-    Ok(prepared(plan, identities, project, map, builds))
+    let checked = plan_unless_busy(clicked, project, map, env)?;
+    Ok(prepared(checked, project, map, builds))
 }
 
 fn plan_unless_busy(
@@ -129,17 +129,18 @@ fn plan_unless_busy(
     project: &Path,
     map: &Snapshot,
     env: &CargoEnv,
-) -> Result<(Plan, Vec<FolderIdentity>), PrepareError> {
+) -> Result<CheckedPlan, PrepareError> {
     let reach = if map.sandboxed {
         Reach::Within(&map.roots)
     } else {
         Reach::Anywhere
     };
     let project = its_project(clicked, project, map);
-    let plan = plan(clicked, project, env, &reach).map_err(PrepareError::Plan)?;
-    // Taken only to refuse now, not once the clean's turn comes, when a build is using a folder.
-    let identities = lock(&plan).map_err(PrepareError::Locks)?.identities();
-    Ok((plan, identities))
+    let checked = plan(clicked, project, env, &reach).map_err(PrepareError::Plan)?;
+    // Taken only to refuse now, not once the clean's turn comes, when a build is using a folder or
+    // a folder is no longer the one checked.
+    checked.lock().map_err(PrepareError::Locks)?;
+    Ok(checked)
 }
 
 /// What the project at `project` is to `clicked`, a build folder in it, as `map` shows them: the
@@ -158,13 +159,8 @@ fn its_project<'a>(clicked: &Path, project: &'a Path, map: &Snapshot) -> ItsProj
     }
 }
 
-fn prepared(
-    plan: Plan,
-    identities: Vec<FolderIdentity>,
-    project: &Path,
-    map: &Snapshot,
-    builds: &Builds,
-) -> Prepared {
+fn prepared(checked: CheckedPlan, project: &Path, map: &Snapshot, builds: &Builds) -> Prepared {
+    let CheckedPlan { plan, identities } = checked;
     Prepared {
         sizes: sizes(&plan, map),
         sharing: sharing(&plan, project, map, builds),

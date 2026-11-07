@@ -7,7 +7,7 @@
 //!     into a build folder it creates, so a setting that points at the wrong folder deletes
 //!     nothing. Cargo's own check reads only the tag's signature (`src/ops/cargo_clean.rs:156-185`,
 //!     `crates/cargo-util/src/paths.rs:802-815`), which every tool's tag starts with; Sutra asks
-//!     also for the words that say cargo wrote it (`scan::holds_cargo_tag`). Cargo's default
+//!     also for the words that say cargo wrote it (`scan::is_cargo_tag`). Cargo's default
 //!     `target` beside the root manifest needs no tag.
 //!   - No folder may hold the workspace, the project, the home folder or `CARGO_HOME`. A cache
 //!     standing alone, a build folder that is a project of its own (`ItsProject::Itself`), has no
@@ -19,10 +19,18 @@
 //! A folder deleted alone, which no `cargo clean` of its workspace deletes, must be a folder cargo
 //! made: a `target` beside a `Cargo.toml`, or holding cargo's `CACHEDIR.TAG`, as the scan requires
 //! of a build folder (`scan::is_cargo_target`).
+//!
+//! Each folder is opened before anything it holds is judged, and its tag is read through the
+//! folder opened. The folder that passed is then known by its identity (`Identity`), and the clean
+//! deletes in that folder alone: one put in its place since, even a moment after its check, is
+//! refused (see `run`).
 
+use std::ffi::OsStr;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
+use super::open_folder::{Identity, OpenFolder, is_not_a_folder};
 use super::{CargoEnv, Origin, PlanError, PlannedFolder};
 use crate::map::scan;
 
@@ -109,46 +117,37 @@ impl Protected {
     }
 }
 
-/// Check a folder a `cargo clean` plan deletes.
+/// Check a folder a `cargo clean` plan deletes, and say which folder passed.
 pub(super) fn check_planned(
     folder: &PlannedFolder,
     protected: &Protected,
     reach: &Reach,
-) -> Result<(), PlanError> {
-    check_any(&folder.path, protected, reach)?;
-    if folder.origin != Origin::Default && !scan::holds_cargo_tag(&folder.path) {
+) -> Result<Identity, PlanError> {
+    let opened = check_any(&folder.path, protected, reach)?;
+    if folder.origin != Origin::Default && !holds_cargo_tag(&opened) {
         let origin = folder.origin.clone();
         return Err(refused(&folder.path, Refusal::Untagged { origin }));
     }
-    Ok(())
+    identity(&opened, &folder.path)
 }
 
-/// Check a folder to delete alone.
+/// Check a folder to delete alone, and say which folder passed.
 pub(super) fn check_delete_folder(
     folder: &Path,
     protected: &Protected,
     reach: &Reach,
-) -> Result<(), PlanError> {
-    check_any(folder, protected, reach)?;
-    if !scan::is_cargo_target(folder) {
+) -> Result<Identity, PlanError> {
+    let opened = check_any(folder, protected, reach)?;
+    if !scan::is_cargo_target(folder, holds_cargo_tag(&opened)) {
         return Err(refused(folder, Refusal::NotCargoMade));
     }
-    Ok(())
+    identity(&opened, folder)
 }
 
-/// The checks every folder Sutra deletes must pass. `folder` is canonical but for a last
-/// component that is a symlink.
-fn check_any(folder: &Path, protected: &Protected, reach: &Reach) -> Result<(), PlanError> {
-    let meta = fs::symlink_metadata(folder).map_err(|err| PlanError::Unreadable {
-        path: folder.to_path_buf(),
-        kind: err.kind(),
-    })?;
-    if meta.is_symlink() {
-        return Err(refused(folder, Refusal::Link));
-    }
-    if !meta.is_dir() {
-        return Err(refused(folder, Refusal::NotAFolder));
-    }
+/// The checks every folder Sutra deletes must pass, which leave it open: what it holds is judged
+/// through the folder opened, so the folder judged is the one whose identity the clean carries.
+/// `folder` is canonical but for a last component that is a symlink.
+fn check_any(folder: &Path, protected: &Protected, reach: &Reach) -> Result<OpenFolder, PlanError> {
     if let Some((held, path)) = protected
         .folders
         .iter()
@@ -168,7 +167,38 @@ fn check_any(folder: &Path, protected: &Protected, reach: &Reach) -> Result<(), 
             return Err(refused(folder, Refusal::OutsideGrant));
         }
     }
-    Ok(())
+    OpenFolder::at(folder).map_err(|err| {
+        if !is_not_a_folder(&err) {
+            return unreadable(folder, &err);
+        }
+        // The open refused it either way; this look only says why.
+        let link = fs::symlink_metadata(folder).is_ok_and(|meta| meta.is_symlink());
+        let reason = if link {
+            Refusal::Link
+        } else {
+            Refusal::NotAFolder
+        };
+        refused(folder, reason)
+    })
+}
+
+/// Whether `folder` holds the `CACHEDIR.TAG` cargo writes, read through the folder itself. A tag
+/// that is a link is never followed.
+fn holds_cargo_tag(folder: &OpenFolder) -> bool {
+    let tag = folder.file(OsStr::new(scan::CACHEDIR_TAG_FILE));
+    tag.is_ok_and(|tag| scan::is_cargo_tag(&tag))
+}
+
+/// Which folder `opened`, at `path`, is.
+fn identity(opened: &OpenFolder, path: &Path) -> Result<Identity, PlanError> {
+    opened.identity().map_err(|err| unreadable(path, &err))
+}
+
+fn unreadable(path: &Path, err: &io::Error) -> PlanError {
+    PlanError::Unreadable {
+        path: path.to_path_buf(),
+        kind: err.kind(),
+    }
 }
 
 fn refused(folder: &Path, reason: Refusal) -> PlanError {
@@ -205,7 +235,12 @@ mod tests {
         )
     }
 
-    fn reason(result: Result<(), PlanError>) -> Refusal {
+    /// What a check returns of `folder` when it passes: which folder it is.
+    fn passed(folder: &Path) -> Result<Identity, PlanError> {
+        Ok(OpenFolder::at(folder).unwrap().identity().unwrap())
+    }
+
+    fn reason(result: Result<Identity, PlanError>) -> Refusal {
         match result {
             Err(PlanError::Refused { reason, .. }) => reason,
             other => panic!("expected a refusal, got {other:?}"),
@@ -229,8 +264,12 @@ mod tests {
         let pytests = pytests.parent().unwrap().to_path_buf();
 
         assert_eq!(
-            check_planned(&from_config(&fixture, tagged), &protected, &Reach::Anywhere),
-            Ok(())
+            check_planned(
+                &from_config(&fixture, tagged.clone()),
+                &protected,
+                &Reach::Anywhere
+            ),
+            passed(&tagged)
         );
         for folder in [untagged.clone(), lookalike, pytests] {
             assert!(matches!(
@@ -243,12 +282,12 @@ mod tests {
             ));
         }
         let default = PlannedFolder {
-            path: untagged,
+            path: untagged.clone(),
             origin: Origin::Default,
         };
         assert_eq!(
             check_planned(&default, &protected, &Reach::Anywhere),
-            Ok(())
+            passed(&untagged)
         );
     }
 
@@ -309,10 +348,13 @@ mod tests {
             reason(check_planned(&default(outside.clone()), &protected, &reach)),
             Refusal::OutsideGrant
         );
-        assert_eq!(check_planned(&default(real), &protected, &reach), Ok(()));
         assert_eq!(
-            check_planned(&default(outside), &protected, &Reach::Anywhere),
-            Ok(())
+            check_planned(&default(real.clone()), &protected, &reach),
+            passed(&real)
+        );
+        assert_eq!(
+            check_planned(&default(outside.clone()), &protected, &Reach::Anywhere),
+            passed(&outside)
         );
     }
 
@@ -329,11 +371,11 @@ mod tests {
 
         assert_eq!(
             check_delete_folder(&beside_manifest, &protected, &Reach::Anywhere),
-            Ok(())
+            passed(&beside_manifest)
         );
         assert_eq!(
             check_delete_folder(&tagged, &protected, &Reach::Anywhere),
-            Ok(())
+            passed(&tagged)
         );
         assert_eq!(
             reason(check_delete_folder(&site, &protected, &Reach::Anywhere)),
@@ -356,7 +398,7 @@ mod tests {
 
         assert_eq!(
             check_delete_folder(&cache, &alone, &Reach::Anywhere),
-            Ok(())
+            passed(&cache)
         );
         assert_eq!(
             reason(check_delete_folder(&cache, &in_project, &Reach::Anywhere)),
