@@ -7,6 +7,10 @@ import SwiftUI
 struct ListView: View {
     let dashboard: DashboardModel
 
+    /// The room between the list's rows: between cards, and between a group's line and its first
+    /// card.
+    static let rowSpacing: CGFloat = 8
+
     @State private var pointerInside = false
 
     var body: some View {
@@ -51,13 +55,15 @@ private struct Rows: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: ListView.rowSpacing) {
                 ForEach(rows) { row in
                     switch row {
                     case .card(let card):
                         CardView(model: card, dashboard: dashboard)
-                    case .group(let line, let fold):
-                        CardGroup(line: line, fold: fold, dashboard: dashboard)
+                    case .groupLine(let line, let fold):
+                        GroupLineRow(line: line, fold: fold, dashboard: dashboard)
+                    case .nested(let card, let guide):
+                        NestedCardRow(model: card, guide: guide, dashboard: dashboard)
                     case .elsewhere(let heading, let lines, let waiting):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
                     case .quietProjects(let open, let label, let tooltip):
@@ -74,7 +80,7 @@ private struct Rows: View {
 
 /// The lines of the list that fold something away, a group's and the one standing for the quiet
 /// projects, all laid out alike, so their chevrons stand in one column.
-private enum FoldingLine {
+enum FoldingLine {
     /// How far a line's chevron stands in from the list's edge.
     static let inset: CGFloat = 8
     /// The room above and below a line's text, which a folded group's throb fills.
@@ -85,7 +91,7 @@ private enum FoldingLine {
 }
 
 /// A folding line's chevron, pointing at what the line holds while it shows.
-private struct Chevron: View {
+struct Chevron: View {
     let open: Bool
 
     var body: some View {
@@ -94,151 +100,6 @@ private struct Chevron: View {
             .rotationEffect(.degrees(open ? 90 : 0))
             .frame(width: FoldingLine.chevronWidth)
             .accessibilityHidden(true)
-    }
-}
-
-/// The cards that share a parent, a repository's worktrees or a session's scratch folders: the
-/// parent's line, with a disclosure chevron, its name, and the disk its cards take, inside the
-/// mark of scratch on a session's line, then the cards, set in from the list's edge and hung from
-/// a guide that runs down from the chevron, so they read as the parent's at a glance. A click on
-/// the line folds the cards away, and another shows them again. Folded, the line holds the robots
-/// of the agents in its cards at its end and the servers running in them after its total, and
-/// throbs as their cards would while one of them waits on the user. A right click on a session's
-/// line offers to clean the build folders in its scratch.
-private struct CardGroup: View {
-    let line: GroupLine
-    let fold: Fold
-    let dashboard: DashboardModel
-
-    /// The room between the line and the cards, and between cards, as between the list's rows.
-    private static let spacing: CGFloat = 8
-    /// How far the cards stand in from the list's edge, well past the chevron.
-    private static let cardIndent: CGFloat = 24
-    /// Where the guide runs, from the list's edge: down the middle of the chevron.
-    private static let guideOffset = FoldingLine.inset + FoldingLine.chevronWidth / 2
-
-    var body: some View {
-        switch fold {
-        case .open(let cards):
-            VStack(alignment: .leading, spacing: Self.spacing) {
-                header(open: true)
-                    .padding(.horizontal, FoldingLine.inset)
-                    .padding(.vertical, FoldingLine.padding)
-                VStack(alignment: .leading, spacing: Self.spacing) {
-                    ForEach(cards, id: \.path) { card in
-                        CardView(model: card, dashboard: dashboard)
-                    }
-                }
-                .padding(.leading, Self.cardIndent)
-                .background(alignment: .topLeading) { guide }
-            }
-        case .folded(let sessions, let subagents, let waiting, let units, let moreUnits):
-            HStack(spacing: 12) {
-                header(open: false, units: units, moreUnits: moreUnits)
-                if !sessions.isEmpty || !subagents.isEmpty {
-                    // Laid out first and never cut, as on a card's tray.
-                    TrayAgents(sessions: sessions, subagents: subagents)
-                        .fixedSize()
-                        .layoutPriority(1)
-                }
-            }
-            .padding(.leading, FoldingLine.inset)
-            // The robots end where a card's tray ends them, so every robot on the list stands in
-            // one column.
-            .padding(.trailing, Surface.edgeWidth + Surface.contentInset)
-            .padding(.vertical, FoldingLine.padding)
-            // Open, the cards of the agents that wait throb themselves; folded, the line throbs
-            // for them.
-            .background {
-                if waiting {
-                    Throb(cornerRadius: Surface.cornerRadius)
-                }
-            }
-        }
-    }
-
-    /// The hairline the cards hang from, from just below the chevron to the foot of the last card.
-    private var guide: some View {
-        hairline
-            .frame(width: 1)
-            // Up through the room between the line and the first card, to just below the chevron,
-            // which sits above the foot of the line's text.
-            .padding(.top, -(Self.spacing + FoldingLine.padding))
-            .offset(x: Self.guideOffset - 0.5)
-            .accessibilityHidden(true)
-    }
-
-    /// Unbroken under a repository, whose worktrees are kept; in dots under a session's scratch,
-    /// broken as its mark is, so cards whose line has scrolled away still read as scratch.
-    @ViewBuilder
-    private var hairline: some View {
-        if line.scratch == nil {
-            Rectangle()
-                .fill(Surface.guide)
-        } else {
-            DownTheMiddle()
-                .stroke(Scratch.guideInk, style: Scratch.guide)
-        }
-    }
-
-    /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
-    /// the name and the total, in a session's scratch mark; folded, the servers running in its
-    /// cards after them, `units` drawn and `moreUnits` counted. A click on a server here opens the
-    /// cards, where a server opens in the browser.
-    private func header(
-        open: Bool, units: [UnitLozenge] = [], moreUnits: MoreUnits? = nil
-    ) -> some View {
-        Button {
-            dashboard.perform(.toggleFold(parent: line.parent))
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Chevron(open: open)
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(line.name)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let total = line.total {
-                        if let scratch = line.scratch {
-                            // On a session's line the mark goes around the total, which is
-                            // exactly what is throwaway.
-                            Text(total).scratchMarked(scratch)
-                        } else {
-                            Text(total)
-                        }
-                    }
-                    ForEach(Array(units.enumerated()), id: \.offset) { _, unit in
-                        UnitCapsule(lozenge: unit)
-                            .hoverTip(unit.tooltip)
-                    }
-                    if let moreUnits {
-                        Text(moreUnits.label)
-                            .hoverTip(moreUnits.tooltip)
-                    }
-                }
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .hoverTip(line.tooltip)
-        // A session's line offers to clean the build folders in its scratch; a repository's
-        // offers nothing.
-        .contextMenu { MenuEntries(entries: line.menu, dashboard: dashboard) }
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityValue(open ? "Open" : "Folded")
-    }
-}
-
-/// A line down the middle of its frame, from top to bottom.
-private struct DownTheMiddle: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        }
     }
 }
 

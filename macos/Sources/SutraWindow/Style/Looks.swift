@@ -94,10 +94,13 @@ extension UnitLook {
 enum Scratch {
     /// The dash of the mark's outline, as long as a gap and a half.
     static let dash: [CGFloat] = [3, 2]
-    /// The guide a session's opened scratch hangs from: round dots 2 pt across, every 5 pt. Dashes
+    /// The guide a session's opened scratch hangs from is a column of round dots this wide. Dashes
     /// as faint as a repository's guide read as the same unbroken hairline at a glance; dots stay
     /// dots.
-    static let guide = StrokeStyle(lineWidth: 2, lineCap: .round, dash: [0, 5])
+    static let guideDot: CGFloat = 2
+    /// About how far apart the guide's dots stand: each card's stretch of the guide spreads its
+    /// dots evenly down its own height.
+    static let guideDotSpacing: CGFloat = 5
     /// The dots' grey, darker than a repository's hairline, so the dots read as dots.
     static let guideInk = Color(nsColor: .secondaryLabelColor)
 }
