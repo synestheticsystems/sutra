@@ -58,8 +58,9 @@ impl State {
     }
 }
 
-/// The build folders in `project`'s folder: anywhere in a session's scratch folder, where agents
-/// build under any name, and in any other as deep as `scan::find_artifacts` looks.
+/// The build folders in `project`'s folder: a session's scratch folder itself, or anywhere in it,
+/// where agents build under any name, and in any other folder as deep as `scan::find_artifacts`
+/// looks.
 pub(super) fn artifact_dirs(project: &Project, boundary: &Boundary) -> Vec<ArtifactDir> {
     let found = match project.scratch {
         Some(_) => scan::find_artifacts_throughout(&project.path),

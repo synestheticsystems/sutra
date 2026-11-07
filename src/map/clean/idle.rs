@@ -320,6 +320,7 @@ mod tests {
     fn a_running_sessions_scratch_folder_is_kept_out_and_a_gone_ones_is_not() {
         let scratch = |name: &str, session: Option<crate::map::AgentSession>| Project {
             scratch: Some(crate::map::ScratchSpace {
+                session_folder: PathBuf::from("/private/tmp/claude-501/-code-app").join(name),
                 session_id: name.to_string(),
                 started_in: "app".to_string(),
                 session,

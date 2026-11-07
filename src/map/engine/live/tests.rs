@@ -680,25 +680,26 @@ fn the_scratch_root_is_watched_once_claude_code_makes_it_and_read_again_then() {
     );
 }
 
+/// Whether the map shows a card for the project at `path`.
+fn carded(engine: &Engine, path: &Path) -> bool {
+    let snapshot = engine.state.snapshot();
+    snapshot.projects.iter().any(|project| project.path == path)
+}
+
 #[test]
 fn a_build_folder_made_in_a_scratch_folder_while_its_events_went_missing_is_found() {
     let fixture = TempDir::new("live-scratch-lost-events");
-    let session = fixture.dir("claude-501/-code-app/e26ca359/scratchpad");
-    let session = session.parent().unwrap().to_path_buf();
+    let folder = fixture.dir("claude-501/-code-app/e26ca359/scratchpad/probe");
     let (snapshots, _published) = mpsc::sync_channel(1);
     let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
-    assert!(engine.state.project_paths().contains(&session));
-    let carded = |engine: &Engine| {
-        let snapshot = engine.state.snapshot();
-        snapshot
-            .projects
-            .iter()
-            .any(|project| project.path == session)
-    };
-    assert!(!carded(&engine), "no card while it holds no build folder");
+    assert!(engine.state.project_paths().contains(&folder));
+    assert!(
+        !carded(&engine, &folder),
+        "no card while it holds no build folder"
+    );
 
     fixture.write(
-        "claude-501/-code-app/e26ca359/scratchpad/out-567/CACHEDIR.TAG",
+        "claude-501/-code-app/e26ca359/scratchpad/probe/out-567/CACHEDIR.TAG",
         CACHEDIR_TAG,
     );
     engine.on_fs_event(Ok(Event::new(EventKind::Other)
@@ -706,19 +707,19 @@ fn a_build_folder_made_in_a_scratch_folder_while_its_events_went_missing_is_foun
         .add_path(fixture.path("claude-501"))));
     let now = Instant::now() + Duration::from_secs(3);
     engine.run_due(now);
-    assert!(!carded(&engine), "searched again once the folder is quiet");
+    assert!(
+        !carded(&engine, &folder),
+        "searched again once the folder is quiet"
+    );
     engine.run_due(now + Duration::from_secs(11));
 
-    assert_eq!(
-        build_folders(&engine, &session),
-        [session.join("scratchpad/out-567")]
-    );
+    assert_eq!(build_folders(&engine, &folder), [folder.join("out-567")]);
 }
 
 #[test]
 fn a_folder_made_in_a_scratch_folder_has_it_searched_through_once_its_folders_settle() {
     let fixture = TempDir::new("live-scratch-layout");
-    let session = fixture.dir("claude-501/-code-app/e26ca359");
+    let folder = fixture.dir("claude-501/-code-app/e26ca359/scratchpad/r567");
     let (snapshots, _published) = mpsc::sync_channel(1);
     let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
     let now = Instant::now();
@@ -727,9 +728,9 @@ fn a_folder_made_in_a_scratch_folder_has_it_searched_through_once_its_folders_se
         "claude-501/-code-app/e26ca359/scratchpad/r567/target/CACHEDIR.TAG",
         CACHEDIR_TAG,
     );
-    let folder = made.parent().unwrap().to_path_buf();
+    let target = made.parent().unwrap().to_path_buf();
     engine.on_fs_event(Ok(
-        Event::new(EventKind::Create(CreateKind::Folder)).add_path(folder.clone())
+        Event::new(EventKind::Create(CreateKind::Folder)).add_path(target)
     ));
 
     assert!(
@@ -744,7 +745,45 @@ fn a_folder_made_in_a_scratch_folder_has_it_searched_through_once_its_folders_se
             .timers
             .scratch_layout
             .take_due(now + Duration::from_secs(11)),
-        [session]
+        [folder]
+    );
+}
+
+#[test]
+fn a_folder_made_at_the_top_of_a_sessions_scratch_joins_the_map_once_its_folders_are_listed() {
+    let fixture = TempDir::new("live-scratch-folders");
+    let session = fixture.dir("claude-501/-code-app/e26ca359/scratchpad");
+    let session = session.parent().unwrap().to_path_buf();
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
+    let now = Instant::now();
+    let event = |kind, path: &Path| Ok(Event::new(kind).add_path(path.to_path_buf()));
+
+    let notes = fixture.write("claude-501/-code-app/e26ca359/scratchpad/notes.md", "");
+    engine.on_fs_event(event(EventKind::Create(CreateKind::File), &notes));
+    assert_eq!(
+        engine.timers.scratch_folders.next_due(),
+        None,
+        "a file at the top is no folder coming"
+    );
+
+    fixture.write(
+        "claude-501/-code-app/e26ca359/scratchpad/target-567/CACHEDIR.TAG",
+        CACHEDIR_TAG,
+    );
+    let made = session.join("scratchpad/target-567");
+    engine.on_fs_event(event(EventKind::Create(CreateKind::Folder), &made));
+    engine.run_due(now + Duration::from_secs(3));
+
+    assert!(carded(&engine, &made));
+    assert_eq!(build_folders(&engine, &made), std::slice::from_ref(&made));
+
+    fs::remove_dir_all(&made).unwrap();
+    engine.on_fs_event(event(EventKind::Remove(RemoveKind::Folder), &made));
+    engine.run_due(now + Duration::from_secs(6));
+    assert!(
+        !engine.state.project_paths().contains(&made),
+        "gone with it"
     );
 }
 

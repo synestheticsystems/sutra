@@ -194,7 +194,7 @@ fn the_folders_in_the_scratch_root_need_no_watch_of_their_own() {
     state.rediscover(None);
 
     let on_map = state.project_paths();
-    assert!(on_map.contains(&session) && on_map.contains(&worktree));
+    assert!(on_map.contains(&session.join("scratchpad/out")) && on_map.contains(&worktree));
     assert!(
         state.folders_outside_the_roots().is_empty(),
         "the stream over the scratch root hears them"

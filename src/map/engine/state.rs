@@ -36,15 +36,15 @@ pub(super) struct State {
     home: PathBuf,
     /// The folders discovery walks.
     roots: Vec<PathBuf>,
-    /// Claude Code's scratch root, whose session folders the map holds as projects of their own
-    /// (see `scratch`), when this edition reads it.
+    /// Claude Code's scratch root, whose sessions' scratch folders the map holds as projects of
+    /// their own (see `scratch`), when this edition reads it.
     scratch_root: Option<PathBuf>,
     sandboxed: bool,
     /// What every source may touch, discovery's walk included, built from the roots, the home
     /// folder and the scan options, and kept up with what macOS answers about the private folders.
     boundary: Boundary,
-    /// Every project the engine tracks, the sessions' scratch folders that have no card among
-    /// them (see `scratch::earns_a_card`), which the snapshot leaves out.
+    /// Every project the engine tracks, the scratch folders that have no card among them (see
+    /// `scratch::earns_a_card`), which the snapshot leaves out.
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
     unplaced_subagents: Vec<SubagentWithParent>,
@@ -284,14 +284,17 @@ impl State {
         (changed, reshaped)
     }
 
-    /// The sessions on the map of these processes, as last read.
-    fn sessions_of(&self, processes: &[u32]) -> Vec<AgentSession> {
-        let on_the_map = self
-            .projects
+    /// Every session on the map, in a project or elsewhere, as last read.
+    fn sessions_on_the_map(&self) -> impl Iterator<Item = &AgentSession> {
+        self.projects
             .values()
             .flat_map(|tracked| &tracked.project.agents)
-            .chain(&self.unplaced_agents);
-        on_the_map
+            .chain(&self.unplaced_agents)
+    }
+
+    /// The sessions on the map of these processes, as last read.
+    fn sessions_of(&self, processes: &[u32]) -> Vec<AgentSession> {
+        self.sessions_on_the_map()
             .filter(|session| session.pid.is_some_and(|pid| processes.contains(&pid)))
             .cloned()
             .collect()
@@ -299,8 +302,8 @@ impl State {
 
     /// Reload every agent session and place each where it works (see `Place`), and each of its
     /// subagents at work where the subagent works, even beside the session (see
-    /// `Place::of_subagent`); and hand each session's scratch folder its session while it runs
-    /// (see `find_scratch_sessions`). Returns whether anything changed.
+    /// `Place::of_subagent`); and hand each scratch folder its session while the session runs (see
+    /// `find_scratch_sessions`). Returns whether anything changed.
     pub(super) fn refresh_agents(&mut self) -> bool {
         let loaded = agents::load(&self.home, &self.boundary, &mut self.agent_files);
         let mut changed = self.report_problems(
@@ -826,19 +829,21 @@ mod tests {
     #[test]
     fn a_subagent_in_a_scratch_folder_stands_on_its_card_and_elsewhere_while_it_has_none() {
         let home = TempDir::new("state-subagents-scratch");
-        let carded = "/private/tmp/claude-501/-code-app/e26ca359";
-        let uncarded = "/private/tmp/claude-501/-code-app/0b1d4f00";
+        let session = "/private/tmp/claude-501/-code-app/e26ca359";
+        let carded = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567";
+        let uncarded = "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/probe";
         let (in_carded, in_uncarded) = (
-            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567",
-            "/private/tmp/claude-501/-code-app/0b1d4f00/scratchpad/probe",
+            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567/src",
+            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/probe",
         );
         session_with_subagents(&home, "/code/app", &[in_carded, in_uncarded]);
         let mut state = state_with(&home, &["/code/app"]);
-        for (path, build_folders) in [(carded, &["scratchpad/r567/target"][..]), (uncarded, &[])] {
+        for (path, build_folders) in [(carded, &["target"][..]), (uncarded, &[])] {
             let mut tracked = tracked(path);
             let project = &mut tracked.project;
             project.scratch = Some(ScratchSpace {
-                session_id: path.rsplit('/').next().unwrap().to_string(),
+                session_folder: PathBuf::from(session),
+                session_id: "e26ca359".to_string(),
                 started_in: "app".to_string(),
                 session: None,
             });

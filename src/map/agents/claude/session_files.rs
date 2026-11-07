@@ -1,8 +1,8 @@
 //! Claude Code keeps the files of each session under `<home>/.claude/projects`, in a folder named
 //! after the working directory the session started in: the session's own transcript,
 //! `<session id>.jsonl`, and beside it a folder `<session id>/` of its other files, its subagents'
-//! transcripts among them. It names the session's scratch folder after that directory the same way
-//! (see `scan::scratch`).
+//! transcripts among them. It names the folder of the session's scratch in its scratch root after
+//! that directory the same way (see `scan::scratch`).
 
 use std::ffi::OsStr;
 use std::fs;

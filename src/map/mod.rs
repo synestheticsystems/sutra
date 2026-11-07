@@ -1,7 +1,7 @@
 //! The worktree map: everything Sutra knows about each project folder on this machine, in one shape.
 //!
-//! A project is a git worktree (main or linked), any folder a dev-runner environment names, or the
-//! scratch folder of a Claude Code session that holds a build folder or a lot of disk. One
+//! A project is a git worktree (main or linked), any folder a dev-runner environment names, or one
+//! of a Claude Code session's scratch folders that holds a build folder or a lot of disk. One
 //! `Project` row merges four sources:
 //!   - git: branch, head and the time of the last git activity, read from the worktree's git dir
 //!     without ever writing to it (a write would show up in our own file watcher);

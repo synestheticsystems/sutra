@@ -82,9 +82,10 @@ pub fn measure(dir: &Path) -> io::Result<DirUsage> {
     measure_pruned(dir, &|_| false)
 }
 
-/// `measure`, leaving out every directory below `dir` for which `pruned` holds, with everything in
-/// it. A project folder is sized this way without its build folders and the projects nested in
-/// it, which are sized on their own.
+/// `measure`, leaving out every directory for which `pruned` holds, with everything in it, `dir`
+/// itself included. A project folder is sized this way without its build folders and the projects
+/// nested in it, which are sized on their own; a scratch folder that is itself its one build folder
+/// holds nothing else.
 pub fn measure_pruned(dir: &Path, pruned: Pruned) -> io::Result<DirUsage> {
     // Taken before the walk, so a change made while walking is never older than the measurement.
     let measured_at = SystemTime::now();
@@ -95,7 +96,11 @@ pub fn measure_pruned(dir: &Path, pruned: Pruned) -> io::Result<DirUsage> {
             format!("{} is not a directory", dir.display()),
         ));
     }
-    let tally = tally_below(list(dir, pruned)?, pruned);
+    let tally = if pruned(dir) {
+        Tally::default()
+    } else {
+        tally_below(list(dir, pruned)?, pruned)
+    };
     Ok(DirUsage {
         bytes: tally.bytes,
         files: tally.files,
@@ -116,10 +121,15 @@ pub(crate) struct TopStamp(u64);
 
 /// The stamp of the top of the tree at `dir` now, leaving out the entries `pruned` holds, as a
 /// walk with it would. An entry deleted since the folder was listed is left out too: the folder's
-/// own time shows the deletion.
+/// own time shows the deletion. A `dir` that `pruned` leaves out has nothing to stamp, so its
+/// stamp never changes while it is there.
 pub(crate) fn top_stamp(dir: &Path, pruned: &dyn Fn(&Path) -> bool) -> io::Result<TopStamp> {
     let mut hasher = DefaultHasher::new();
-    fs::symlink_metadata(dir)?.modified()?.hash(&mut hasher);
+    let modified = fs::symlink_metadata(dir)?.modified()?;
+    if pruned(dir) {
+        return Ok(TopStamp(hasher.finish()));
+    }
+    modified.hash(&mut hasher);
     let mut entries = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -361,6 +371,27 @@ mod tests {
             top_stamp(fixture.root(), &pruned).unwrap(),
             before,
             "the pruned build folder and a folder two levels down changed"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_leaves_out_its_own_root_counts_nothing_and_its_stamp_never_changes() {
+        let fixture = TempDir::new("disk-pruned-root");
+        file(&fixture, "target-567/debug/big.bin", 100_000);
+        let target = fixture.path("target-567");
+        let itself = |dir: &Path| dir == target;
+
+        let usage = measure_pruned(&target, &itself).unwrap();
+        let before = top_stamp(&target, &itself).unwrap();
+        file(&fixture, "target-567/release.bin", 10);
+
+        assert_eq!((usage.bytes, usage.files, usage.newest_write), (0, 0, None));
+        assert_eq!(top_stamp(&target, &itself).unwrap(), before);
+        fs::remove_dir_all(&target).unwrap();
+        assert_eq!(
+            measure_pruned(&target, &itself).unwrap_err().kind(),
+            io::ErrorKind::NotFound,
+            "but a root that is gone is still an error"
         );
     }
 

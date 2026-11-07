@@ -257,6 +257,13 @@ impl<'a> Engine<'a> {
                     }
                 }
                 Route::Rediscover => self.timers.rediscover.mark((), now),
+                Route::ScratchFolders(session) => {
+                    // A file written at the top of the scratch, or in a folder not on the map
+                    // yet, is no folder coming or going.
+                    if folder_appeared_or_vanished || (renamed && !path.is_file()) {
+                        self.timers.scratch_folders.mark(session, now);
+                    }
+                }
                 Route::Artifact(artifact) => self.timers.artifacts.mark(artifact, now),
                 Route::FileChange(project) => {
                     let readable = self.state.is_readable(&project);
@@ -319,7 +326,7 @@ impl<'a> Engine<'a> {
 
     /// A folder appeared, vanished or moved in `project`, so look for its build folders again once
     /// its folders settle: soon in a worktree, which is searched two levels down, and later in a
-    /// session's scratch folder, which is searched through (see `timers::SCRATCH_LAYOUT`).
+    /// scratch folder, which is searched through (see `timers::SCRATCH_LAYOUT`).
     fn layout_changed(&mut self, project: PathBuf, now: Instant) {
         if self.state.is_scratch_folder(&project) {
             self.timers.scratch_layout.mark(project, now);
@@ -390,6 +397,16 @@ impl<'a> Engine<'a> {
         }
         if let Some(before) = projects_before {
             self.size_again_around_changes(&before, now);
+        }
+        for session in self.timers.scratch_folders.take_due(now) {
+            match self.state.refind_scratch_folders(&session) {
+                Some(changed) => {
+                    self.dirty |= changed;
+                    reshaped |= changed;
+                }
+                // A rediscovery lists every session's folders, and says what it could not list.
+                None => self.timers.rediscover.mark((), now),
+            }
         }
         // Not short-circuited: one reload serves both bursts, so both are cleared.
         let agents_due = self.timers.claude_sessions.fire(now) | self.timers.codex.fire(now);

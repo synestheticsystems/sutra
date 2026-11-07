@@ -20,8 +20,12 @@ pub(super) enum Route {
     Environments,
     /// The git state of these worktrees.
     Git(Vec<PathBuf>),
-    /// A worktree, or a session's scratch folder, may have been added or removed.
+    /// A worktree, or a session's folder in the scratch root, may have been added or removed.
     Rediscover,
+    /// A path in the session folder named here that is a scratch folder itself, or lies in none on
+    /// the map: if a folder appeared, vanished or moved there, the session's scratch folders are
+    /// listed again.
+    ScratchFolders(PathBuf),
     /// The contents of this artifact directory.
     Artifact(PathBuf),
     /// A file in this project changed.
@@ -35,9 +39,11 @@ pub(super) enum Route {
 #[derive(Debug, Default)]
 pub(super) struct Index {
     home: HomePaths,
-    /// Claude Code's scratch root, every session folder in which is a project.
+    /// Claude Code's scratch root, whose sessions' folders hold the scratch folders.
     scratch_root: Option<PathBuf>,
     projects: HashSet<PathBuf>,
+    /// Each scratch folder on the map, and the folder of the session it belongs to.
+    scratch_folders: HashMap<PathBuf, PathBuf>,
     /// Each artifact directory and the project that holds it.
     artifacts: HashMap<PathBuf, PathBuf>,
     /// Every git dir of every known worktree, linked worktrees' admin dirs and shared dirs alike.
@@ -84,6 +90,10 @@ impl Index {
         };
         for project in projects {
             index.projects.insert(project.path.clone());
+            if let Some(space) = &project.scratch {
+                let session = space.session_folder.clone();
+                index.scratch_folders.insert(project.path.clone(), session);
+            }
             for artifact in &project.artifacts {
                 index
                     .artifacts
@@ -129,6 +139,10 @@ impl Index {
         if lock_file && in_state_folder(path) {
             return Route::Ignore;
         }
+        // A scratch folder itself came, went or moved, even one that is a build folder itself.
+        if let Some(session) = self.scratch_folders.get(path) {
+            return Route::ScratchFolders(session.clone());
+        }
         // The deepest known folder holding the path decides: a linked worktree inside its main
         // worktree, or a `target/` inside a project, is matched before the folder around it.
         for folder in path.ancestors() {
@@ -147,12 +161,10 @@ impl Index {
                 return project_route(path, folder);
             }
         }
-        if let Some(rest) = self
-            .scratch_root
-            .as_ref()
-            .and_then(|root| path.strip_prefix(root).ok())
-        {
-            return scratch_route(rest);
+        if let Some(root) = &self.scratch_root {
+            if let Ok(rest) = path.strip_prefix(root) {
+                return scratch_route(root, rest);
+            }
         }
         // `git init`, `git clone` and `git worktree add` inside a root all create a `.git` entry,
         // and a plain folder becomes a project by publishing state of its own.
@@ -219,21 +231,25 @@ fn project_route(path: &Path, project: &Path) -> Route {
     }
 }
 
-/// The route of `rest`, a path in the scratch root that no project holds. Under the folder of a
-/// project key (see `scan::scratch`), it is a session's folder coming or going, or one that came
-/// and is not on the map yet. Anything else in the root is Claude Code's own state, rewritten all
-/// through a session, and nothing for the map.
-fn scratch_route(rest: &Path) -> Route {
-    let first = rest.components().next();
-    let under_a_project_key = first.is_some_and(|part| {
-        part.as_os_str()
-            .to_str()
-            .is_some_and(|name| name.starts_with('-'))
-    });
-    if under_a_project_key {
-        Route::Rediscover
-    } else {
-        Route::Ignore
+/// The route of `rest`, a path in the scratch root `root` that no project holds. The folder of a
+/// project key (see `scan::scratch`), or a session's folder in it, is coming or going. Deeper in a
+/// session's folder, the path lies at the top of its scratch, as a scratch folder coming or going
+/// does, or in a folder that is no scratch folder on the map yet. Anything else in the root is
+/// Claude Code's own state, rewritten all through a session, and nothing for the map, as is a
+/// folder whose name is not text, which Claude Code never makes.
+fn scratch_route(root: &Path, rest: &Path) -> Route {
+    let mut parts = rest.components().map(Component::as_os_str);
+    let Some(key) = parts.next() else {
+        return Route::Ignore;
+    };
+    let is_a_project_key = key.to_str().is_some_and(|name| name.starts_with('-'));
+    match (is_a_project_key, parts.next(), parts.next()) {
+        (false, ..) => Route::Ignore,
+        (true, None, _) | (true, Some(_), None) => Route::Rediscover,
+        (true, Some(session), Some(_)) if session.to_str().is_some() => {
+            Route::ScratchFolders(root.join(key).join(session))
+        }
+        (true, Some(_), Some(_)) => Route::Ignore,
     }
 }
 
@@ -254,7 +270,7 @@ fn below<'a>(path: &'a Path, folder: &Path) -> Option<&'a OsStr> {
 mod tests {
     use super::*;
     use crate::map::test_support::{cargo_target, project_at};
-    use crate::map::{Measurement, RepoInfo};
+    use crate::map::{Measurement, RepoInfo, ScratchSpace};
 
     const HOME: &str = "/Users/me";
 
@@ -279,13 +295,32 @@ mod tests {
         }
     }
 
-    /// Claude Code's scratch root, and the folder in it of a session started in `~/code/app`.
+    /// Claude Code's scratch root, the folder in it of a session started in `~/code/app`, and two of
+    /// the session's scratch folders: one a build folder `CARGO_TARGET_DIR` named, and one holding
+    /// a `target/`.
     const SCRATCH_ROOT: &str = "/private/tmp/claude-501";
     const SESSION_FOLDER: &str = "/private/tmp/claude-501/-Users-me-code-app/e26ca359";
+    const OUT_567: &str = "/private/tmp/claude-501/-Users-me-code-app/e26ca359/scratchpad/out-567";
+    const R567: &str = "/private/tmp/claude-501/-Users-me-code-app/e26ca359/scratchpad/r567";
+    const R567_TARGET: &str =
+        "/private/tmp/claude-501/-Users-me-code-app/e26ca359/scratchpad/r567/target";
+
+    /// The scratch folder at `path` of the session whose folder is `SESSION_FOLDER`, holding the
+    /// build folders `artifacts`.
+    fn scratch_folder(path: &str, artifacts: &[&str]) -> Project {
+        Project {
+            scratch: Some(ScratchSpace {
+                session_folder: p(SESSION_FOLDER),
+                session_id: "e26ca359".to_string(),
+                started_in: "app".to_string(),
+                session: None,
+            }),
+            ..project(path, None, artifacts)
+        }
+    }
 
     /// A main worktree `app` with a `target/`, a linked worktree `app-wt` beside it, a linked
-    /// worktree nested inside `app`, a plain folder `site`, and a session's scratch folder with a
-    /// build folder `CARGO_TARGET_DIR` named.
+    /// worktree nested inside `app`, a plain folder `site`, and two scratch folders of a session.
     fn index() -> Index {
         let common = "/Users/me/code/app/.git";
         let projects = [
@@ -305,11 +340,8 @@ mod tests {
                 &[],
             ),
             project("/Users/me/code/site", None, &[]),
-            project(
-                SESSION_FOLDER,
-                None,
-                &["/private/tmp/claude-501/-Users-me-code-app/e26ca359/scratchpad/out-567"],
-            ),
+            scratch_folder(OUT_567, &[OUT_567]),
+            scratch_folder(R567, &[R567_TARGET]),
         ];
         Index::new(Path::new(HOME), Some(Path::new(SCRATCH_ROOT)), &projects)
     }
@@ -529,28 +561,55 @@ mod tests {
     }
 
     #[test]
-    fn a_change_in_a_sessions_scratch_folder_routes_to_it_and_its_build_folders() {
+    fn a_change_in_a_scratch_folder_routes_to_it_and_its_build_folders() {
         assert_eq!(
-            route(&format!("{SESSION_FOLDER}/scratchpad/notes.md")),
-            Route::FileChange(p(SESSION_FOLDER))
+            route(&format!("{R567}/notes.md")),
+            Route::FileChange(p(R567))
         );
         assert_eq!(
-            route(&format!(
-                "{SESSION_FOLDER}/scratchpad/out-567/debug/deps/libx.rlib"
-            )),
-            Route::Artifact(p(&format!("{SESSION_FOLDER}/scratchpad/out-567")))
+            route(&format!("{R567_TARGET}/debug/deps/libx.rlib")),
+            Route::Artifact(p(R567_TARGET))
         );
+        assert_eq!(
+            route(&format!("{OUT_567}/debug/deps/libx.rlib")),
+            Route::Artifact(p(OUT_567)),
+            "a scratch folder that is a build folder itself"
+        );
+    }
+
+    #[test]
+    fn a_path_at_the_top_of_a_sessions_scratch_or_in_no_scratch_folder_is_the_sessions_to_list() {
+        let session = Route::ScratchFolders(p(SESSION_FOLDER));
+        assert_eq!(route(OUT_567), session, "even a build folder itself");
+        assert_eq!(route(R567), session);
+        for below in [
+            "scratchpad",
+            "scratchpad/r593",
+            "scratchpad/r593/target/CACHEDIR.TAG",
+            "scratchpad/notes.md",
+            "tasks/a0266bd77.output",
+        ] {
+            assert_eq!(
+                route(&format!("{SESSION_FOLDER}/{below}")),
+                session,
+                "{below}"
+            );
+        }
     }
 
     #[test]
     fn a_session_folder_not_on_the_map_rediscovers_and_claude_codes_own_files_are_ignored() {
         for coming in [
             "/private/tmp/claude-501/-Users-me-code-app/0b1d4f00",
-            "/private/tmp/claude-501/-Users-me-code-app/0b1d4f00/scratchpad",
             "/private/tmp/claude-501/-Users-me-sk",
         ] {
             assert_eq!(route(coming), Route::Rediscover, "{coming}");
         }
+        assert_eq!(
+            route("/private/tmp/claude-501/-Users-me-code-app/0b1d4f00/scratchpad"),
+            Route::ScratchFolders(p("/private/tmp/claude-501/-Users-me-code-app/0b1d4f00")),
+            "its scratch is listed by itself"
+        );
         for own in [
             "/private/tmp/claude-501",
             "/private/tmp/claude-501/cache-break-state-e26ca359.json",
@@ -558,6 +617,18 @@ mod tests {
         ] {
             assert_eq!(route(own), Route::Ignore, "{own}");
         }
+        let not_text = {
+            use std::os::unix::ffi::OsStrExt;
+            let session = OsStr::from_bytes(b"\xffe26ca359");
+            p("/private/tmp/claude-501/-Users-me-code-app")
+                .join(session)
+                .join("scratchpad")
+        };
+        assert_eq!(
+            index().route(&not_text),
+            Route::Ignore,
+            "no session's folder, as Claude Code names none so"
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@ use super::{AgentSession, Measurement, PrivateFolder, SubagentWithParent};
 use crate::model::Environment;
 
 /// How much disk a folder must hold to matter for its size alone: a project this large stays in
-/// focus however quiet it is, and a session's scratch folder this large has a card with no build
-/// folder in it. A first guess.
+/// focus however quiet it is, and a scratch folder this large has a card with no build folder in
+/// it. A first guess.
 pub const LARGE_FOLDER_BYTES: u64 = 1 << 30;
 
 /// One row of the map.
@@ -18,13 +18,13 @@ pub const LARGE_FOLDER_BYTES: u64 = 1 << 30;
 pub struct Project {
     /// Canonical path (symlinks resolved), the key every source is joined on.
     pub path: PathBuf,
-    /// The folder's own name; a session's scratch folder goes by its session (see
-    /// `ScratchSpace::name`).
+    /// The folder's own name; a scratch folder goes by its session (see `ScratchSpace::name`).
     pub name: String,
     /// `None` for a plain project folder that only a dev-runner environment names, and for a
-    /// session's scratch folder.
+    /// scratch folder.
     pub repo: Option<RepoInfo>,
-    /// `Some` for the folder where a Claude Code session keeps what it throws away.
+    /// `Some` for a scratch folder: a folder in the space where a Claude Code session keeps what it
+    /// throws away.
     pub scratch: Option<ScratchSpace>,
     pub last_activity: Option<SystemTime>,
     pub activity_source: Option<ActivitySource>,
@@ -160,23 +160,25 @@ impl RepoInfo {
     }
 }
 
-/// A Claude Code session's scratch folder, `<scratch root>/<project key>/<session id>`, where the
-/// session clones, builds and keeps whatever it throws away, outside every project (see
-/// `scan::scratch`).
+/// The scratch space of a Claude Code session, its folder `<scratch root>/<project key>/<session
+/// id>`, where the session clones, builds and keeps whatever it throws away, outside every project
+/// (see `scan::scratch`). Each scratch folder in it is a project of its own, and the space is what
+/// they share: the session that made them, whose end ends their use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScratchSpace {
-    /// The session whose folder this is.
+    /// The session's folder in the scratch root, which holds every scratch folder of the session.
+    pub session_folder: PathBuf,
     pub session_id: String,
     /// The last part of the folder the session started in, as Claude Code's name for that folder
     /// still shows it on the disk, as `greyorange-foundry` reads.
     pub started_in: String,
-    /// The session while it runs. It counts on the card of the folder it works in alone, and its
-    /// robot stands on this card too, so a glance tells a live session's scratch from a gone one's.
+    /// The session while it runs. It counts on the card of the folder it works in alone, and while
+    /// it runs, it may build in any folder of its scratch.
     pub session: Option<AgentSession>,
 }
 
 impl ScratchSpace {
-    /// What the folder goes by: its session's own name while the session runs and has one, as the
+    /// What the space goes by: its session's own name while the session runs and has one, as the
     /// session's robot gives it; else the folder the session started in, and the first eight
     /// characters of its id, as `greyorange-foundry e26ca359` reads.
     pub fn name(&self) -> String {
@@ -189,6 +191,12 @@ impl ScratchSpace {
         }
         let short_id: String = self.session_id.chars().take(8).collect();
         format!("{} {short_id}", self.started_in)
+    }
+
+    /// Where `folder`, one of the space's scratch folders, lies in the session's folder, as
+    /// `scratchpad/r567fixture` reads.
+    pub fn place_of<'a>(&self, folder: &'a Path) -> &'a Path {
+        folder.strip_prefix(&self.session_folder).unwrap_or(folder)
     }
 }
 
@@ -213,8 +221,8 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::map::DirUsage;
     use crate::map::test_support::{at, cargo_target, measured, project_at, usage};
+    use crate::map::{AgentStatus, DirUsage};
 
     fn partly_measured(bytes: u64, unreadable_dirs: u64) -> Measurement {
         Measurement::Measured(DirUsage {
@@ -296,6 +304,26 @@ mod tests {
         };
         assert_eq!(repo("/code/app/.git").folder(), Path::new("/code/app"));
         assert_eq!(repo("/code/app.git").folder(), Path::new("/code/app.git"));
+    }
+
+    #[test]
+    fn a_scratch_space_goes_by_its_running_sessions_name_else_where_it_started_and_its_id() {
+        let session = "/private/tmp/claude-501/-Users-me-vt-foundry/e26ca359-da00";
+        let mut space = ScratchSpace {
+            session_folder: PathBuf::from(session),
+            session_id: "e26ca359-da00".to_string(),
+            started_in: "foundry".to_string(),
+            session: None,
+        };
+        assert_eq!(space.name(), "foundry e26ca359");
+        let folder = PathBuf::from(session).join("scratchpad/r567fixture");
+        assert_eq!(space.place_of(&folder), Path::new("scratchpad/r567fixture"));
+
+        space.session = Some(AgentSession {
+            label: Some("Foundry Agent Studio architecture".to_string()),
+            ..crate::map::test_support::agent_session("e26ca359-da00", AgentStatus::Busy)
+        });
+        assert_eq!(space.name(), "Foundry Agent Studio architecture");
     }
 
     #[test]

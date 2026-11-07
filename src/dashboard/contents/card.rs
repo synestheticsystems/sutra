@@ -43,16 +43,9 @@ pub(super) enum Naming {
 pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &CardContext) -> Card {
     let last_activity = project.last_activity.and_then(format::timestamp);
     let identity = header::identity(project, naming, ctx.home, last_activity.as_deref());
-    // A session's scratch folder shows the session first, which works elsewhere.
-    let owner = project
-        .scratch
-        .as_ref()
-        .and_then(|space| space.session.as_ref());
-    let owner = owner.map(|session| agents::badge(session, ctx.now));
-    let sessions = owner
-        .into_iter()
-        .chain(agents::badges(&project.agents, ctx.now))
-        .collect();
+    // A scratch folder's own session stands on the card of the folder it works in alone: a robot
+    // here too would read as a second agent at work.
+    let sessions = agents::badges(&project.agents, ctx.now);
     let subagents = subagents::badges(&project.subagents, ctx.now);
     Card {
         path: format::path_text(&project.path),
@@ -253,22 +246,23 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_folders_session_stands_first_on_its_tray_while_it_runs_and_waits_on_its_own() {
+    fn a_scratch_folders_own_session_stands_and_waits_only_where_it_works() {
+        let session = "/private/tmp/claude-501/-Users-dev-vt-foundry/e26ca359";
         let owner = crate::map::AgentSession {
             label: Some("Foundry Agent Studio architecture".to_string()),
-            model: Some("gpt-6-astra".to_string()),
             ..agent("/Users/dev/vt/foundry", crate::map::AgentStatus::Waiting)
         };
-        let mut scratch = project_at("/private/tmp/claude-501/-Users-dev-vt-foundry/e26ca359");
+        let mut scratch = project_at(format!("{session}/scratchpad/r567"));
         scratch.scratch = Some(crate::map::ScratchSpace {
+            session_folder: PathBuf::from(session),
             session_id: "e26ca359".to_string(),
             started_in: "foundry".to_string(),
             session: Some(owner),
         });
-        let started_here = "/private/tmp/claude-501/-Users-dev-vt-foundry/e26ca359/scratchpad";
+        let started_here = format!("{session}/scratchpad/r567/repo");
         scratch
             .agents
-            .push(agent(started_here, crate::map::AgentStatus::Busy));
+            .push(agent(&started_here, crate::map::AgentStatus::Busy));
         let map = snapshot(vec![scratch], vec![]);
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
         let ctx = CardContext {
@@ -281,20 +275,14 @@ mod tests {
         let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
 
         let sessions = card.tray.expect("a tray for the agents").sessions;
-        let robots: Vec<Robot> = sessions.iter().map(|badge| badge.robot).collect();
         assert_eq!(
-            robots,
-            [Robot::Codex, Robot::Claude],
-            "its own session first"
-        );
-        assert!(
-            sessions[0]
-                .tooltip
-                .contains("Foundry Agent Studio architecture")
+            sessions.len(),
+            1,
+            "the session working in it, and not its own, which works elsewhere"
         );
         assert!(
             !card.waiting,
-            "its session waits on the card of the folder it works in"
+            "its own session waits on the card of the folder it works in"
         );
     }
 

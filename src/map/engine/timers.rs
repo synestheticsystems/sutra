@@ -34,14 +34,17 @@ const MOVED_IN: Debounce = Debounce {
 const ARTIFACT: Debounce = debounce(3_000, 20_000);
 /// Folders appearing or vanishing in a project, as when a build recreates `target/`.
 const LAYOUT: Debounce = debounce(2_000, 10_000);
-/// The same in a session's scratch folder, which is searched through for its build folders: the
-/// largest of Daniel's took 0.25 s and a CPU-second (27,000 folders, 2026-11-06). Its agents make
+/// The same in a scratch folder, which is searched through for its build folders: the largest of
+/// Daniel's sessions took 0.25 s and a CPU-second (27,000 folders, 2026-11-06). Its agents make
 /// folders there all through their work, so the search waits for ten quiet seconds, and comes at
 /// most once a minute.
 const SCRATCH_LAYOUT: Debounce = Debounce {
     min_interval: Duration::from_secs(60),
     ..debounce(10_000, 60_000)
 };
+/// A folder coming, going or moving at the top of a session's scratch: the session's scratch
+/// folders are listed again, two listings, and only a new one is searched through.
+const SCRATCH_FOLDERS: Debounce = debounce(2_000, 10_000);
 /// Edits barely change a folder's size, and every walk of a large project costs seconds, so a
 /// project's own files are walked again only once its edits pause for a minute, or every ten
 /// minutes while an agent keeps writing: a burst of saves costs one walk.
@@ -78,6 +81,8 @@ pub(super) struct Timers {
     pub(super) artifacts: Pending<PathBuf>,
     pub(super) layout: Pending<PathBuf>,
     pub(super) scratch_layout: Pending<PathBuf>,
+    /// The folders of the sessions whose scratch folders may have come, gone or moved.
+    pub(super) scratch_folders: Pending<PathBuf>,
     /// Projects whose own files changed, or whose nested projects or build folders did.
     pub(super) own_files: Pending<PathBuf>,
     pub(super) next_tick: Instant,
@@ -96,6 +101,7 @@ impl Timers {
             artifacts: Pending::new(ARTIFACT),
             layout: Pending::new(LAYOUT),
             scratch_layout: Pending::new(SCRATCH_LAYOUT),
+            scratch_folders: Pending::new(SCRATCH_FOLDERS),
             own_files: Pending::new(OWN_FILES),
             next_tick: now + TICK,
         }
@@ -113,6 +119,7 @@ impl Timers {
             self.artifacts.next_due(),
             self.layout.next_due(),
             self.scratch_layout.next_due(),
+            self.scratch_folders.next_due(),
             self.own_files.next_due(),
         ]
         .into_iter()

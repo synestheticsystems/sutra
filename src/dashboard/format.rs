@@ -49,13 +49,15 @@ pub(super) fn roots(roots: &[PathBuf], home: &Path) -> String {
     roots.join(", ")
 }
 
-/// A build folder's name: its path inside the project.
+/// A build folder's name: its path inside the project, or its own name when it is the project's
+/// folder itself, as a scratch folder `CARGO_TARGET_DIR` named is.
 pub(super) fn artifact_name(dir: &ArtifactDir, project: &Path) -> String {
-    dir.path
-        .strip_prefix(project)
-        .unwrap_or(&dir.path)
-        .display()
-        .to_string()
+    let inside = dir.path.strip_prefix(project).unwrap_or(&dir.path);
+    let name = match inside.file_name() {
+        Some(_) => inside.as_os_str(),
+        None => dir.path.file_name().unwrap_or(dir.path.as_os_str()),
+    };
+    Path::new(name).display().to_string()
 }
 
 /// A size with one decimal in the largest decimal unit that keeps the number under 1000, the way
@@ -205,7 +207,7 @@ fn local_time(_at: SystemTime) -> Option<LocalTime> {
 mod tests {
     use super::*;
     use crate::map::Measurement;
-    use crate::map::test_support::{at, node_modules, usage};
+    use crate::map::test_support::{at, cargo_target, node_modules, usage};
 
     const HOME: &str = "/Users/dev";
 
@@ -268,6 +270,18 @@ mod tests {
         assert_eq!(
             artifact_name(&nested, Path::new("/code/app")),
             "web/node_modules"
+        );
+        let itself = cargo_target(
+            "/tmp/claude-501/s/scratchpad/target-567",
+            Measurement::Pending,
+        );
+        assert_eq!(
+            artifact_name(
+                &itself,
+                Path::new("/tmp/claude-501/s/scratchpad/target-567")
+            ),
+            "target-567",
+            "the project's folder itself goes by its own name"
         );
     }
 

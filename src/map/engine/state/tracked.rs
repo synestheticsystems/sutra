@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::artifacts::keep_measurements;
 use super::new_project;
 use crate::map::devrunner::FolderEnvironments;
-use crate::map::scan::{self, Boundary, ScratchFolder, Worktree};
+use crate::map::scan::{self, Boundary, Worktree};
 use crate::map::{ActivitySource, FolderAccess, Project, ScratchSpace};
 use crate::model::Environment;
 
@@ -17,8 +17,8 @@ pub(super) struct Tracked {
     /// From `scan::git_activity`.
     pub(super) git_activity: Option<SystemTime>,
     /// The newest change the engine saw happen while watching: a file written in the project, or
-    /// its environment publishing a new status. A session's scratch folder also takes the newest
-    /// file a walk of it found (see `State::date_scratch_folder`).
+    /// its environment publishing a new status. A scratch folder also takes the newest file a walk
+    /// of it found (see `State::date_scratch_folder`).
     pub(super) observed: Option<(SystemTime, ActivitySource)>,
     /// The newest activity of any agent seen here, a session or a subagent at work for a session
     /// elsewhere. It outlives the agent: one that only read leaves nothing else behind when it
@@ -59,22 +59,12 @@ impl Tracked {
         }
     }
 
-    /// The scratch folder of a session that started in a folder named `started_in`, its build
-    /// folders found anywhere in it.
-    pub(super) fn scratch(
-        folder: ScratchFolder,
-        started_in: String,
-        boundary: &Boundary,
-    ) -> Tracked {
-        let access = scan::folder_access(&folder.path, boundary);
-        let space = ScratchSpace {
-            session_id: folder.session_id,
-            started_in,
-            // Found with the session's other agents (see `State::refresh_agents`).
-            session: None,
-        };
+    /// The scratch folder `folder` in `space`, its build folders found anywhere in it, itself
+    /// included.
+    pub(super) fn scratch(folder: PathBuf, space: ScratchSpace, boundary: &Boundary) -> Tracked {
+        let access = scan::folder_access(&folder, boundary);
         Tracked {
-            project: new_project(folder.path, None, Some(space), access, boundary),
+            project: new_project(folder, None, Some(space), access, boundary),
             git_activity: None,
             observed: None,
             agent_activity: None,

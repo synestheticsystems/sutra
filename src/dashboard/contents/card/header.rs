@@ -224,15 +224,17 @@ mod tests {
 
     #[test]
     fn a_sessions_scratch_folder_goes_by_its_name_with_a_scratch_chip_naming_the_session() {
-        let path = "/private/tmp/claude-501/-Users-dev-sk/d5fa0639-441e-4722-b044-080d70c0b04f";
+        let session = "/private/tmp/claude-501/-Users-dev-sk/d5fa0639-441e-4722-b044-080d70c0b04f";
+        let path = format!("{session}/scratchpad/r567fixture");
         let scratch = Project {
             name: "sk d5fa0639".to_string(),
             scratch: Some(ScratchSpace {
+                session_folder: PathBuf::from(session),
                 session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
                 started_in: "sk".to_string(),
                 session: None,
             }),
-            ..project_at(path)
+            ..project_at(&path)
         };
 
         let identity = identity(&scratch, Naming::Branch, Path::new(HOME), None);
