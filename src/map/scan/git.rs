@@ -1,6 +1,11 @@
 //! Raw reads of the files git keeps for one worktree: no git binary and no git library. Reading the
 //! files directly resolves HEAD in tens of microseconds, and it can never write into a git dir (a
-//! write would show up in Sutra's own file watcher).
+//! write would show up in Sutra's own file watcher). Where a checkout came from is read the same
+//! way (`origin`).
+
+mod origin;
+
+pub use origin::{Lineage, lineage, lineage_of_folder};
 
 use std::fs;
 use std::io;
@@ -46,11 +51,7 @@ pub(super) fn repo_info_of_git_dir(
     may_read: &dyn Fn(&Path) -> bool,
 ) -> io::Result<RepoInfo> {
     ensure_may_read(git_dir, may_read)?;
-    let linked_common_dir = match fs::read_to_string(git_dir.join("commondir")) {
-        Ok(text) => Some(resolve(git_dir, &text)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err),
-    };
+    let linked_common_dir = linked_common_dir(git_dir)?;
     let worktree_name = match &linked_common_dir {
         Some(_) => Some(file_name(git_dir)?),
         None => None,
@@ -67,6 +68,16 @@ pub(super) fn repo_info_of_git_dir(
         branch,
         head,
     })
+}
+
+/// The shared git dir that `git_dir`, a linked worktree's admin directory, names in its `commondir`
+/// file; `None` for any other git dir, which has no such file.
+fn linked_common_dir(git_dir: &Path) -> io::Result<Option<PathBuf>> {
+    match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(text) => Ok(Some(resolve(git_dir, &text))),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 /// Where the worktree's `.git` entry leads: itself when it is a directory, or the `gitdir:` path a
