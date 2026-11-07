@@ -37,17 +37,20 @@ fn in_use(project: &Project) -> bool {
         || session_runs
 }
 
-/// How long `project` has been quiet. One with no known activity counts as quiet for good, and one
-/// whose activity is dated ahead of the clock as just active.
-fn quiet_for(project: &Project, now: SystemTime) -> Duration {
-    project.last_activity.map_or(Duration::MAX, |at| {
-        now.duration_since(at).unwrap_or(Duration::ZERO)
+/// How long `project` has been quiet, or `None` while that cannot be told, as its activity is
+/// unknown (see `Project::activity_is_known`). One known to have no activity counts as quiet for
+/// good, and one whose activity is dated ahead of the clock as just active.
+fn quiet_for(project: &Project, now: SystemTime) -> Option<Duration> {
+    project.activity_is_known().then(|| {
+        project.last_activity.map_or(Duration::MAX, |at| {
+            now.duration_since(at).unwrap_or(Duration::ZERO)
+        })
     })
 }
 
-/// Whether nothing is at work in `project`, and it has been quiet for `at_least`.
+/// Whether nothing is at work in `project`, and it is known to have been quiet for `at_least`.
 fn is_idle(project: &Project, now: SystemTime, at_least: Duration) -> bool {
-    !in_use(project) && quiet_for(project, now) >= at_least
+    !in_use(project) && quiet_for(project, now).is_some_and(|quiet| quiet >= at_least)
 }
 
 /// Whether `map` can say what is at work. It cannot while something that tells of agents,
@@ -204,8 +207,8 @@ pub fn prepare_idle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::clean::CleanError;
     use crate::map::clean::locks::tests::hold_like_cargo;
+    use crate::map::clean::{CleanError, Plan, Sharing};
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, environment_at, measured,
         node_modules, project_at, snapshot_of, subagent_at_work,
@@ -322,21 +325,88 @@ mod tests {
 
     #[test]
     fn a_running_sessions_scratch_folder_is_kept_out_and_a_gone_ones_is_not() {
-        let scratch = |name: &str, session: Option<crate::map::AgentSession>| Project {
-            scratch: Some(crate::map::ScratchSpace {
+        let running = agent_session("/code/app", AgentStatus::Idle);
+        let map = snapshot_of(vec![
+            scratch_folder("e26ca359", Some(running), measured(4096)),
+            scratch_folder("d5fa0639", None, measured(4096)),
+        ]);
+        assert_eq!(names(&map), ["d5fa0639"]);
+    }
+
+    /// A scratch folder of the session `name`, with `session` running or none, quiet for 9 days as
+    /// far as its activity is known, with a large build folder and its own files at `own_files`.
+    fn scratch_folder(
+        name: &str,
+        session: Option<AgentSession>,
+        own_files: Measurement,
+    ) -> Project {
+        Project {
+            scratch: Some(ScratchSpace {
                 session_folder: PathBuf::from("/private/tmp/claude-501/-code-app").join(name),
                 session_id: name.to_string(),
                 started_in: "app".to_string(),
                 session,
             }),
+            own_files,
             ..quiet_project(name, 9, LARGE)
+        }
+    }
+
+    #[test]
+    fn a_scratch_folder_whose_own_files_have_not_dated_it_is_not_idle_however_large_its_build() {
+        for unknown in [
+            Measurement::Pending,
+            Measurement::Measuring,
+            Measurement::Failed(io::ErrorKind::PermissionDenied),
+        ] {
+            let map = snapshot_of(vec![Project {
+                last_activity: None,
+                ..scratch_folder("d5fa0639", None, unknown)
+            }]);
+            assert_eq!(names(&map), [""; 0], "{unknown:?}");
+        }
+        let walked = Project {
+            last_activity: None,
+            ..scratch_folder("d5fa0639", None, measured(4096))
         };
-        let running = agent_session("/code/app", AgentStatus::Idle);
-        let map = snapshot_of(vec![
-            scratch("e26ca359", Some(running)),
-            scratch("d5fa0639", None),
-        ]);
-        assert_eq!(names(&map), ["d5fa0639"]);
+        assert_eq!(
+            names(&snapshot_of(vec![walked])),
+            ["d5fa0639"],
+            "a walk that dated nothing found no work, so it is quiet for good"
+        );
+    }
+
+    #[test]
+    fn a_clean_of_a_scratch_folder_whose_work_is_unknown_by_its_turn_does_not_go() {
+        let walked = scratch_folder("d5fa0639", None, measured(4096));
+        let target = walked.artifacts[0].path.clone();
+        let prepared = Prepared::for_test(
+            Plan::DeleteFolder {
+                folder: target,
+                cargo_clean: None,
+            },
+            vec![None],
+            Sharing::default(),
+        );
+        let still_idle = |project: &Project| {
+            is_still_idle(
+                &prepared,
+                &walked.path,
+                &snapshot_of(vec![project.clone()]),
+                now(),
+                THREE_DAYS,
+            )
+        };
+
+        assert!(still_idle(&walked));
+        let found_again = Project {
+            own_files: Measurement::Pending,
+            ..walked.clone()
+        };
+        assert!(
+            !still_idle(&found_again),
+            "its own files wait for a walk again"
+        );
     }
 
     #[test]

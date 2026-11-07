@@ -80,6 +80,14 @@ impl Project {
         self.artifacts.iter().any(|dir| dir.path == self.path)
     }
 
+    /// Whether `last_activity` tells all there is to know of the work in the folder, so that none
+    /// means none. A scratch folder is dated by the newest file in it once its own files are
+    /// walked (see `State::date_scratch_folder`): until that walk lands, or when it failed, its
+    /// work is unknown, and may be minutes old.
+    pub fn activity_is_known(&self) -> bool {
+        self.scratch.is_none() || self.own_files.usage().is_some()
+    }
+
     /// The engine's order, and every sort's last tiebreak: newest activity first, unknown
     /// activity last, then by name and path.
     pub fn newest_first(a: &Project, b: &Project) -> Ordering {
@@ -331,6 +339,30 @@ mod tests {
             ..crate::map::test_support::agent_session("e26ca359-da00", AgentStatus::Busy)
         });
         assert_eq!(space.name(), "Foundry Agent Studio architecture");
+    }
+
+    #[test]
+    fn a_scratch_folders_activity_is_known_once_its_own_files_are_walked_and_any_others_always() {
+        let session = "/private/tmp/claude-501/-Users-me/e26ca359";
+        let scratch = |own_files| Project {
+            scratch: Some(ScratchSpace {
+                session_folder: PathBuf::from(session),
+                session_id: "e26ca359".to_string(),
+                started_in: "me".to_string(),
+                session: None,
+            }),
+            own_files,
+            ..project_at(format!("{session}/scratchpad/r567"))
+        };
+        assert!(project_at("/code/app").activity_is_known(), "git dates it");
+        assert!(scratch(measured(0)).activity_is_known());
+        for unknown in [
+            Measurement::Pending,
+            Measurement::Measuring,
+            Measurement::Failed(io::ErrorKind::PermissionDenied),
+        ] {
+            assert!(!scratch(unknown).activity_is_known(), "{unknown:?}");
+        }
     }
 
     #[test]
