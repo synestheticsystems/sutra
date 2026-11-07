@@ -6,7 +6,7 @@ let takeOpening = [
 ]
 
 /// What the list in `contents` shows, a few words a row, as the core's own tests write it: a
-/// card's name, a repository's line as `name: card, card` or `name: folded`, and the quiet row as
+/// card's name, a group's line as `name: card, card` or `name: folded`, and the quiet row as
 /// `quiet:<count>`.
 func shown(_ contents: WindowContents) -> [String] {
     guard case .rows(let rows) = contents.list else { return [] }
@@ -14,10 +14,10 @@ func shown(_ contents: WindowContents) -> [String] {
         switch row {
         case .card(let card):
             card.name
-        case .repository(_, let name, _, _, .open(let cards)):
-            "\(name): \(cards.map(\.name).joined(separator: ", "))"
-        case .repository(_, let name, _, _, .folded):
-            "\(name): folded"
+        case .group(let line, .open(let cards)):
+            "\(line.name): \(cards.map(\.name).joined(separator: ", "))"
+        case .group(let line, .folded):
+            "\(line.name): folded"
         case .elsewhere:
             "elsewhere"
         case .quietProjects(let count, _, _, _):
@@ -32,8 +32,8 @@ func card(at path: String, in contents: WindowContents) -> Card? {
     let cards = rows.flatMap { row -> [Card] in
         switch row {
         case .card(let card): [card]
-        case .repository(_, _, _, _, .open(let cards)): cards
-        case .repository, .elsewhere, .quietProjects: []
+        case .group(_, .open(let cards)): cards
+        case .group, .elsewhere, .quietProjects: []
         }
     }
     return cards.first { $0.path == path }

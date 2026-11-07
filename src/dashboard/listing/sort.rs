@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::focus::disk_bytes;
-use super::{SectionRow, repository};
+use super::{SectionRow, group};
 use crate::dashboard::SortOrder;
 use crate::map::{Project, Snapshot};
 
@@ -37,16 +37,16 @@ impl SortOrder {
     }
 
     /// `projects`, the cards above the quiet row or every card a typed filter admits, as this sort
-    /// lays them out: the Activity sort gathers the cards of each repository with two or more of
-    /// them into its group (see `repository`), and the others list every card alone. `map` gives
-    /// each group every worktree of its repository.
+    /// lays them out: the Activity sort gathers the cards of each parent with two or more of them
+    /// into its group (see `group`), and the others list every card alone. `map` gives each group
+    /// every project of its parent.
     pub(super) fn lay_out<'a>(
         self,
         projects: Vec<&'a Project>,
         map: &'a Snapshot,
     ) -> Vec<SectionRow<'a>> {
         match self {
-            SortOrder::Activity => repository::group(projects, map),
+            SortOrder::Activity => group::gather(projects, map),
             SortOrder::Name | SortOrder::Disk => {
                 let arranged = self.arrange(projects).into_iter();
                 arranged.map(SectionRow::Project).collect()
@@ -80,9 +80,9 @@ pub(super) fn activity_slice(project: &Project) -> Option<u64> {
     Some(since_epoch.as_secs() / ACTIVITY_SLICE.as_secs())
 }
 
-/// Where the Activity sort stands a card, or a repository's group, that goes by `name`, its newest
-/// activity in `slice`: the newest slice first, each slice in name order, ignoring case, and two
-/// of one name by `path`, the card's folder or the group's git dir, so that no two tie.
+/// Where the Activity sort stands a card, or a group, that goes by `name`, its newest activity in
+/// `slice`: the newest slice first, each slice in name order, ignoring case, and two of one name
+/// by `path`, the card's folder or the folder its group's parent is known by, so that no two tie.
 pub(super) fn activity_rank<'p>(
     slice: Option<u64>,
     name: &str,
@@ -171,12 +171,18 @@ mod tests {
     }
 
     #[test]
-    fn only_the_activity_sort_nests_a_repositorys_worktrees() {
+    fn only_the_activity_sort_nests_a_repositorys_worktrees_and_a_sessions_scratch_folders() {
         let app = "/code/app/.git";
+        let foundry = |folder| {
+            let scratch = fixtures::scratch_folder("e26ca359", folder, fixtures::project("", 1));
+            fixtures::running_as("Foundry", scratch)
+        };
         let map = snapshot(
             vec![
                 main_worktree(app, "main", fixtures::project("app", 1)),
                 linked_worktree(app, "fix", fixtures::project("app-fix", 1)),
+                foundry("r567"),
+                foundry("r593"),
             ],
             vec![],
         );
@@ -185,9 +191,18 @@ mod tests {
             let rows: Vec<Row> = rows.into_iter().map(Row::from).collect();
             shown(&rows)
         };
-        assert_eq!(laid_out(SortOrder::Activity), ["app: app, app-fix"]);
-        assert_eq!(laid_out(SortOrder::Name), ["app", "app-fix"]);
-        assert_eq!(laid_out(SortOrder::Disk), ["app", "app-fix"]);
+        assert_eq!(
+            laid_out(SortOrder::Activity),
+            ["app: app, app-fix", "Foundry: r567, r593"]
+        );
+        assert_eq!(
+            laid_out(SortOrder::Name),
+            ["app", "app-fix", "Foundry", "Foundry"]
+        );
+        assert_eq!(
+            laid_out(SortOrder::Disk),
+            ["app", "app-fix", "Foundry", "Foundry"]
+        );
     }
 
     #[test]

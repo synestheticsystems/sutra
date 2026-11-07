@@ -10,6 +10,7 @@ pub(super) mod subagents;
 mod tray;
 mod units;
 
+pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::offers_terminate;
 
 use std::path::{Path, PathBuf};
@@ -33,10 +34,12 @@ pub(in crate::dashboard) struct CardContext<'a> {
 /// What a card goes by, which its place on the list decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Naming {
-    /// Its folder's name, beside its branch on a chip.
-    Folder,
-    /// Its branch, nested under the header that names its repository.
-    Branch,
+    /// Standing alone, it says whose it is: a worktree its folder's name, beside its branch on a
+    /// chip, and a scratch folder its session's name, beside its place in the session's scratch.
+    Alone,
+    /// Nested under the line that names its parent, it goes by what sets it apart there: a
+    /// worktree by its branch, and a scratch folder by its folder's own name.
+    Nested,
 }
 
 /// The card of `project`, on `map`, going by what `naming` says.
@@ -216,7 +219,7 @@ mod tests {
         let waiting: Vec<bool> = map
             .projects
             .iter()
-            .map(|project| card(project, Naming::Folder, &map, &ctx).waiting)
+            .map(|project| card(project, Naming::Alone, &map, &ctx).waiting)
             .collect();
         assert_eq!(waiting, [true, false, false]);
     }
@@ -236,7 +239,7 @@ mod tests {
             now: now(),
         };
 
-        let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
+        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
 
         let tray = card.tray.expect("a tray for the agents");
         assert_eq!(tray.disk, None, "nothing is sized yet");
@@ -272,7 +275,7 @@ mod tests {
             now: now(),
         };
 
-        let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
+        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
 
         let sessions = card.tray.expect("a tray for the agents").sessions;
         assert_eq!(
@@ -296,7 +299,7 @@ mod tests {
             home: Path::new(HOME),
             now: now(),
         };
-        let card = card(&map.projects[0], Naming::Folder, &map, &ctx);
+        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
         assert_eq!(card.path, "/Users/dev/code/app");
         assert_eq!(card.location, "~/code/app");
         assert_eq!(card.name, "app");

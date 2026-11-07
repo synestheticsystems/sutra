@@ -17,7 +17,7 @@ struct AgentBadges: View {
     }
 }
 
-/// The agents on a card's tray, or on a folded repository's line: the sessions, whose faces move,
+/// The agents on a card's tray, or on a folded group's line: the sessions, whose faces move,
 /// then past a divider the subagents, whose faces hold still.
 struct TrayAgents: View {
     let sessions: [AgentBadge]

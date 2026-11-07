@@ -1,21 +1,22 @@
 //! What the list shows, in order: the projects in focus in the user's sort, the agents working
 //! outside every project, and one row standing for the quiet projects, which opens to list them.
-//! A typed filter lists every project it admits instead. In the Activity sort, the worktrees of a
-//! repository with two or more cards above the quiet row stand together in its group, under the
-//! header that names it. Judged at one instant, so the cards and the counts always agree.
+//! A typed filter lists every project it admits instead. In the Activity sort, the cards of a
+//! parent with two or more of them above the quiet row, a repository's worktrees or a session's
+//! scratch folders, stand together in its group, under the line that names it. Judged at one
+//! instant, so the cards and the counts always agree.
 
 mod arrangement;
 mod filter;
 mod focus;
 mod folds;
+mod group;
 mod hold;
-mod repository;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
 pub(super) use focus::FOCUS_RECENT;
 pub(super) use folds::Folds;
-pub(super) use repository::Group;
+pub(super) use group::{Group, Parent, nested_name};
 
 use std::path::Path;
 use std::time::SystemTime;
@@ -27,8 +28,8 @@ use crate::map::{AgentSession, Project, Snapshot, SubagentWithParent};
 /// One row of the list.
 pub(super) enum Row<'a> {
     Project(&'a Project),
-    /// One repository's worktrees, under the header that names it: the Activity sort's group.
-    Repository(Group<'a>),
+    /// The cards that share a parent, under the line that names it: the Activity sort's group.
+    Group(Group<'a>),
     /// The agents working outside every project: all of them, or those the filter admits.
     Elsewhere(Elsewhere<'a>),
     /// "▸ 764 quiet": the projects outside the focus, behind one row.
@@ -39,17 +40,17 @@ pub(super) enum Row<'a> {
 }
 
 /// One row of a section of the list, as the sort lays the section out: a card standing alone, or
-/// one repository's group of cards.
+/// the group of the cards that share a parent.
 pub(super) enum SectionRow<'a> {
     Project(&'a Project),
-    Repository(Group<'a>),
+    Group(Group<'a>),
 }
 
 impl<'a> From<SectionRow<'a>> for Row<'a> {
     fn from(row: SectionRow<'a>) -> Row<'a> {
         match row {
             SectionRow::Project(project) => Row::Project(project),
-            SectionRow::Repository(group) => Row::Repository(group),
+            SectionRow::Group(group) => Row::Group(group),
         }
     }
 }
@@ -106,9 +107,9 @@ impl<'a> Listing<'a> {
         let cards = |section, projects: Vec<&'a Project>| {
             let sorted = match section {
                 Section::Main => sort.lay_out(projects, snapshot),
-                // No header stands below the quiet row, so no repository has two headers, nor two
-                // groups that one click on a header would fold: one with worktrees on both sides
-                // of the row has its group above it, or none.
+                // No line stands below the quiet row, so no parent has two lines, nor two groups
+                // that one click on a line would fold: one with cards on both sides of the row
+                // has its group above it, or none.
                 Section::Quiet => {
                     let arranged = sort.arrange(projects).into_iter();
                     arranged.map(SectionRow::Project).collect()
@@ -147,7 +148,7 @@ impl<'a> Listing<'a> {
     }
 
     /// The cards of each section, in the order on screen, with the cards of each group folded shut
-    /// where its header stands: the listing lays a group out whether the window shows its cards or
+    /// where its line stands: the listing lays a group out whether the window shows its cards or
     /// not, so a folded group holds its place as an open one does.
     fn order(&self) -> Order {
         let mut order = Order::default();
@@ -160,7 +161,7 @@ impl<'a> Listing<'a> {
             };
             match row {
                 Row::Project(project) => section.push(project.path.clone()),
-                Row::Repository(group) => {
+                Row::Group(group) => {
                     section.extend(group.cards.iter().map(|card| card.path.clone()));
                 }
                 Row::QuietProjects { .. } => past_quiet_row = true,
@@ -179,7 +180,8 @@ pub(super) mod fixtures {
 
     use crate::map::test_support::{agent_session, at, project_at, snapshot_of, subagent_at_work};
     use crate::map::{
-        AgentSession, AgentStatus, Project, RepoInfo, Snapshot, Subagent, SubagentWithParent,
+        AgentSession, AgentStatus, Project, RepoInfo, ScratchSpace, Snapshot, Subagent,
+        SubagentWithParent,
     };
 
     pub(in crate::dashboard) fn now() -> SystemTime {
@@ -239,6 +241,43 @@ pub(super) mod fixtures {
         }
     }
 
+    /// `project` as the scratch folder `folder` of the session `session_id`, which started in
+    /// `/code/app` and has ended, going by the name the engine gives it, as `app e26ca359` reads.
+    pub(in crate::dashboard) fn scratch_folder(
+        session_id: &str,
+        folder: &str,
+        project: Project,
+    ) -> Project {
+        let session_folder = PathBuf::from("/private/tmp/claude-501/-code-app").join(session_id);
+        let space = ScratchSpace {
+            session_folder,
+            session_id: session_id.to_string(),
+            started_in: "app".to_string(),
+            session: None,
+        };
+        Project {
+            path: space.session_folder.join("scratchpad").join(folder),
+            name: space.name(),
+            scratch: Some(space),
+            ..project
+        }
+    }
+
+    /// `scratch`, a scratch folder, while its session runs under the name `label`, which the
+    /// folder goes by then.
+    pub(in crate::dashboard) fn running_as(label: &str, scratch: Project) -> Project {
+        let mut space = scratch.scratch.expect("a scratch folder");
+        space.session = Some(AgentSession {
+            label: Some(label.to_string()),
+            ..agent_session(&space.session_id, AgentStatus::Busy)
+        });
+        Project {
+            name: space.name(),
+            scratch: Some(space),
+            ..scratch
+        }
+    }
+
     pub(in crate::dashboard) fn agent(cwd: &str, status: AgentStatus) -> AgentSession {
         AgentSession {
             cwd: PathBuf::from(cwd),
@@ -267,17 +306,21 @@ pub(super) mod fixtures {
         }
     }
 
-    /// What `rows` show, a few words each: a project's name, a repository's group as
-    /// `name: card, card`, `elsewhere`, or `quiet:<count>`.
+    /// What `rows` show, a few words each: a project's name, a group as `name: card, card`, each
+    /// card by its folder's own name, `elsewhere`, or `quiet:<count>`.
     pub(in crate::dashboard) fn shown(rows: &[super::Row]) -> Vec<String> {
         let names = |projects: &[&Project]| {
-            let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+            let folder = |project: &&Project| {
+                let name = project.path.file_name().unwrap();
+                name.to_string_lossy().into_owned()
+            };
+            let names: Vec<String> = projects.iter().map(folder).collect();
             names.join(", ")
         };
         rows.iter()
             .map(|row| match row {
                 super::Row::Project(project) => project.name.clone(),
-                super::Row::Repository(group) => format!("{}: {}", group.name, names(&group.cards)),
+                super::Row::Group(group) => format!("{}: {}", group.name, names(&group.cards)),
                 super::Row::Elsewhere(_) => "elsewhere".to_string(),
                 super::Row::QuietProjects { count, .. } => format!("quiet:{count}"),
             })

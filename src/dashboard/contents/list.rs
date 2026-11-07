@@ -1,11 +1,11 @@
 //! The list, or what stands in its place: what the store edition needs before it can read
 //! anything, the wait for the first map, or why nothing is listed. Otherwise the rows: a card per
-//! project, or in the Activity sort a repository's group, its cards under a header with its name
-//! and disk, then the agents working outside every project, and the row standing for the quiet
+//! project, or in the Activity sort the group of a parent's cards, under a line with its name and
+//! disk, then the agents working outside every project, and the row standing for the quiet
 //! projects.
 
 mod elsewhere;
-mod repository;
+mod group;
 
 use std::path::PathBuf;
 
@@ -18,7 +18,7 @@ use crate::map::{LARGE_FOLDER_BYTES, Snapshot};
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
 /// `lost_grant` why the one granted on an earlier launch could not be reopened. `folds` says which
-/// repositories' groups are folded shut.
+/// groups are folded shut.
 pub(in crate::dashboard) fn list(
     listing: Option<&Listing>,
     filter: Option<&str>,
@@ -53,9 +53,9 @@ pub(in crate::dashboard) fn list(
 fn list_row(row: &Row, map: &Snapshot, folds: &Folds, cards: &CardContext) -> ListRow {
     match row {
         Row::Project(project) => ListRow::Card {
-            card: Box::new(card::card(project, Naming::Folder, map, cards)),
+            card: Box::new(card::card(project, Naming::Alone, map, cards)),
         },
-        Row::Repository(group) => repository::row(group, map, folds, cards),
+        Row::Group(group) => group::row(group, map, folds, cards),
         Row::Elsewhere(working) => ListRow::Elsewhere {
             heading: "Elsewhere".to_string(),
             lines: elsewhere::lines(working, cards),
@@ -119,9 +119,10 @@ mod tests {
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::Arrangement;
     use crate::dashboard::listing::fixtures::{
-        agent, linked_worktree, main_worktree, now, project, quiet, snapshot, subagent_in,
+        agent, linked_worktree, main_worktree, now, project, quiet, running_as, scratch_folder,
+        snapshot, subagent_in,
     };
-    use crate::dashboard::{AgentLook, ElsewhereLine, RepositoryFold};
+    use crate::dashboard::{AgentLook, ElsewhereLine, GroupFold, Parent};
     use crate::map::AgentStatus;
     use crate::notifications::Notifier;
 
@@ -208,32 +209,45 @@ mod tests {
     }
 
     #[test]
-    fn a_group_the_user_folded_shows_its_header_alone_and_the_others_their_cards() {
+    fn a_group_folded_shows_its_line_alone_and_the_others_their_cards() {
         let (app, site) = ("/code/app/.git", "/code/site/.git");
+        let foundry = |folder| {
+            let scratch = scratch_folder("e26ca359", folder, project("", 1));
+            running_as("Foundry", scratch)
+        };
         let map = snapshot(
             vec![
                 main_worktree(app, "main", project("app", 1)),
                 linked_worktree(app, "fix", project("app-fix", 1)),
                 main_worktree(site, "main", project("site", 1)),
                 linked_worktree(site, "fix", project("site-fix", 1)),
+                foundry("r567"),
+                foundry("r593"),
             ],
             vec![],
         );
         let mut folds = Folds::default();
-        folds.toggle(app, &map);
+        let app = Parent::Repository {
+            common_dir: app.to_string(),
+        };
+        folds.toggle(&app, &map);
         let List::Rows { rows } = listed_with(&map, &Arrangement::default(), &folds) else {
             panic!("a map with projects lists them");
         };
         let folded: Vec<(&str, bool)> = rows
             .iter()
             .map(|row| match row {
-                ListRow::Repository { name, fold, .. } => {
-                    (name.as_str(), matches!(fold, RepositoryFold::Folded { .. }))
+                ListRow::Group { line, fold } => {
+                    (line.name.as_str(), matches!(fold, GroupFold::Folded { .. }))
                 }
-                row => panic!("only the two groups: {row:?}"),
+                row => panic!("only the three groups: {row:?}"),
             })
             .collect();
-        assert_eq!(folded, [("app", true), ("site", false)]);
+        assert_eq!(
+            folded,
+            [("app", true), ("Foundry", true), ("site", false)],
+            "app by the user, and the session's scratch as it starts"
+        );
     }
 
     #[test]

@@ -62,8 +62,8 @@ final class ScriptedCore: DashboardProtocol {
     func perform(action: Action) {
         let arranged = state.withLock { state in
             switch action {
-            case .toggleRepositoryFold(let commonDir):
-                state.arrangement.toggleFold(of: commonDir)
+            case .toggleFold(let parent):
+                state.arrangement.toggleFold(of: parent)
             case .setSort(let order):
                 state.arrangement.sort = order
             case .toggleQuietProjects:

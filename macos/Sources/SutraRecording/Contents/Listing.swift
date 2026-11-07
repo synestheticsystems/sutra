@@ -1,19 +1,20 @@
 import Foundation
 import SutraCore
 
-/// How the user has arranged the list during a take: its sort, the repositories folded shut, and
-/// whether the quiet projects show. A take opens as the app's first launch does: newest activity
-/// first, nothing folded, the quiet projects behind their row.
+/// How the user has arranged the list during a take: its sort, the groups folded shut, and whether
+/// the quiet projects show. A take opens as the app's first launch does: newest activity first,
+/// every repository's group open, the quiet projects behind their row. The invented work keeps no
+/// scratch, so no group starts folded.
 struct Arrangement: Equatable {
     var sort = SortOrder.activity
-    /// The git folders of the repositories whose groups are folded shut.
-    var folded: Set<String> = []
+    /// The parents whose groups are folded shut.
+    var folded: Set<Parent> = []
     var quietShown = false
 
-    /// Fold the group of the repository whose git folder is `commonDir` shut, or open it again.
-    mutating func toggleFold(of commonDir: String) {
-        if folded.remove(commonDir) == nil {
-            folded.insert(commonDir)
+    /// Fold the group of `parent` shut, or open it again.
+    mutating func toggleFold(of parent: Parent) {
+        if folded.remove(parent) == nil {
+            folded.insert(parent)
         }
     }
 
@@ -30,7 +31,7 @@ struct Arrangement: Equatable {
             ))
             if quietShown {
                 rows += arranged(quiet, at: moment).map { project in
-                    .card(card: project.card(naming: .folder, at: moment))
+                    .card(card: project.card(naming: .alone, at: moment))
                 }
             }
         }
@@ -43,12 +44,12 @@ struct Arrangement: Equatable {
     private func layOut(_ projects: [Project], at moment: TimeInterval) -> [ListRow] {
         guard sort == .activity else {
             return arranged(projects, at: moment).map { project in
-                .card(card: project.card(naming: .folder, at: moment))
+                .card(card: project.card(naming: .alone, at: moment))
             }
         }
         var ranked: [(rank: ActivityRank, row: ListRow)] = []
         func alone(_ project: Project) {
-            let card = project.card(naming: .folder, at: moment)
+            let card = project.card(naming: .alone, at: moment)
             ranked.append((project.activityRank(at: moment), .card(card: card)))
         }
         var repositories: [String: Repository] = [:]
@@ -79,25 +80,27 @@ struct Arrangement: Equatable {
             $0.nestedRank(at: moment) < $1.nestedRank(at: moment)
         }
         let commonDir = repository.worktree.commonDir
-        let fold: RepositoryFold = if folded.contains(commonDir) {
+        let parent = Parent.repository(commonDir: commonDir)
+        let fold: GroupFold = if folded.contains(parent) {
             .folded(
                 sessions: cards.flatMap { $0.sessionBadges(at: moment) },
                 subagents: cards.flatMap { $0.subagentBadges(at: moment) },
                 waiting: cards.contains { $0.waiting(at: moment) }
             )
         } else {
-            .open(cards: cards.map { $0.card(naming: .branch, at: moment) })
+            .open(cards: cards.map { $0.card(naming: .nested, at: moment) })
         }
         // Every worktree of the repository adds to the total, listed or not.
         let worktrees = Scenario.projects.filter { $0.worktree?.commonDir == commonDir }
         let folder = repository.worktree.repositoryFolder
-        return .repository(
-            commonDir: commonDir,
+        let line = GroupLine(
+            parent: parent,
             name: (folder as NSString).lastPathComponent,
             tooltip: Words.tilde(folder),
-            total: Words.size(worktrees.reduce(0) { $0 + $1.bytes }),
-            fold: fold
+            scratch: nil,
+            total: Words.size(worktrees.reduce(0) { $0 + $1.bytes })
         )
+        return .group(line: line, fold: fold)
     }
 
     /// `projects` in the sort, every card alone, as the quiet section lists them in every sort.

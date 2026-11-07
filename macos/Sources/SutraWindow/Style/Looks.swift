@@ -89,6 +89,13 @@ extension UnitLook {
     }
 }
 
+/// How Claude Code's scratch space is drawn: in dashes, the way a placeholder is, as scratch is
+/// thrown away where the projects around it are kept.
+enum Scratch {
+    /// The dash of an outline or a guide, as long as a gap and a half.
+    static let dash: [CGFloat] = [3, 2]
+}
+
 /// The surfaces a card is made of.
 enum Surface {
     /// Raised over the window: white in light mode; in dark mode a step lighter than the window,
@@ -118,7 +125,7 @@ enum Surface {
     /// A card's thin edge, and the track a bar fills along.
     static let edge = Color(nsColor: .separatorColor)
 
-    /// The hairline an open repository's cards hang from: firmer than a card's edge, so it reads
+    /// The hairline an open group's cards hang from: firmer than a card's edge, so it reads
     /// on the bare window, and fainter than any text.
     static let guide = Color(nsColor: .tertiaryLabelColor).opacity(0.6)
 

@@ -36,18 +36,18 @@ struct ScriptedCoreTests {
     }
 
     @Test func foldingARepositoryPutsItsAgentsOnItsLineAndUnfoldingBringsItsCardsBack() {
-        core.perform(action: .toggleRepositoryFold(commonDir: cedarWeb))
+        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
         let folded = ["cedar-web: folded", "harbor-api", "lantern-docs", "quiet:3"]
         #expect(shown(core.contents()) == folded)
         guard case .rows(let rows) = core.contents().list,
-              case .repository(_, _, _, _, .folded(let sessions, let subagents, let waiting))
+              case .group(_, .folded(let sessions, let subagents, let waiting))
                 = rows[0]
         else {
             Issue.record("the repository's line comes first, folded")
             return
         }
         #expect(sessions.count == 3 && subagents.count == 2 && !waiting)
-        core.perform(action: .toggleRepositoryFold(commonDir: cedarWeb))
+        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
         #expect(shown(core.contents()) == takeOpening)
         #expect(window.changes == 2)
     }
@@ -94,7 +94,7 @@ struct ScriptedCoreTests {
     }
 
     @Test func rewindingReturnsTheListToHowATakeOpensIt() {
-        core.perform(action: .toggleRepositoryFold(commonDir: cedarWeb))
+        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
         core.perform(action: .setSort(order: .name))
         core.perform(action: .toggleQuietProjects)
         core.rewind()

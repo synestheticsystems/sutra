@@ -1,12 +1,13 @@
 //! A card's identity: its name, the name's tooltip (the folder and its last activity), and the
 //! chip beside the name and its tooltip: a worktree's branch (the branch in full, and which
 //! worktree this is), or a scratch folder's place in its session's scratch (whose session it is).
-//! A card nested under its repository's header goes by its branch instead, as the header names the
-//! repository.
+//! A card nested under its parent's line, which names what the cards there share, goes by what
+//! sets it apart instead: a worktree by its branch, a scratch folder by its folder's own name.
 
 use std::path::Path;
 
 use super::Naming;
+use crate::dashboard::listing::nested_name;
 use crate::dashboard::{Chip, ScratchMark, format};
 use crate::map::{ActivitySource, Project, RepoInfo, ScratchSpace};
 
@@ -18,11 +19,11 @@ pub(super) struct Identity {
 }
 
 /// What `project`'s card goes by, as `naming` says, its last activity read at `last_activity`, the
-/// moment on the user's clock (see `format::timestamp`). Going by its branch, the card needs no
-/// chip, and the name's tooltip gives the branch in full, which the name may cut short, before the
-/// folder. A folder in no repository has no branch, and goes by its name whatever `naming` says;
-/// so does a worktree on no branch, as two detached at one commit would read the same, and its
-/// chip says where its head is.
+/// moment on the user's clock (see `format::timestamp`). Nested, the card needs no chip, as its
+/// parent's line says what the chip would, and a worktree's name tooltip gives its branch in full,
+/// which the name may cut short, before the folder. A folder in no repository and no scratch has
+/// no parent, and goes by its name whatever `naming` says; so does a worktree on no branch, as two
+/// detached at one commit would read the same, and its chip says where its head is.
 pub(super) fn identity(
     project: &Project,
     naming: Naming,
@@ -30,8 +31,8 @@ pub(super) fn identity(
     last_activity: Option<&str>,
 ) -> Identity {
     let folder = name_tooltip(project, home, last_activity);
-    match (naming, &project.repo) {
-        (Naming::Branch, Some(repo)) if repo.branch.is_some() => {
+    match (naming, &project.repo, &project.scratch) {
+        (Naming::Nested, Some(repo), _) if repo.branch.is_some() => {
             let branch = branch(repo);
             Identity {
                 name_tooltip: format!("{branch}\n{folder}"),
@@ -39,16 +40,21 @@ pub(super) fn identity(
                 chip: None,
             }
         }
-        (Naming::Folder | Naming::Branch, repo) => Identity {
+        (Naming::Nested, None, Some(_)) => Identity {
+            name: nested_name(project),
+            name_tooltip: folder,
+            chip: None,
+        },
+        (Naming::Alone | Naming::Nested, repo, space) => Identity {
             name: project.name.clone(),
             name_tooltip: folder,
-            chip: match (repo, &project.scratch) {
+            chip: match (repo, space) {
                 (Some(repo), _) => Some(Chip::Branch {
                     text: branch(repo),
                     tooltip: branch_tooltip(repo, home),
                 }),
                 (None, Some(space)) => Some(Chip::Scratch {
-                    mark: scratch_mark(space, &project.path),
+                    mark: scratch_mark(space, Some(&project.path)),
                 }),
                 (None, None) => None,
             },
@@ -56,13 +62,17 @@ pub(super) fn identity(
     }
 }
 
-/// The mark of `space`, one session's scratch, on its scratch folder at `folder`: where the folder
-/// lies in the session's folder, and whose session it is, by its whole id, as the card goes by the
-/// session's name. The mark fades once the session has ended, which says whether the session may
-/// still build in the folder.
-fn scratch_mark(space: &ScratchSpace, folder: &Path) -> ScratchMark {
+/// The mark of `space`, one session's scratch: on its scratch folder at `folder`, where the folder
+/// lies in the session's folder, beside the session's name the card goes by; on the session's
+/// line, with no folder, the mark of the whole space. Its tooltip says whose session it is, by its
+/// whole id. The mark fades once the session has ended, which says whether the session may still
+/// build there.
+pub(in crate::dashboard::contents) fn scratch_mark(
+    space: &ScratchSpace,
+    folder: Option<&Path>,
+) -> ScratchMark {
     ScratchMark {
-        place: space.place_of(folder).display().to_string(),
+        place: folder.map(|folder| space.place_of(folder).display().to_string()),
         tooltip: format!("Claude Code's scratch space\nSession {}", space.session_id),
         session_runs: space.session.is_some(),
     }
@@ -187,8 +197,8 @@ mod tests {
             repo: Some(repo(Some(folder), None, Some("01fb326"))),
             ..project_at(format!("/Users/dev/code/{folder}"))
         };
-        let astra = identity(&detached("app-pr1-astra"), Naming::Branch, home, None);
-        let opus = identity(&detached("app-pr1-opus"), Naming::Branch, home, None);
+        let astra = identity(&detached("app-pr1-astra"), Naming::Nested, home, None);
+        let opus = identity(&detached("app-pr1-opus"), Naming::Nested, home, None);
         assert_eq!(
             (astra.name.as_str(), opus.name.as_str()),
             ("app-pr1-astra", "app-pr1-opus")
@@ -206,7 +216,7 @@ mod tests {
         };
         let at = Some("2026-11-04 10:23");
 
-        let nested = identity(&worktree, Naming::Branch, home, at);
+        let nested = identity(&worktree, Naming::Nested, home, at);
         assert_eq!(nested.name, long);
         assert_eq!(
             nested.name_tooltip,
@@ -214,7 +224,7 @@ mod tests {
         );
         assert_eq!(nested.chip, None);
 
-        let alone = identity(&worktree, Naming::Folder, home, at);
+        let alone = identity(&worktree, Naming::Alone, home, at);
         assert_eq!(alone.name, "app-wt");
         assert_eq!(
             alone.name_tooltip,
@@ -226,7 +236,7 @@ mod tests {
     #[test]
     fn a_folder_in_no_repository_goes_by_its_name_whatever_the_naming() {
         let notes = project_at("/Users/dev/code/notes");
-        let identity = identity(&notes, Naming::Branch, Path::new(HOME), None);
+        let identity = identity(&notes, Naming::Nested, Path::new(HOME), None);
         assert_eq!(identity.name, "notes");
         assert_eq!(identity.name_tooltip, "~/code/notes");
         assert_eq!(identity.chip, None);
@@ -249,7 +259,7 @@ mod tests {
         let mark = |session_runs| {
             Some(Chip::Scratch {
                 mark: ScratchMark {
-                    place: "scratchpad/r567fixture".to_string(),
+                    place: Some("scratchpad/r567fixture".to_string()),
                     tooltip: "Claude Code's scratch space\n\
                               Session d5fa0639-441e-4722-b044-080d70c0b04f"
                         .to_string(),
@@ -258,7 +268,7 @@ mod tests {
             })
         };
 
-        let ended = identity(&scratch(None), Naming::Branch, Path::new(HOME), None);
+        let ended = identity(&scratch(None), Naming::Alone, Path::new(HOME), None);
 
         assert_eq!(ended.name, "sk d5fa0639");
         assert_eq!(ended.name_tooltip, path, "the folder in full");
@@ -269,11 +279,19 @@ mod tests {
         );
         let running = identity(
             &scratch(Some(running)),
-            Naming::Branch,
+            Naming::Alone,
             Path::new(HOME),
             None,
         );
         assert_eq!(running.chip, mark(true));
+
+        let nested = identity(&scratch(None), Naming::Nested, Path::new(HOME), None);
+        assert_eq!(
+            (nested.name.as_str(), nested.name_tooltip.as_str()),
+            ("r567fixture", path.as_str()),
+            "nested under its session's line, by its folder's own name"
+        );
+        assert_eq!(nested.chip, None, "the line wears the mark");
     }
 
     #[test]

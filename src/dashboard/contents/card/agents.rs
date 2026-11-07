@@ -23,7 +23,7 @@ pub(in crate::dashboard::contents) fn badges(
         .collect()
 }
 
-/// Whether any of `agents` waits on the user, which makes the card, the row or the folded header
+/// Whether any of `agents` waits on the user, which makes the card, the row or the folded line
 /// they are on throb.
 pub(in crate::dashboard::contents) fn any_waiting<'a>(
     agents: impl IntoIterator<Item = &'a AgentSession>,

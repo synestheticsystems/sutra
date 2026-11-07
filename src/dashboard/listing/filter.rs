@@ -83,6 +83,17 @@ mod tests {
     }
 
     #[test]
+    fn a_scratch_folder_is_matched_by_its_sessions_name_and_its_path_in_the_scratch() {
+        use crate::dashboard::listing::fixtures::{running_as, scratch_folder};
+        let scratch = scratch_folder("e26ca359", "r567guards", project("/x", None));
+        let scratch = running_as("Foundry Agent Studio architecture", scratch);
+        assert!(admits("agent studio", &scratch));
+        assert!(admits("scratchpad", &scratch));
+        assert!(admits("r567", &scratch));
+        assert!(!admits("main", &scratch));
+    }
+
+    #[test]
     fn blank_text_is_no_query_and_surrounding_spaces_are_ignored() {
         assert_eq!(Query::new(""), None);
         assert_eq!(Query::new("   "), None);

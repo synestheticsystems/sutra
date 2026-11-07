@@ -1,10 +1,10 @@
-//! The repositories' groups folded shut from their headers: the fold kept for the next run,
-//! forgotten once a live map no longer lists the repository, and a folded group held in its place
-//! while the pointer is over the list.
+//! The groups folded shut or opened from their lines: the fold kept for the next run, forgotten
+//! once a live map no longer lists the group's parent, and a folded group held in its place while
+//! the pointer is over the list.
 
 use super::*;
-use crate::dashboard::RepositoryFold;
-use crate::dashboard::listing::fixtures::{linked_worktree, main_worktree};
+use crate::dashboard::listing::fixtures::{linked_worktree, main_worktree, scratch_folder};
+use crate::dashboard::{GroupFold, Parent};
 use crate::map::test_support::snapshot_of;
 
 const APP: &str = "/code/app/.git";
@@ -31,10 +31,16 @@ fn repository(common_dir: &str, name: &str, minutes_ago: u64) -> [Project; 2] {
     ]
 }
 
-/// Click the header of the group of the repository whose git dir is `common_dir`.
-fn click_header(state: &mut State, common_dir: &str) {
-    let common_dir = common_dir.to_string();
-    state.perform(Action::ToggleRepositoryFold { common_dir }, now());
+/// The repository whose git dir is `common_dir`, as its line names it.
+fn repo(common_dir: &str) -> Parent {
+    Parent::Repository {
+        common_dir: common_dir.to_string(),
+    }
+}
+
+/// Click the line of the group of `parent`.
+fn click_line(state: &mut State, parent: Parent) {
+    state.perform(Action::ToggleFold { parent }, now());
 }
 
 /// The groups the window shows, in order, each as `name: open` or `name: folded`.
@@ -43,9 +49,9 @@ fn groups(state: &State) -> Vec<String> {
         panic!("no rows");
     };
     let groups = rows.into_iter().filter_map(|row| match row {
-        ListRow::Repository { name, fold, .. } => Some(match fold {
-            RepositoryFold::Open { .. } => format!("{name}: open"),
-            RepositoryFold::Folded { .. } => format!("{name}: folded"),
+        ListRow::Group { line, fold } => Some(match fold {
+            GroupFold::Open { .. } => format!("{}: open", line.name),
+            GroupFold::Folded { .. } => format!("{}: folded", line.name),
         }),
         _ => None,
     });
@@ -53,40 +59,56 @@ fn groups(state: &State) -> Vec<String> {
 }
 
 #[test]
-fn a_group_folded_from_its_header_is_kept_folded_for_the_next_run_and_a_click_opens_it() {
+fn a_group_folded_from_its_line_is_kept_folded_for_the_next_run_and_a_click_opens_it() {
     let fixture = TempDir::new("state-fold-kept");
     let (mut state, _inbox) = dashboard(&fixture);
     let map = [repository(APP, "app", 1), repository(SITE, "site", 1)].concat();
     state.show(Arc::new(snapshot_of(map)), now());
     let saved = || SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
 
-    click_header(&mut state, APP);
+    click_line(&mut state, repo(APP));
     assert_eq!(groups(&state), ["app: folded", "site: open"]);
-    assert!(saved().folded_repositories.is_folded(APP));
+    assert!(saved().folds.is_folded(&repo(APP)));
 
-    click_header(&mut state, APP);
+    click_line(&mut state, repo(APP));
     assert_eq!(groups(&state), ["app: open", "site: open"]);
-    assert!(!saved().folded_repositories.is_folded(APP));
+    assert!(!saved().folds.is_folded(&repo(APP)));
 }
 
 #[test]
-fn a_fold_is_forgotten_and_the_settings_saved_once_a_live_map_no_longer_lists_its_repository() {
+fn a_sessions_scratch_starts_folded_and_an_opened_one_is_kept_open_for_the_next_run() {
+    let fixture = TempDir::new("state-fold-scratch");
+    let (mut state, _inbox) = dashboard(&fixture);
+    let scratch = |folder| scratch_folder("e26ca359", folder, active("", 1));
+    let map = vec![scratch("r567"), scratch("r593")];
+    state.show(Arc::new(snapshot_of(map)), now());
+    assert_eq!(groups(&state), ["app e26ca359: folded"]);
+
+    let session = Parent::Session {
+        folder: "/private/tmp/claude-501/-code-app/e26ca359".to_string(),
+    };
+    click_line(&mut state, session.clone());
+
+    assert_eq!(groups(&state), ["app e26ca359: open"]);
+    let saved = SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
+    assert!(!saved.folds.is_folded(&session));
+}
+
+#[test]
+fn a_fold_is_forgotten_and_the_settings_saved_once_a_live_map_no_longer_lists_its_parent() {
     let fixture = TempDir::new("state-fold-forgotten");
     let (mut state, _inbox) = dashboard(&fixture);
     let both = [repository(APP, "app", 1), repository(SITE, "site", 1)].concat();
     state.show(Arc::new(snapshot_of(both)), now());
-    click_header(&mut state, APP);
-    click_header(&mut state, SITE);
+    click_line(&mut state, repo(APP));
+    click_line(&mut state, repo(SITE));
 
     let app_gone = repository(SITE, "site", 1).to_vec();
     state.show(Arc::new(snapshot_of(app_gone)), now());
 
     let saved = SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
-    assert!(!saved.folded_repositories.is_folded(APP));
-    assert!(
-        saved.folded_repositories.is_folded(SITE),
-        "site is still listed"
-    );
+    assert!(!saved.folds.is_folded(&repo(APP)));
+    assert!(saved.folds.is_folded(&repo(SITE)), "site is still listed");
     let app_back = [repository(APP, "app", 1), repository(SITE, "site", 1)].concat();
     state.show(Arc::new(snapshot_of(app_back)), now());
     assert_eq!(
@@ -109,7 +131,7 @@ fn a_folded_group_keeps_its_place_while_the_pointer_is_over_the_list() {
     };
     state.show(map(30), now());
     state.perform(Action::PointerEnteredList, now());
-    click_header(&mut state, SITE);
+    click_line(&mut state, repo(SITE));
     assert_eq!(groups(&state), ["app: open", "site: folded"]);
 
     // Site's worktrees at work now, which puts its group first in the sort.

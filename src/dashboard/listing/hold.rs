@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::SectionRow;
-use super::repository::Group;
+use super::group::Group;
 use crate::map::Project;
 
 /// What holds the list still, and the order it holds.
@@ -28,9 +28,9 @@ pub(super) struct Hold {
     order: Option<Order>,
 }
 
-/// The cards of each section of the list, in the order on screen, a folded group's where its
-/// header stands. A group's cards stand together, so the order of the groups and the cards
-/// standing alone is the order of their cards.
+/// The cards of each section of the list, in the order on screen, a folded group's where its line
+/// stands. A group's cards stand together, so the order of the groups and the cards standing
+/// alone is the order of their cards.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Order {
     /// The cards above the quiet row, or every card while a filter is typed.
@@ -125,12 +125,12 @@ impl Hold {
         let card_place = |card: &&Project| place.get(card.path.as_path()).copied();
         let row_place = |row: &SectionRow| match row {
             SectionRow::Project(card) => card_place(card),
-            SectionRow::Repository(group) => group.cards.iter().filter_map(card_place).min(),
+            SectionRow::Group(group) => group.cards.iter().filter_map(card_place).min(),
         };
         keep_places(sorted, row_place)
             .into_iter()
             .map(|row| match row {
-                SectionRow::Repository(group) => SectionRow::Repository(Group {
+                SectionRow::Group(group) => SectionRow::Group(Group {
                     cards: keep_places(group.cards, card_place),
                     ..group
                 }),
@@ -169,9 +169,10 @@ fn keep_places<T>(sorted: Vec<T>, held_place: impl Fn(&T) -> Option<usize>) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::super::Row;
     use super::super::fixtures::shown;
+    use super::super::{Parent, Row};
     use super::*;
+    use crate::map::RepoInfo;
     use crate::map::test_support::project_at;
 
     fn project(name: &str) -> Project {
@@ -210,12 +211,19 @@ mod tests {
     /// The group of the repository `name`, listing `cards`, known by its name in place of a git
     /// dir.
     fn group<'a>(name: &'static str, cards: Vec<&'a Project>) -> SectionRow<'a> {
-        SectionRow::Repository(Group {
-            common_dir: Path::new(name),
+        // Kept for the rest of the test run, as a group borrows its parent from the map.
+        let repo = Box::leak(Box::new(RepoInfo {
+            common_dir: PathBuf::from(name),
+            git_dir: PathBuf::from(name),
+            worktree_name: None,
+            branch: None,
+            head: None,
+        }));
+        SectionRow::Group(Group {
+            parent: Parent::Repository(repo),
             name: name.to_string(),
-            folder: Path::new(name),
             cards,
-            worktrees: Vec::new(),
+            members: Vec::new(),
         })
     }
 

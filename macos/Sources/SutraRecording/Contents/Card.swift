@@ -3,10 +3,10 @@ import SutraCore
 
 /// What a card goes by, which its place on the list decides.
 enum Naming {
-    /// Its folder's name, beside its branch on a chip.
-    case folder
-    /// Its branch, nested under the line that names its repository.
-    case branch
+    /// Standing alone: its folder's name, beside its branch on a chip.
+    case alone
+    /// Nested under the line that names its repository: its branch.
+    case nested
 }
 
 extension Project {
@@ -18,7 +18,7 @@ extension Project {
         let source = sessions.isEmpty ? "from git" : "from an agent session"
         let folder = "\(Words.tilde(path))\nLast activity \(Words.timestamp(activity)), \(source)"
         // Nested under its repository's line, it goes by its branch, which needs no chip.
-        let nestedBranch = naming == .branch ? worktree?.branch : nil
+        let nestedBranch = naming == .nested ? worktree?.branch : nil
         return Card(
             path: path,
             location: Words.tilde(path),

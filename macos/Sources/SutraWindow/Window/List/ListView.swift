@@ -56,11 +56,8 @@ private struct Rows: View {
                     switch row {
                     case .card(let card):
                         CardView(model: card, dashboard: dashboard)
-                    case .repository(let commonDir, let name, let tooltip, let total, let fold):
-                        RepositoryGroup(
-                            commonDir: commonDir, name: name, tooltip: tooltip, total: total,
-                            fold: fold, dashboard: dashboard
-                        )
+                    case .group(let line, let fold):
+                        CardGroup(line: line, fold: fold, dashboard: dashboard)
                     case .elsewhere(let heading, let lines, let waiting):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
                     case .quietProjects(let open, let label, let tooltip):
@@ -75,15 +72,15 @@ private struct Rows: View {
     }
 }
 
-/// The lines of the list that fold something away, a repository's and the one standing for the
-/// quiet projects, all laid out alike, so their chevrons stand in one column.
+/// The lines of the list that fold something away, a group's and the one standing for the quiet
+/// projects, all laid out alike, so their chevrons stand in one column.
 private enum FoldingLine {
     /// How far a line's chevron stands in from the list's edge.
     static let inset: CGFloat = 8
-    /// The room above and below a line's text, which a folded repository's throb fills.
+    /// The room above and below a line's text, which a folded group's throb fills.
     static let padding: CGFloat = 7
-    /// The width of the chevron's slot, fixed so the guide under an open repository's chevron runs
-    /// down its middle.
+    /// The width of the chevron's slot, fixed so the guide under an open group's chevron runs down
+    /// its middle.
     static let chevronWidth: CGFloat = 10
 }
 
@@ -100,19 +97,15 @@ private struct Chevron: View {
     }
 }
 
-/// One repository's worktrees: its line, with a disclosure chevron, the repository's name and the
-/// disk its worktrees take, then their cards, set in from the list's edge and hung from a guide
-/// that runs down from the chevron, so they read as the repository's at a glance. A click on the
-/// line folds the cards away, and another shows them again. Folded, the line holds the robots of
-/// the agents in its worktrees at its end, and throbs as their cards would while one of them waits
-/// on the user.
-private struct RepositoryGroup: View {
-    /// The git folder the worktrees share, which the click names to the core.
-    let commonDir: String
-    let name: String
-    /// Where the repository is.
-    let tooltip: String
-    let total: String?
+/// The cards that share a parent, a repository's worktrees or a session's scratch folders: the
+/// parent's line, with a disclosure chevron, its name, the mark of a session's scratch, and the
+/// disk its cards take, then the cards, set in from the list's edge and hung from a guide that runs
+/// down from the chevron, so they read as the parent's at a glance. A click on the line folds the
+/// cards away, and another shows them again. Folded, the line holds the robots of the agents in
+/// its cards at its end, and throbs as their cards would while one of them waits on the user. A
+/// session's line steps back once the session has ended, as a robot at rest does.
+private struct CardGroup: View {
+    let line: GroupLine
     let fold: Fold
     let dashboard: DashboardModel
 
@@ -162,8 +155,7 @@ private struct RepositoryGroup: View {
 
     /// The hairline the cards hang from, from just below the chevron to the foot of the last card.
     private var guide: some View {
-        Rectangle()
-            .fill(Surface.guide)
+        hairline
             .frame(width: 1)
             // Up through the room between the line and the first card, to just below the chevron,
             // which sits above the foot of the line's text.
@@ -172,20 +164,37 @@ private struct RepositoryGroup: View {
             .accessibilityHidden(true)
     }
 
+    /// Unbroken under a repository, whose worktrees are kept; in dashes under a session's scratch,
+    /// as its mark is drawn, so cards whose line has scrolled away still read as scratch.
+    @ViewBuilder
+    private var hairline: some View {
+        if line.scratch == nil {
+            Rectangle()
+                .fill(Surface.guide)
+        } else {
+            DownTheMiddle()
+                .stroke(Surface.guide, style: StrokeStyle(lineWidth: 1, dash: Scratch.dash))
+        }
+    }
+
     /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
-    /// the name and the total.
+    /// the name, a session's scratch mark and the total. Once a session has ended, its line steps
+    /// back.
     private func header(open: Bool) -> some View {
         Button {
-            dashboard.perform(.toggleRepositoryFold(commonDir: commonDir))
+            dashboard.perform(.toggleFold(parent: line.parent))
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Chevron(open: open)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(name)
+                    Text(line.name)
                         .fontWeight(.semibold)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if let total {
+                    if let scratch = line.scratch {
+                        ScratchMarkView(mark: scratch)
+                    }
+                    if let total = line.total {
                         Text(total)
                     }
                 }
@@ -194,11 +203,22 @@ private struct RepositoryGroup: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
+            .opacity(line.scratch?.sessionRuns == false ? Still.opacity : 1)
         }
         .buttonStyle(.plain)
-        .hoverTip(tooltip)
+        .hoverTip(line.tooltip)
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(open ? "Open" : "Folded")
+    }
+}
+
+/// A line down the middle of its frame, from top to bottom.
+private struct DownTheMiddle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        }
     }
 }
 

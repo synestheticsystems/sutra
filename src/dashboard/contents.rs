@@ -100,9 +100,9 @@ pub struct SortChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
 pub enum SortOrder {
     /// Newest activity first, in five-minute slices of the clock, each slice in name order. The
-    /// worktrees of a git repository with two or more cards above the quiet row stand together
-    /// under a header naming it, the main worktree first, and the group takes the place its newest
-    /// card would.
+    /// cards of a parent with two or more of them above the quiet row, a git repository's
+    /// worktrees or a Claude Code session's scratch folders, stand together under a line naming
+    /// it, a repository's main worktree first, and the group takes the place its newest card would.
     #[default]
     Activity,
     /// By folder name, ignoring case.
@@ -163,25 +163,13 @@ pub enum ListRow {
         // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
         card: Box<Card>,
     },
-    /// One repository's worktrees, in the Activity sort, where two or more of them are listed
-    /// together: a header with the repository's name and the disk its worktrees take, then their
-    /// cards, nested under it, unless the user keeps the group folded shut. The header names the
-    /// repository, so each card goes by its branch, or on no branch by its folder. A click on the
-    /// header folds the group shut, and another opens it (`Action::ToggleRepositoryFold`).
-    Repository {
-        /// The git folder the worktrees share, which the window knows the group by.
-        common_dir: String,
-        /// The main worktree's folder name, or a bare repository's own, less `.git`.
-        name: String,
-        /// Where the repository is, as `~/code/app` reads, which tells two clones of one remote
-        /// apart.
-        tooltip: String,
-        /// The disk its worktrees on the map take between them, listed or not, as their trays
-        /// write it: the sizes measured so far, added up, and `None` before the first.
-        total: Option<String>,
-        /// The cards under the header, or, folded, what the header shows of them.
-        fold: RepositoryFold,
-    },
+    /// The cards that share a parent, in the Activity sort, where two or more of them are listed
+    /// together: a line naming the parent, with the disk its cards take, then the cards, nested
+    /// under it, unless the line holds them folded. The line names what the cards share, so each
+    /// goes by what sets it apart: a worktree by its branch, or on no branch by its folder, and a
+    /// scratch folder by its own name. A click on the line folds the group shut, and another opens
+    /// it (`Action::ToggleFold`).
+    Group { line: GroupLine, fold: GroupFold },
     /// The agents working outside every project, under `heading`: a line for each session, in the
     /// map's order, then one for each other folder subagents work in, in the order of the first
     /// subagent there. No folder has two lines of subagents, and none moves when a status changes.
@@ -201,18 +189,46 @@ pub enum ListRow {
     },
 }
 
-/// What stands under a repository's header: its group's cards, or, while the user keeps the group
-/// folded shut, none, the header itself showing the agents in those worktrees.
+/// The line over a group's cards, which names their parent.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GroupLine {
+    /// What the cards share, which the window knows the group by, and a click on the line names.
+    pub parent: Parent,
+    /// A repository's main worktree's folder name, or a bare repository's own, less `.git`; a
+    /// session's name, as its scratch folders go by alone.
+    pub name: String,
+    /// Where a repository is, as `~/code/app` reads, which tells two clones of one remote apart;
+    /// a session's name and whether it still runs, then its folder.
+    pub tooltip: String,
+    /// On a session's line, the mark of its scratch, beside its name. While the mark says the
+    /// session has ended, the whole line steps back as a robot at rest does.
+    pub scratch: Option<ScratchMark>,
+    /// The disk the parent's cards on the map take between them, listed or not, as their trays
+    /// write it: the sizes measured so far, added up, and `None` before the first.
+    pub total: Option<String>,
+}
+
+/// What a group's cards share: the parent whose fate decides theirs, which its line stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum Parent {
+    /// A git repository, by the git folder its worktrees share.
+    Repository { common_dir: String },
+    /// A Claude Code session, by its folder in the scratch root, which holds its scratch folders.
+    Session { folder: String },
+}
+
+/// What stands under a group's line: its cards, or, while the group is folded shut, none, the line
+/// itself showing the agents in those cards.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
-pub enum RepositoryFold {
-    /// The cards, nested under the header, the main worktree first.
+pub enum GroupFold {
+    /// The cards, nested under the line, a repository's main worktree first.
     Open { cards: Vec<Card> },
-    /// Folded shut: at the header's end, a robot for each agent in the worktrees it holds, every
-    /// session before every subagent, each in its card's order.
+    /// Folded shut: at the line's end, a robot for each agent in the cards it holds, every session
+    /// before every subagent, each in its card's order.
     Folded {
         sessions: Vec<AgentBadge>,
         subagents: Vec<AgentBadge>,
-        /// One of those sessions waits on the user, so the header throbs as its card would.
+        /// One of those sessions waits on the user, so the line throbs as its card would.
         waiting: bool,
     },
 }
@@ -224,14 +240,15 @@ pub struct Card {
     pub path: String,
     /// The folder in full, with `~` for the home folder: shown while the pointer is over the card.
     pub location: String,
-    /// The folder's name; nested under its repository's header, the branch.
+    /// The folder's name, or a scratch folder's session's; nested under its parent's line, a
+    /// worktree's branch, or a scratch folder's own name.
     pub name: String,
-    /// The folder, then when its last activity was and where it came from; nested, the branch in
-    /// full before them.
+    /// The folder, then when its last activity was and where it came from; nested, a worktree's
+    /// branch in full before them.
     pub name_tooltip: String,
     /// The chip beside the name: a worktree's branch, or a scratch folder's place in its session's
-    /// scratch. `None` for a plain folder, and for a card nested under its repository's header,
-    /// which goes by its branch.
+    /// scratch. `None` for a plain folder, and for a card nested under its parent's line, which
+    /// says what the chip would.
     pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
@@ -262,8 +279,9 @@ pub enum Chip {
 /// robot does, once its session has ended and will build there no more.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ScratchMark {
-    /// Where the folder it marks lies in its session's folder, as `scratchpad/r567fixture` reads.
-    pub place: String,
+    /// Where the folder it marks lies in its session's folder, as `scratchpad/r567fixture` reads;
+    /// `None` on the session's line, which marks the whole space.
+    pub place: Option<String>,
     /// `Claude Code's scratch space`, and the session's whole id.
     pub tooltip: String,
     /// The session runs, and may build in its scratch again.
@@ -467,10 +485,10 @@ pub enum Action {
     },
     HideFilter,
     ToggleQuietProjects,
-    /// Fold shut the group of the repository whose git folder is `common_dir`, as its row names
-    /// it, or open it again. The fold is kept for the next run.
-    ToggleRepositoryFold {
-        common_dir: String,
+    /// Fold shut the group of `parent`, as its line names it, or open it again. The fold is kept
+    /// for the next run.
+    ToggleFold {
+        parent: Parent,
     },
     /// The pointer entered or left the list, which holds the cards in place while it is there.
     PointerEnteredList,

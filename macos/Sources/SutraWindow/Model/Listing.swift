@@ -14,16 +14,14 @@ public enum Listing: Equatable {
 /// One row of the list.
 public enum Row: Identifiable, Equatable {
     case card(CardModel)
-    /// One repository's worktrees under its header, where two or more are listed together.
-    case repository(
-        commonDir: String, name: String, tooltip: String, total: String?, fold: Fold
-    )
+    /// The cards that share a parent under its line, where two or more are listed together.
+    case group(line: GroupLine, fold: Fold)
     case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
 
     public enum ID: Hashable {
         case card(path: String)
-        case repository(commonDir: String)
+        case group(parent: Parent)
         case elsewhere
         case quietProjects
     }
@@ -31,7 +29,7 @@ public enum Row: Identifiable, Equatable {
     public var id: ID {
         switch self {
         case .card(let model): .card(path: model.path)
-        case .repository(let commonDir, _, _, _, _): .repository(commonDir: commonDir)
+        case .group(let line, _): .group(parent: line.parent)
         case .elsewhere: .elsewhere
         case .quietProjects: .quietProjects
         }
@@ -41,11 +39,9 @@ public enum Row: Identifiable, Equatable {
         switch (lhs, rhs) {
         // The same model is the same row, whatever its card now says: the card redraws itself.
         case (.card(let lhs), .card(let rhs)): lhs === rhs
-        // A group is the same while its header reads the same over the same fold.
-        case (.repository(let lhsDir, let lhsName, let lhsTooltip, let lhsTotal, let lhsFold),
-              .repository(let rhsDir, let rhsName, let rhsTooltip, let rhsTotal, let rhsFold)):
-            lhsDir == rhsDir && lhsName == rhsName && lhsTooltip == rhsTooltip
-                && lhsTotal == rhsTotal && lhsFold == rhsFold
+        // A group is the same while its line reads the same over the same fold.
+        case (.group(let lhsLine, let lhsFold), .group(let rhsLine, let rhsFold)):
+            lhsLine == rhsLine && lhsFold == rhsFold
         case (.elsewhere(let lhsHeading, let lhsLines, let lhsWaiting),
               .elsewhere(let rhsHeading, let rhsLines, let rhsWaiting)):
             lhsHeading == rhsHeading && lhsLines == rhsLines && lhsWaiting == rhsWaiting
@@ -57,8 +53,8 @@ public enum Row: Identifiable, Equatable {
     }
 }
 
-/// What stands under a repository's header, as the window keeps it: the models of the group's
-/// cards, or, folded shut, the core's record of the agents in them, which the header shows.
+/// What stands under a group's line, as the window keeps it: the models of the group's cards, or,
+/// folded shut, the core's record of the agents in them, which the line shows.
 public enum Fold: Equatable {
     case open([CardModel])
     case folded(sessions: [AgentBadge], subagents: [AgentBadge], waiting: Bool)
@@ -124,7 +120,7 @@ struct CardModels {
                 kept[card.path] = model
                 return model
             }
-            func models(under fold: RepositoryFold) -> Fold {
+            func models(under fold: GroupFold) -> Fold {
                 switch fold {
                 case .open(let cards):
                     .open(cards.map(model(of:)))
@@ -136,11 +132,8 @@ struct CardModels {
                 switch row {
                 case .card(let card):
                     return .card(model(of: card))
-                case .repository(let commonDir, let name, let tooltip, let total, let fold):
-                    return .repository(
-                        commonDir: commonDir, name: name, tooltip: tooltip, total: total,
-                        fold: models(under: fold)
-                    )
+                case .group(let line, let fold):
+                    return .group(line: line, fold: models(under: fold))
                 case .elsewhere(let heading, let lines, let waiting):
                     return .elsewhere(heading: heading, lines: lines, waiting: waiting)
                 case .quietProjects(_, let open, let label, let tooltip):

@@ -26,7 +26,7 @@ use super::contents::{CardContext, banner, card, footer, heading, list, toolbar}
 use super::disk_space::DiskSpace;
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
-use super::{Action, PrivateFolderSwitch, Settings, WindowContents, format};
+use super::{Action, Parent, PrivateFolderSwitch, Settings, WindowContents, format};
 use crate::map::grant::{self, GrantError, Roots};
 use crate::map::{PrivateFolder, Snapshot, clean};
 use crate::notifications::Notifier;
@@ -142,7 +142,7 @@ impl State {
             Action::ToggleQuietProjects => {
                 self.arrangement.toggle_quiet(self.snapshot.as_deref(), now);
             }
-            Action::ToggleRepositoryFold { common_dir } => self.toggle_fold(&common_dir),
+            Action::ToggleFold { parent } => self.toggle_fold(&parent),
             Action::PointerEnteredList => {
                 let map = self.snapshot.as_deref();
                 self.arrangement.pointer_entered(map, now);
@@ -272,7 +272,7 @@ impl State {
                 &self.roots,
                 self.lost_grant.as_ref(),
                 self.engine_stopped,
-                &self.settings.folded_repositories,
+                &self.settings.folds,
                 &cards,
             ),
             footer: map.and_then(|map| footer::footer(map, &self.home)),
@@ -302,19 +302,19 @@ impl State {
         self.notifier.process_snapshot(&snapshot);
         self.cleaning.settle(&snapshot);
         self.arrangement.observe(&snapshot, now);
-        if self.settings.folded_repositories.forget_gone(&snapshot) {
+        if self.settings.folds.forget_gone(&snapshot) {
             self.save_settings();
         }
         self.snapshot = Some(snapshot);
     }
 
-    /// The user clicked the header of the group of the repository whose git folder reads
-    /// `common_dir`: fold it shut or open it, and keep that for the next run.
-    fn toggle_fold(&mut self, common_dir: &str) {
+    /// The user clicked the line of the group of `parent`: fold it shut or open it, and keep that
+    /// for the next run.
+    fn toggle_fold(&mut self, parent: &Parent) {
         let Some(map) = &self.snapshot else {
             return;
         };
-        if self.settings.folded_repositories.toggle(common_dir, map) {
+        if self.settings.folds.toggle(parent, map) {
             self.save_settings();
         }
     }

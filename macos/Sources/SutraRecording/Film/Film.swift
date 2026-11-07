@@ -50,7 +50,9 @@ final class Film {
             }
         case Cut.frame(at: Cut.folds), Cut.frame(at: Cut.unfolds):
             // What a click on the repository's line asks of the core.
-            recording.script.perform(action: .toggleRepositoryFold(commonDir: Scenario.cedarWebGit))
+            recording.script.perform(
+                action: .toggleFold(parent: .repository(commonDir: Scenario.cedarWebGit))
+            )
         default:
             break
         }

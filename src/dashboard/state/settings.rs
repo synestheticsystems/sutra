@@ -1,5 +1,5 @@
 //! What the user set that outlasts a run: the free space to keep, which of the folders macOS
-//! guards to watch, and which repositories' groups are folded shut on the list.
+//! guards to watch, and which groups on the list the user folded shut or opened.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -24,8 +24,10 @@ pub(super) struct SavedSettings {
     pub(super) keep_free_bytes: Option<u64>,
     /// The private folders to watch (see `ScanOptions`).
     pub(super) watched_private_folders: BTreeSet<PrivateFolder>,
-    /// The repositories whose groups the user folded shut, none at first.
-    pub(super) folded_repositories: Folds,
+    /// The groups the user folded shut or opened, none at first. Runs before a session's scratch
+    /// had a group kept the repositories folded shut under the old name, which still reads.
+    #[serde(alias = "folded_repositories")]
+    pub(super) folds: Folds,
 }
 
 impl Default for SavedSettings {
@@ -35,7 +37,7 @@ impl Default for SavedSettings {
         SavedSettings {
             keep_free_bytes: None,
             watched_private_folders: BTreeSet::from([PrivateFolder::Documents]),
-            folded_repositories: Folds::default(),
+            folds: Folds::default(),
         }
     }
 }
@@ -97,30 +99,40 @@ impl SavedSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dashboard::Parent;
     use crate::dashboard::listing::fixtures::{main_worktree, project, snapshot};
     use crate::map::test_support::TempDir;
+
+    /// The repository whose git dir is `/code/app/.git`.
+    fn app() -> Parent {
+        Parent::Repository {
+            common_dir: "/code/app/.git".to_string(),
+        }
+    }
 
     #[test]
     fn settings_saved_are_read_back() {
         let fixture = TempDir::new("settings-round-trip");
         let path = fixture.path("Sutra/settings.json");
-        let app = "/code/app/.git";
-        let map = snapshot(vec![main_worktree(app, "main", project("app", 1))], vec![]);
+        let map = snapshot(
+            vec![main_worktree("/code/app/.git", "main", project("app", 1))],
+            vec![],
+        );
         let mut settings = SavedSettings {
             keep_free_bytes: Some(100_000_000_000),
             watched_private_folders: BTreeSet::from([
                 PrivateFolder::Desktop,
                 PrivateFolder::Downloads,
             ]),
-            folded_repositories: Folds::default(),
+            folds: Folds::default(),
         };
-        settings.folded_repositories.toggle(app, &map);
+        settings.folds.toggle(&app(), &map);
 
         settings.save(Some(&path)).unwrap();
 
         let read_back = SavedSettings::load(Some(&path)).unwrap();
         assert_eq!(read_back, settings);
-        assert!(read_back.folded_repositories.is_folded(app));
+        assert!(read_back.folds.is_folded(&app()));
     }
 
     #[test]
@@ -135,10 +147,28 @@ mod tests {
             "Documents alone is watched"
         );
         assert_eq!(
-            settings.folded_repositories,
+            settings.folds,
             Folds::default(),
-            "no group is folded"
+            "each group starts as its parent does"
         );
+    }
+
+    #[test]
+    fn the_repositories_a_file_kept_folded_by_their_old_name_stay_folded() {
+        let fixture = TempDir::new("settings-folded-repositories");
+        let older = fixture.write(
+            "settings.json",
+            r#"{"keep_free_bytes": null, "folded_repositories": ["/code/app/.git"]}"#,
+        );
+        let settings = SavedSettings::load(Some(&older)).unwrap();
+        assert!(settings.folds.is_folded(&app()));
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            saved["folds"],
+            serde_json::json!({ "/code/app/.git": "folded" }),
+            "kept from now on under the new name"
+        );
+        assert_eq!(saved.get("folded_repositories"), None);
     }
 
     #[test]
