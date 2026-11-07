@@ -171,7 +171,7 @@ mod tests {
     /// with `folds`.
     fn first_group_in(map: &Snapshot, arrangement: &Arrangement, folds: &Folds) -> ListRow {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
-        let listing = Listing::new(map, arrangement, now());
+        let listing = Listing::new(map, arrangement, &cleaning, now());
         let group = listing.rows.iter().find_map(|row| match row {
             Row::Group(group) => Some(group),
             _ => None,
@@ -233,8 +233,9 @@ mod tests {
         );
     }
 
-    /// A map whose session `e26ca359` has the scratch folders `r567`, holding 100 GB, and
-    /// `target-567`, the session running as `Foundry` while `running` says.
+    /// A map whose session `e26ca359` has the scratch folders `r567`, holding 100 GB,
+    /// `target-567`, holding 2 GB, and `notes`, too small for a row, the session running as
+    /// `Foundry` while `running` says.
     fn foundry(running: bool) -> Snapshot {
         let folder = |name, bytes| {
             let mut folder = scratch_folder("e26ca359", name, project("", 1));
@@ -245,7 +246,11 @@ mod tests {
             folder
         };
         snapshot(
-            vec![folder("r567", 100_000_000_000), folder("target-567", 0)],
+            vec![
+                folder("r567", 100_000_000_000),
+                folder("target-567", 2_000_000_000),
+                folder("notes", 400_000_000),
+            ],
             vec![],
         )
     }
@@ -272,7 +277,11 @@ mod tests {
             }),
             "the mark of the whole space, which the window draws around the total"
         );
-        assert_eq!(line.total.as_deref(), Some("100 GB"));
+        assert_eq!(
+            line.total.as_deref(),
+            Some("102 GB"),
+            "every folder, listed or not"
+        );
         assert!(matches!(fold, GroupFold::Folded { .. }), "{fold:?}");
     }
 
@@ -286,7 +295,12 @@ mod tests {
         // Quiet once its session has ended, the scratch has its line in the Activity sort only
         // when a typed filter lists it.
         let mut filtered = Arrangement::default();
-        filtered.set_filter_text("scratchpad".to_string(), Some(&foundry(false)), now());
+        filtered.set_filter_text(
+            "scratchpad".to_string(),
+            Some(&foundry(false)),
+            &cleaning(),
+            now(),
+        );
         let ListRow::Group {
             line,
             fold: GroupFold::Open { cards },
@@ -301,7 +315,11 @@ mod tests {
             .iter()
             .map(|card| (card.name.as_str(), card.chip.as_ref()))
             .collect();
-        assert_eq!(names, [("r567", None), ("target-567", None)]);
+        assert_eq!(
+            names,
+            [("r567", None), ("target-567", None)],
+            "notes, too small, has no row"
+        );
     }
 
     #[test]

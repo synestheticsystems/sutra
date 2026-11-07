@@ -271,7 +271,7 @@ mod tests {
         let clean = clean_control(None, true, false, None);
         let arrangement = Arrangement::default();
         let toolbar_over = |map, sandboxed| {
-            let listing = Listing::new(map, &arrangement, now());
+            let listing = Listing::new(map, &arrangement, &cleaning::tests::cleaning(), now());
             let home = Path::new("/Users/dev");
             toolbar(
                 Some(&listing),

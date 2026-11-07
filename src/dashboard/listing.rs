@@ -1,6 +1,7 @@
 //! What the list shows, in order: the projects in focus in the user's sort (see `focus`), the
 //! agents working outside every project, and one row standing for the quiet projects, which opens
-//! to list them. A typed filter lists every project it admits instead. In the Activity sort, the
+//! to list them; of a session's scratch folders, those with something to show (see
+//! `scratch_rows`). A typed filter lists every project it admits instead. In the Activity sort, the
 //! cards of a parent above the quiet row, a repository's worktrees, two or more, or a session's
 //! scratch folders, however few, stand together in its group, under the line that names it (see
 //! `group`). Judged at one instant, so the cards and the counts always agree.
@@ -11,6 +12,7 @@ mod focus;
 mod folds;
 mod group;
 mod hold;
+mod scratch_rows;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
@@ -23,7 +25,9 @@ use std::time::SystemTime;
 
 use self::focus::in_focus;
 use self::hold::{Hold, Order, Section};
+use self::scratch_rows::has_a_row;
 use crate::dashboard::SortOrder;
+use crate::dashboard::cleaning::Cleaning;
 use crate::map::{AgentSession, Project, Snapshot, SubagentWithParent};
 
 /// One row of the list.
@@ -86,27 +90,37 @@ pub(super) struct Listing<'a> {
 }
 
 impl<'a> Listing<'a> {
-    /// The list as it shows now, held still where the arrangement holds it.
+    /// The list as it shows now, held still where the arrangement holds it, with `cleaning` at
+    /// work.
     pub(super) fn new(
         snapshot: &'a Snapshot,
         arrangement: &Arrangement,
+        cleaning: &Cleaning,
         now: SystemTime,
     ) -> Listing<'a> {
-        Listing::arranged(snapshot, arrangement, now, arrangement.hold())
+        Listing::arranged(snapshot, arrangement, cleaning, now, arrangement.hold())
     }
 
     /// The list as the sort alone orders it, with nothing held.
-    fn sorted(snapshot: &'a Snapshot, arrangement: &Arrangement, now: SystemTime) -> Listing<'a> {
-        Listing::arranged(snapshot, arrangement, now, &Hold::default())
+    fn sorted(
+        snapshot: &'a Snapshot,
+        arrangement: &Arrangement,
+        cleaning: &Cleaning,
+        now: SystemTime,
+    ) -> Listing<'a> {
+        Listing::arranged(snapshot, arrangement, cleaning, now, &Hold::default())
     }
 
     fn arranged(
         snapshot: &'a Snapshot,
         arrangement: &Arrangement,
+        cleaning: &Cleaning,
         now: SystemTime,
         hold: &Hold,
     ) -> Listing<'a> {
         let sort = arrangement.sort();
+        let with_rows = snapshot.projects.iter();
+        let with_rows = with_rows.filter(|project| has_a_row(project, cleaning));
         let cards = |section, projects: Vec<&'a Project>| {
             let sorted = match section {
                 Section::Main => sort.lay_out(projects, snapshot),
@@ -123,16 +137,14 @@ impl<'a> Listing<'a> {
         let mut rows = Vec::new();
         match arrangement.query() {
             Some(query) => {
-                let admitted = snapshot.projects.iter().filter(|p| query.admits(p));
+                let admitted = with_rows.filter(|p| query.admits(p));
                 rows.extend(cards(Section::Main, admitted.collect()));
                 let elsewhere = Elsewhere::of(snapshot, |folder| query.admits_folder(folder));
                 rows.extend(elsewhere.map(Row::Elsewhere));
             }
             None => {
-                let (focused, quiet): (Vec<&Project>, Vec<&Project>) = snapshot
-                    .projects
-                    .iter()
-                    .partition(|project| in_focus(project, sort, now));
+                let (focused, quiet): (Vec<&Project>, Vec<&Project>) =
+                    with_rows.partition(|project| in_focus(project, sort, now));
                 rows.extend(cards(Section::Main, focused));
                 rows.extend(Elsewhere::of(snapshot, |_| true).map(Row::Elsewhere));
                 if !quiet.is_empty() {
@@ -344,6 +356,8 @@ mod tests {
         agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot, subagent_in,
     };
     use super::*;
+    use crate::dashboard::cleaning::tests::{cleaning, deleted};
+    use crate::map::test_support::measured;
     use crate::map::{AgentStatus, Harness, LARGE_FOLDER_BYTES};
 
     #[test]
@@ -361,8 +375,8 @@ mod tests {
             vec![agent("/tmp/scratch", AgentStatus::Busy)],
         );
         let mut arrangement = Arrangement::default();
-        arrangement.toggle_quiet(Some(&map), now());
-        let listing = Listing::new(&map, &arrangement, now());
+        arrangement.toggle_quiet(Some(&map), &cleaning(), now());
+        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
         assert_eq!(
             shown(&listing.rows),
             [
@@ -390,8 +404,8 @@ mod tests {
             vec![],
         );
         let mut arrangement = Arrangement::default();
-        arrangement.set_filter_text("app".to_string(), Some(&map), now());
-        let listing = Listing::new(&map, &arrangement, now());
+        arrangement.set_filter_text("app".to_string(), Some(&map), &cleaning(), now());
+        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
         assert_eq!(shown(&listing.rows), ["app: app, app-fix"]);
     }
 
@@ -401,7 +415,7 @@ mod tests {
             vec![project("recent", 1), quiet("old"), project("older", 60)],
             vec![agent("/tmp/scratch", AgentStatus::Busy)],
         );
-        let listing = Listing::new(&map, &Arrangement::default(), now());
+        let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
         assert_eq!(
             shown(&listing.rows),
             ["recent", "older", "elsewhere", "quiet:1"]
@@ -411,26 +425,29 @@ mod tests {
     #[test]
     fn the_scratch_of_a_session_that_ended_waits_behind_the_quiet_row_in_the_activity_sort_alone() {
         use super::fixtures::{running_as, scratch_folder};
-        let large = |project: Project| Project {
-            own_files: crate::map::test_support::measured(LARGE_FOLDER_BYTES),
+        let sized = |gigabytes: u64, project: Project| Project {
+            own_files: measured(gigabytes * LARGE_FOLDER_BYTES),
             ..project
         };
         let map = snapshot(
             vec![
-                large(scratch_folder("d5fa0639", "sim-target", project("", 1))),
-                running_as(
-                    "Foundry",
-                    scratch_folder("e26ca359", "r567", project("", 1)),
+                sized(12, scratch_folder("d5fa0639", "sim-target", project("", 1))),
+                sized(
+                    2,
+                    running_as(
+                        "Foundry",
+                        scratch_folder("e26ca359", "r567", project("", 1)),
+                    ),
                 ),
-                large(quiet("forgotten")),
+                sized(3, quiet("forgotten")),
             ],
             vec![],
         );
         let listed = |sort| {
             let mut arrangement = Arrangement::default();
-            arrangement.set_sort(sort, &map, now());
-            arrangement.toggle_quiet(Some(&map), now());
-            shown(&Listing::new(&map, &arrangement, now()).rows)
+            arrangement.set_sort(sort, &map, &cleaning(), now());
+            arrangement.toggle_quiet(Some(&map), &cleaning(), now());
+            shown(&Listing::new(&map, &arrangement, &cleaning(), now()).rows)
         };
         assert_eq!(
             listed(SortOrder::Activity),
@@ -440,7 +457,53 @@ mod tests {
         assert_eq!(
             listed(SortOrder::Disk),
             ["sim-target", "forgotten", "r567"],
-            "in focus by size where the sort is for disk"
+            "in focus where the sort is for disk"
+        );
+    }
+
+    #[test]
+    fn a_scratch_folder_with_nothing_to_show_has_no_row_and_its_sessions_line_counts_it_still() {
+        use super::fixtures::{running_as, scratch_folder};
+        let foundry = |folder, own_files| Project {
+            own_files: measured(own_files),
+            ..running_as(
+                "Foundry",
+                scratch_folder("e26ca359", folder, project("", 1)),
+            )
+        };
+        let map = snapshot(
+            vec![
+                foundry("r567guards", 2 * LARGE_FOLDER_BYTES),
+                foundry("r567fixture", 28_000_000),
+                project("notes", 1),
+            ],
+            vec![],
+        );
+        let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
+        assert_eq!(shown(&listing.rows), ["Foundry: r567guards", "notes"]);
+        let Row::Group(group) = &listing.rows[0] else {
+            panic!("the session's line");
+        };
+        assert_eq!(group.members.len(), 2, "both folders add to its total");
+
+        let mut filtered = Arrangement::default();
+        filtered.set_filter_text("r567".to_string(), Some(&map), &cleaning(), now());
+        let listing = Listing::new(&map, &filtered, &cleaning(), now());
+        assert_eq!(
+            shown(&listing.rows),
+            ["Foundry: r567guards"],
+            "a filter finds no row the list does not have"
+        );
+
+        // The folder `deleted()` has just cleaned, `/code/app/target`, is r567fixture's.
+        let mut cleaned = map.clone();
+        let target = crate::map::test_support::cargo_target("/code/app/target", measured(10));
+        cleaned.projects[1].artifacts.push(target);
+        let listing = Listing::new(&cleaned, &Arrangement::default(), &deleted(), now());
+        assert_eq!(
+            shown(&listing.rows),
+            ["Foundry: r567fixture, r567guards", "notes"],
+            "a clean's bar shows on its row until the map measures the folder again"
         );
     }
 
@@ -448,8 +511,8 @@ mod tests {
     fn the_quiet_row_opens_to_list_the_quiet_projects_below_it() {
         let map = snapshot(vec![quiet("b"), project("recent", 1), quiet("a")], vec![]);
         let mut arrangement = Arrangement::default();
-        arrangement.toggle_quiet(Some(&map), now());
-        let listing = Listing::new(&map, &arrangement, now());
+        arrangement.toggle_quiet(Some(&map), &cleaning(), now());
+        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
         assert_eq!(shown(&listing.rows), ["recent", "quiet:2", "a", "b"]);
     }
 
@@ -463,8 +526,8 @@ mod tests {
             ],
         );
         let mut arrangement = Arrangement::default();
-        arrangement.set_filter_text("APP".to_string(), Some(&map), now());
-        let listing = Listing::new(&map, &arrangement, now());
+        arrangement.set_filter_text("APP".to_string(), Some(&map), &cleaning(), now());
+        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
         assert_eq!(shown(&listing.rows), ["app", "app-old", "elsewhere"]);
         let Row::Elsewhere(agents) = &listing.rows[2] else {
             panic!("the agents elsewhere come last");
@@ -484,22 +547,22 @@ mod tests {
             unplaced_subagents: vec![builder, subagent_in("/tmp/other")],
             ..snapshot(vec![project("app", 1)], vec![])
         };
-        let listing = Listing::new(&map, &Arrangement::default(), now());
+        let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
         assert_eq!(shown(&listing.rows), ["app", "elsewhere"]);
 
         let filtered = |text: &str| {
             let mut filtered = Arrangement::default();
-            filtered.set_filter_text(text.to_string(), Some(&map), now());
+            filtered.set_filter_text(text.to_string(), Some(&map), &cleaning(), now());
             filtered
         };
-        let listing = Listing::new(&map, &filtered("build"), now());
+        let listing = Listing::new(&map, &filtered("build"), &cleaning(), now());
         let [Row::Elsewhere(working)] = listing.rows.as_slice() else {
             panic!("only the agents elsewhere match");
         };
         let subagents = working.subagents.iter();
         let folders: Vec<&Path> = subagents.map(|one| one.subagent.works_in()).collect();
         assert_eq!(folders, [Path::new("/tmp/build")], "the folder it acted in");
-        let listing = Listing::new(&map, &filtered("scratch"), now());
+        let listing = Listing::new(&map, &filtered("scratch"), &cleaning(), now());
         assert_eq!(shown(&listing.rows), [""; 0], "not the one it runs in");
     }
 
@@ -511,12 +574,14 @@ mod tests {
             ..agent("/tmp/review", status)
         };
         let rows = |map: &Snapshot, arrangement: &Arrangement| {
-            Listing::new(map, arrangement, now()).rows.len()
+            Listing::new(map, arrangement, &cleaning(), now())
+                .rows
+                .len()
         };
         let finished = snapshot(vec![], vec![job(AgentStatus::Idle)]);
         assert_eq!(rows(&finished, &Arrangement::default()), 0);
         let mut filtered = Arrangement::default();
-        filtered.set_filter_text("review".to_string(), Some(&finished), now());
+        filtered.set_filter_text("review".to_string(), Some(&finished), &cleaning(), now());
         assert_eq!(rows(&finished, &filtered), 0, "nor under a filter");
         let running = snapshot(vec![], vec![job(AgentStatus::Busy)]);
         assert_eq!(rows(&running, &Arrangement::default()), 1);

@@ -131,22 +131,27 @@ impl State {
             Action::KeepFree { bytes } => self.keep_free(bytes),
             Action::SetSort { order } => {
                 if let Some(map) = &self.snapshot {
-                    self.arrangement.set_sort(order, map, now);
+                    self.arrangement.set_sort(order, map, &self.cleaning, now);
                 }
             }
             Action::ShowFilter => self.arrangement.show_filter(),
             Action::FilterChanged { text } => {
                 let map = self.snapshot.as_deref();
-                self.arrangement.set_filter_text(text, map, now);
+                self.arrangement
+                    .set_filter_text(text, map, &self.cleaning, now);
             }
-            Action::HideFilter => self.arrangement.hide_filter(self.snapshot.as_deref(), now),
+            Action::HideFilter => {
+                let map = self.snapshot.as_deref();
+                self.arrangement.hide_filter(map, &self.cleaning, now);
+            }
             Action::ToggleQuietProjects => {
-                self.arrangement.toggle_quiet(self.snapshot.as_deref(), now);
+                let map = self.snapshot.as_deref();
+                self.arrangement.toggle_quiet(map, &self.cleaning, now);
             }
             Action::ToggleFold { parent } => self.toggle_fold(&parent),
             Action::PointerEnteredList => {
                 let map = self.snapshot.as_deref();
-                self.arrangement.pointer_entered(map, now);
+                self.arrangement.pointer_entered(map, &self.cleaning, now);
             }
             Action::PointerLeftList => self.arrangement.pointer_left(),
             Action::ToggleGlobalMute => self.notifier.toggle_global_mute(),
@@ -294,15 +299,14 @@ impl State {
 
     /// The list as it shows at `now`, once a map has arrived.
     fn listing(&self, now: SystemTime) -> Option<Listing<'_>> {
-        self.snapshot
-            .as_deref()
-            .map(|snapshot| Listing::new(snapshot, &self.arrangement, now))
+        let listing = |map| Listing::new(map, &self.arrangement, &self.cleaning, now);
+        self.snapshot.as_deref().map(listing)
     }
 
     fn show(&mut self, snapshot: Arc<Snapshot>, now: SystemTime) {
         self.notifier.process_snapshot(&snapshot);
         self.cleaning.settle(&snapshot);
-        self.arrangement.observe(&snapshot, now);
+        self.arrangement.observe(&snapshot, &self.cleaning, now);
         if self.settings.folds.forget_gone(&snapshot) {
             self.save_settings();
         }

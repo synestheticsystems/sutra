@@ -81,7 +81,13 @@ fn a_group_folded_from_its_line_is_kept_folded_for_the_next_run_and_a_click_open
 fn a_sessions_scratch_starts_folded_and_an_opened_one_is_kept_open_for_the_next_run() {
     let fixture = TempDir::new("state-fold-scratch");
     let (mut state, _inbox) = dashboard(&fixture);
-    let scratch = |folder| running_as("Foundry", scratch_folder("e26ca359", folder, active("", 1)));
+    let scratch = |folder| {
+        let large = Project {
+            own_files: crate::map::test_support::measured(crate::map::LARGE_FOLDER_BYTES),
+            ..active("", 1)
+        };
+        running_as("Foundry", scratch_folder("e26ca359", folder, large))
+    };
     let map = vec![scratch("r567"), scratch("r593")];
     state.show(Arc::new(snapshot_of(map)), now());
     assert_eq!(groups(&state), ["Foundry: folded"]);

@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 
 use super::state::{Alert, Question};
 use crate::map::clean;
-use crate::map::{ArtifactDir, Snapshot};
+use crate::map::{ArtifactDir, Project, Snapshot};
 use asking::{Clicked, OpenQuestions};
 use auto::KeepingFree;
 use queue::{By, Running, Waiting};
@@ -248,6 +248,13 @@ impl Cleaning {
             }
             Some(Stage::Deleted { .. }) | None => None,
         }
+    }
+
+    /// Whether a clean means anything for one of `project`'s build folders now (see `state_of`),
+    /// which its card shows.
+    pub(super) fn is_at_work_in(&self, project: &Project) -> bool {
+        let mut folders = project.artifacts.iter();
+        folders.any(|dir| self.state_of(dir).is_some())
     }
 }
 

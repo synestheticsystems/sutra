@@ -130,7 +130,8 @@ mod tests {
         snapshot, subagent_in,
     };
     use crate::dashboard::{AgentLook, ElsewhereLine, GroupFold, Parent};
-    use crate::map::{AgentStatus, Snapshot};
+    use crate::map::test_support::measured;
+    use crate::map::{AgentStatus, Project, Snapshot};
     use crate::notifications::Notifier;
 
     const HOME: &str = "/Users/dev";
@@ -145,7 +146,7 @@ mod tests {
             home: Path::new(HOME),
             now: now(),
         };
-        let listing = Listing::new(map, arrangement, now());
+        let listing = Listing::new(map, arrangement, &cleaning, now());
         let roots = [PathBuf::from("/code")];
         list(
             Some(&listing),
@@ -220,7 +221,10 @@ mod tests {
         let (app, site) = ("/code/app/.git", "/code/site/.git");
         let foundry = |folder| {
             let scratch = scratch_folder("e26ca359", folder, project("", 1));
-            running_as("Foundry", scratch)
+            Project {
+                own_files: measured(LARGE_FOLDER_BYTES),
+                ..running_as("Foundry", scratch)
+            }
         };
         let map = snapshot(
             vec![
@@ -268,7 +272,7 @@ mod tests {
         );
         let map = snapshot(vec![project("app", 1)], vec![]);
         let mut filtered = Arrangement::default();
-        filtered.set_filter_text(" site ".to_string(), Some(&map), now());
+        filtered.set_filter_text(" site ".to_string(), Some(&map), &cleaning(), now());
         assert_eq!(
             listed(&map, &filtered),
             List::Empty {
@@ -338,7 +342,7 @@ mod tests {
         let map = snapshot(vec![project("recent", 1), quiet("old")], vec![]);
         let tooltip = |sort| {
             let mut arrangement = Arrangement::default();
-            arrangement.set_sort(sort, &map, now());
+            arrangement.set_sort(sort, &map, &cleaning(), now());
             let List::Rows { rows } = listed(&map, &arrangement) else {
                 panic!("a map with projects lists them");
             };
