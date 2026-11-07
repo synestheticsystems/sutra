@@ -137,13 +137,7 @@ mod tests {
         );
         let shown: Vec<(&str, &str, bool)> = cards
             .iter()
-            .map(|card| {
-                (
-                    card.path.as_str(),
-                    card.name.as_str(),
-                    card.branch.is_some(),
-                )
-            })
+            .map(|card| (card.path.as_str(), card.name.as_str(), card.chip.is_some()))
             .collect();
         assert_eq!(
             shown,

@@ -1,18 +1,20 @@
 //! A card's identity: its name, the name's tooltip (the folder and its last activity), and the
-//! branch chip and its tooltip (the branch in full, and which worktree this is). A card nested
-//! under its repository's header goes by its branch instead, as the header names the repository.
+//! chip beside the name and its tooltip: a worktree's branch (the branch in full, and which
+//! worktree this is), or `scratch` for a session's scratch folder (whose session it is). A card
+//! nested under its repository's header goes by its branch instead, as the header names the
+//! repository.
 
 use std::path::Path;
 
 use super::Naming;
 use crate::dashboard::{Chip, format};
-use crate::map::{ActivitySource, Project, RepoInfo};
+use crate::map::{ActivitySource, Project, RepoInfo, ScratchSpace};
 
 /// What a card goes by.
 pub(super) struct Identity {
     pub(super) name: String,
     pub(super) name_tooltip: String,
-    pub(super) branch: Option<Chip>,
+    pub(super) chip: Option<Chip>,
 }
 
 /// What `project`'s card goes by, as `naming` says, its last activity read at `last_activity`, the
@@ -34,17 +36,30 @@ pub(super) fn identity(
             Identity {
                 name_tooltip: format!("{branch}\n{folder}"),
                 name: branch,
-                branch: None,
+                chip: None,
             }
         }
         (Naming::Folder | Naming::Branch, repo) => Identity {
             name: project.name.clone(),
             name_tooltip: folder,
-            branch: repo.as_ref().map(|repo| Chip {
-                text: branch(repo),
-                tooltip: branch_tooltip(repo, home),
-            }),
+            chip: match (repo, &project.scratch) {
+                (Some(repo), _) => Some(Chip {
+                    text: branch(repo),
+                    tooltip: branch_tooltip(repo, home),
+                }),
+                (None, Some(space)) => Some(scratch_chip(space)),
+                (None, None) => None,
+            },
         },
+    }
+}
+
+/// The chip of a session's scratch folder, which says what the folder is the way a branch chip
+/// does, with the session's whole id in its tooltip.
+fn scratch_chip(space: &ScratchSpace) -> Chip {
+    Chip {
+        text: "scratch".to_string(),
+        tooltip: format!("Claude Code's scratch space\nSession {}", space.session_id),
     }
 }
 
@@ -166,7 +181,7 @@ mod tests {
             ("app-pr1-astra", "app-pr1-opus")
         );
         assert_eq!(
-            astra.branch.map(|chip| chip.text).as_deref(),
+            astra.chip.map(|chip| chip.text).as_deref(),
             Some("detached 01fb326")
         );
     }
@@ -187,7 +202,7 @@ mod tests {
             nested.name_tooltip,
             format!("{long}\n~/code/app-wt\nLast activity 2026-11-04 10:23")
         );
-        assert_eq!(nested.branch, None);
+        assert_eq!(nested.chip, None);
 
         let alone = identity(&worktree, Naming::Folder, home, at);
         assert_eq!(alone.name, "app-wt");
@@ -195,7 +210,7 @@ mod tests {
             alone.name_tooltip,
             "~/code/app-wt\nLast activity 2026-11-04 10:23"
         );
-        assert_eq!(alone.branch.map(|chip| chip.text).as_deref(), Some(long));
+        assert_eq!(alone.chip.map(|chip| chip.text).as_deref(), Some(long));
     }
 
     #[test]
@@ -204,7 +219,35 @@ mod tests {
         let identity = identity(&notes, Naming::Branch, Path::new(HOME), None);
         assert_eq!(identity.name, "notes");
         assert_eq!(identity.name_tooltip, "~/code/notes");
-        assert_eq!(identity.branch, None);
+        assert_eq!(identity.chip, None);
+    }
+
+    #[test]
+    fn a_sessions_scratch_folder_goes_by_its_name_with_a_scratch_chip_naming_the_session() {
+        let path = "/private/tmp/claude-501/-Users-dev-sk/d5fa0639-441e-4722-b044-080d70c0b04f";
+        let scratch = Project {
+            name: "sk d5fa0639".to_string(),
+            scratch: Some(ScratchSpace {
+                session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
+                started_in: "sk".to_string(),
+                session: None,
+            }),
+            ..project_at(path)
+        };
+
+        let identity = identity(&scratch, Naming::Branch, Path::new(HOME), None);
+
+        assert_eq!(identity.name, "sk d5fa0639");
+        assert_eq!(identity.name_tooltip, path, "the folder in full");
+        assert_eq!(
+            identity.chip,
+            Some(Chip {
+                text: "scratch".to_string(),
+                tooltip: "Claude Code's scratch space\n\
+                          Session d5fa0639-441e-4722-b044-080d70c0b04f"
+                    .to_string(),
+            })
+        );
     }
 
     #[test]

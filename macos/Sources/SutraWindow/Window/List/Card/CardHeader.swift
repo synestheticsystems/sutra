@@ -1,22 +1,22 @@
 import SutraCore
 import SwiftUI
 
-/// A card's identity: the name, the branch chip, and the age at the right, whose place the buttons
-/// that open the folder take while the pointer is over the card.
+/// A card's identity: the name, the chip (a branch, or `scratch`), and the age at the right, whose
+/// place the buttons that open the folder take while the pointer is over the card.
 struct CardHeader: View {
     let card: Card
     let hovered: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            // The branch moves under the name before it pushes the age out.
+            // The chip moves under the name before it pushes the age out.
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) { name; chip }
                 VStack(alignment: .leading, spacing: 4) { name; chip }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // The age and the buttons share one place as wide as the wider of them, so the name
-            // and the branch never reflow when the pointer comes or goes, and a card never grows
+            // and the chip never reflow when the pointer comes or goes, and a card never grows
             // under the pointer and pushes the cards below it away.
             ZStack(alignment: .trailing) {
                 if let age = card.age {
@@ -43,8 +43,8 @@ struct CardHeader: View {
 
     @ViewBuilder
     private var chip: some View {
-        if let branch = card.branch {
-            Text(branch.text)
+        if let chip = card.chip {
+            Text(chip.text)
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -52,7 +52,7 @@ struct CardHeader: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
-                .hoverTip(branch.tooltip)
+                .hoverTip(chip.tooltip)
         }
     }
 }

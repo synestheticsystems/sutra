@@ -24,7 +24,7 @@ extension Project {
             location: Words.tilde(path),
             name: nestedBranch ?? name,
             nameTooltip: nestedBranch.map { "\($0)\n\(folder)" } ?? folder,
-            branch: nestedBranch == nil ? worktree.map(\.chip) : nil,
+            chip: nestedBranch == nil ? worktree.map(\.chip) : nil,
             age: Words.age(of: activity, at: now),
             unreadable: nil,
             units: units.map(\.lozenge),

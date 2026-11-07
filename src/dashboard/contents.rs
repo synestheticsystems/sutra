@@ -229,9 +229,11 @@ pub struct Card {
     /// The folder, then when its last activity was and where it came from; nested, the branch in
     /// full before them.
     pub name_tooltip: String,
-    /// The branch chip and its tooltip (which worktree of which repository this is); `None` for a
-    /// plain folder, and for a card nested under its repository's header, which goes by its branch.
-    pub branch: Option<Chip>,
+    /// The chip beside the name, and its tooltip: a worktree's branch (which worktree of which
+    /// repository this is), or `scratch` for a session's scratch folder (whose session it is).
+    /// `None` for a plain folder, and for a card nested under its repository's header, which goes
+    /// by its branch.
+    pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
     /// Why the folder cannot be read, above the units that sources outside it still show.

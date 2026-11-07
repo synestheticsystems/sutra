@@ -59,7 +59,7 @@ pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &Card
         location: format::tilde(&project.path, ctx.home),
         name: identity.name,
         name_tooltip: identity.name_tooltip,
-        branch: identity.branch,
+        chip: identity.chip,
         age: project.last_activity.map(|then| format::age(then, ctx.now)),
         unreadable: unreadable(project, &map.roots, map.sandboxed),
         units: project
