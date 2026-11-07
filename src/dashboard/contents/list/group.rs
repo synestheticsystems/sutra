@@ -2,10 +2,10 @@
 //! then the cards, each going by what sets it apart, as the line names what they share. A
 //! repository's line goes by its name; a session's by the session's name, with the mark of its
 //! scratch, which steps back once the session has ended, as whether it runs is what says whether
-//! its scratch may still be in use. A right click on a session's line cleans all its scratch.
-//! Folded shut, the line stands alone and still says what its cards would of their agents and
-//! their dev servers: their robots stand at its end, it throbs while one of them waits on the user,
-//! and the servers running in them stand after its total.
+//! its scratch may still be in use. A right click on a session's line cleans the build folders in
+//! its scratch. Folded shut, the line stands alone and still says what its cards would of their
+//! agents and their dev servers: their robots stand at its end, it throbs while one of them waits
+//! on the user, and the servers running in them stand after its total.
 
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::contents::card::{self, CardContext, Naming, agents, subagents, units};
@@ -37,7 +37,7 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
         listing::Parent::Session(space) => (
             session_tooltip(space, &group.name, cards),
             Some(card::scratch_mark(space)),
-            clean_all(space, &group.members, cards.cleaning),
+            clean_build_folders(space, &group.members, cards.cleaning),
         ),
     };
     ListRow::Group {
@@ -53,10 +53,15 @@ pub(super) fn row(group: &Group, map: &Snapshot, folds: &Folds, cards: &CardCont
     }
 }
 
-/// What a right click on the line of `space`'s session offers: one Clean All, of every build folder
-/// in `members`, the session's scratch folders on the map, that a card would offer to clean, with
-/// what they hold between them; nothing while none is on offer.
-fn clean_all(space: &ScratchSpace, members: &[&Project], cleaning: &Cleaning) -> Vec<MenuEntry> {
+/// What a right click on the line of `space`'s session offers: one clean of every build folder in
+/// `members`, the session's scratch folders on the map, that a card would offer to clean, with what
+/// they hold between them, which is what the clean can give back, rather than the line's total;
+/// nothing while none is on offer.
+fn clean_build_folders(
+    space: &ScratchSpace,
+    members: &[&Project],
+    cleaning: &Cleaning,
+) -> Vec<MenuEntry> {
     let offered: Vec<&ArtifactDir> = members
         .iter()
         .flat_map(|member| &member.artifacts)
@@ -70,12 +75,12 @@ fn clean_all(space: &ScratchSpace, members: &[&Project], cleaning: &Cleaning) ->
         .filter_map(|dir| dir.measurement.usage())
         .collect();
     let title = if sized.is_empty() {
-        "Clean All".to_string()
+        "Clean Build Folders".to_string()
     } else {
         let bytes = sized.iter().map(|usage| usage.bytes).sum();
         // What a folder not sized yet, or not read in full, holds adds to the sum unseen.
         let partial = sized.len() < offered.len() || sized.iter().any(|u| u.unreadable_dirs > 0);
-        format!("Clean All ({})", format::size(bytes, partial))
+        format!("Clean Build Folders ({})", format::size(bytes, partial))
     };
     let session_folder = format::path_text(&space.session_folder);
     vec![MenuEntry::Item {
@@ -350,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sessions_line_offers_to_clean_all_its_scratchs_build_folders_and_a_repositorys_nothing() {
+    fn a_sessions_line_offers_to_clean_its_scratchs_build_folders_and_a_repositorys_nothing() {
         let with = |folder: &str, artifacts: Vec<ArtifactDir>| {
             let scratch = Project {
                 artifacts,
@@ -385,7 +390,10 @@ mod tests {
         else {
             panic!("one line");
         };
-        assert_eq!(title, "Clean All (90 GB)", "the two Cargo build folders");
+        assert_eq!(
+            title, "Clean Build Folders (90 GB)",
+            "the two Cargo build folders, not the scratch's whole size"
+        );
         assert_eq!(
             *action,
             MenuAction::Dashboard {
@@ -397,7 +405,10 @@ mod tests {
         let [MenuEntry::Item { title, .. }] = &menu(&map(Measurement::Measuring))[..] else {
             panic!("one line");
         };
-        assert_eq!(title, "Clean All (\u{2265}60 GB)", "one not sized yet");
+        assert_eq!(
+            title, "Clean Build Folders (\u{2265}60 GB)",
+            "one not sized yet"
+        );
 
         let app = "/code/app/.git";
         let repository = snapshot(

@@ -46,7 +46,7 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
 }
 
 #[test]
-fn clean_all_on_a_sessions_line_starts_each_build_folder_of_its_scratch_that_a_card_would_offer() {
+fn cleaning_build_folders_from_a_sessions_line_starts_each_one_of_its_scratch_a_card_would_offer() {
     let fixture = TempDir::new("state-clean-scratch");
     let (mut state, _inbox) = dashboard(&fixture);
     // A scratch folder of the session `session_id` holding a build folder of `bytes`.

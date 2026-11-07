@@ -463,9 +463,9 @@ impl State {
             .start(project, dir, Arc::clone(&map), &self.home);
     }
 
-    /// The user chose Clean All on the line of the session whose folder reads `session_folder`, as
-    /// the line named it with `format::path_text`: clean each build folder of the session's scratch
-    /// folders that the line offered, as their cards would.
+    /// The user chose Clean Build Folders on the line of the session whose folder reads
+    /// `session_folder`, as the line named it with `format::path_text`: clean each build folder of
+    /// the session's scratch folders that the line offered, as their cards would.
     fn clean_scratch(&mut self, session_folder: &str) {
         let Some(map) = self.snapshot.clone() else {
             return;
