@@ -42,6 +42,9 @@ struct Hue {
 enum Still {
     static let ink = Color(nsColor: .secondaryLabelColor)
     static let fill = Color(nsColor: .quaternaryLabelColor)
+    /// How far what rests steps back: a robot at rest, and the scratch of a session that has
+    /// ended, which nothing will build in again.
+    static let opacity = 0.6
 }
 
 extension AgentLook {

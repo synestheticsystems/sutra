@@ -27,7 +27,7 @@ struct RobotView: View {
         }
         .frame(width: size.width, height: size.height)
         // At rest, the robot steps back.
-        .opacity(look == .still ? 0.6 : 1)
+        .opacity(look == .still ? Still.opacity : 1)
         // Drawn taller than the line it stands on, into the tray's margins, so a tray with robots
         // is as tall as one without and no card moves when an agent comes or goes.
         .frame(height: RobotFigure.lineHeight)

@@ -85,7 +85,7 @@ extension Worktree {
         let which = linkedName.map {
             "Linked worktree \($0) of \(Words.tilde(repositoryFolder))"
         } ?? "Main worktree"
-        return Chip(text: branch, tooltip: "\(branch)\n\(which)")
+        return .branch(text: branch, tooltip: "\(branch)\n\(which)")
     }
 }
 

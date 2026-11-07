@@ -1,13 +1,13 @@
 //! A card's identity: its name, the name's tooltip (the folder and its last activity), and the
 //! chip beside the name and its tooltip: a worktree's branch (the branch in full, and which
-//! worktree this is), or `scratch` for a session's scratch folder (whose session it is). A card
-//! nested under its repository's header goes by its branch instead, as the header names the
+//! worktree this is), or a scratch folder's place in its session's scratch (whose session it is).
+//! A card nested under its repository's header goes by its branch instead, as the header names the
 //! repository.
 
 use std::path::Path;
 
 use super::Naming;
-use crate::dashboard::{Chip, format};
+use crate::dashboard::{Chip, ScratchMark, format};
 use crate::map::{ActivitySource, Project, RepoInfo, ScratchSpace};
 
 /// What a card goes by.
@@ -43,23 +43,28 @@ pub(super) fn identity(
             name: project.name.clone(),
             name_tooltip: folder,
             chip: match (repo, &project.scratch) {
-                (Some(repo), _) => Some(Chip {
+                (Some(repo), _) => Some(Chip::Branch {
                     text: branch(repo),
                     tooltip: branch_tooltip(repo, home),
                 }),
-                (None, Some(space)) => Some(scratch_chip(space)),
+                (None, Some(space)) => Some(Chip::Scratch {
+                    mark: scratch_mark(space, &project.path),
+                }),
                 (None, None) => None,
             },
         },
     }
 }
 
-/// The chip of a session's scratch folder, which says what the folder is the way a branch chip
-/// does, with the session's whole id in its tooltip.
-fn scratch_chip(space: &ScratchSpace) -> Chip {
-    Chip {
-        text: "scratch".to_string(),
+/// The mark of `space`, one session's scratch, on its scratch folder at `folder`: where the folder
+/// lies in the session's folder, and whose session it is, by its whole id, as the card goes by the
+/// session's name. The mark fades once the session has ended, which says whether the session may
+/// still build in the folder.
+fn scratch_mark(space: &ScratchSpace, folder: &Path) -> ScratchMark {
+    ScratchMark {
+        place: space.place_of(folder).display().to_string(),
         tooltip: format!("Claude Code's scratch space\nSession {}", space.session_id),
+        session_runs: space.session.is_some(),
     }
 }
 
@@ -117,6 +122,14 @@ mod tests {
     use crate::map::test_support::project_at;
 
     const HOME: &str = "/Users/dev";
+
+    /// What a branch chip says, `None` for no chip or another kind.
+    fn branch_text(chip: Option<Chip>) -> Option<String> {
+        match chip? {
+            Chip::Branch { text, .. } => Some(text),
+            Chip::Scratch { .. } => None,
+        }
+    }
 
     fn repo(worktree_name: Option<&str>, branch: Option<&str>, head: Option<&str>) -> RepoInfo {
         RepoInfo {
@@ -180,10 +193,7 @@ mod tests {
             (astra.name.as_str(), opus.name.as_str()),
             ("app-pr1-astra", "app-pr1-opus")
         );
-        assert_eq!(
-            astra.chip.map(|chip| chip.text).as_deref(),
-            Some("detached 01fb326")
-        );
+        assert_eq!(branch_text(astra.chip).as_deref(), Some("detached 01fb326"));
     }
 
     #[test]
@@ -210,7 +220,7 @@ mod tests {
             alone.name_tooltip,
             "~/code/app-wt\nLast activity 2026-11-04 10:23"
         );
-        assert_eq!(alone.chip.map(|chip| chip.text).as_deref(), Some(long));
+        assert_eq!(branch_text(alone.chip).as_deref(), Some(long));
     }
 
     #[test]
@@ -223,33 +233,47 @@ mod tests {
     }
 
     #[test]
-    fn a_sessions_scratch_folder_goes_by_its_name_with_a_scratch_chip_naming_the_session() {
+    fn a_scratch_folder_goes_by_its_sessions_name_its_mark_saying_where_it_lies_and_whose_it_is() {
         let session = "/private/tmp/claude-501/-Users-dev-sk/d5fa0639-441e-4722-b044-080d70c0b04f";
         let path = format!("{session}/scratchpad/r567fixture");
-        let scratch = Project {
+        let scratch = |running: Option<crate::map::AgentSession>| Project {
             name: "sk d5fa0639".to_string(),
             scratch: Some(ScratchSpace {
                 session_folder: PathBuf::from(session),
                 session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
                 started_in: "sk".to_string(),
-                session: None,
+                session: running,
             }),
             ..project_at(&path)
         };
-
-        let identity = identity(&scratch, Naming::Branch, Path::new(HOME), None);
-
-        assert_eq!(identity.name, "sk d5fa0639");
-        assert_eq!(identity.name_tooltip, path, "the folder in full");
-        assert_eq!(
-            identity.chip,
-            Some(Chip {
-                text: "scratch".to_string(),
-                tooltip: "Claude Code's scratch space\n\
-                          Session d5fa0639-441e-4722-b044-080d70c0b04f"
-                    .to_string(),
+        let mark = |session_runs| {
+            Some(Chip::Scratch {
+                mark: ScratchMark {
+                    place: "scratchpad/r567fixture".to_string(),
+                    tooltip: "Claude Code's scratch space\n\
+                              Session d5fa0639-441e-4722-b044-080d70c0b04f"
+                        .to_string(),
+                    session_runs,
+                },
             })
+        };
+
+        let ended = identity(&scratch(None), Naming::Branch, Path::new(HOME), None);
+
+        assert_eq!(ended.name, "sk d5fa0639");
+        assert_eq!(ended.name_tooltip, path, "the folder in full");
+        assert_eq!(ended.chip, mark(false));
+        let running = crate::map::test_support::agent_session(
+            "d5fa0639-441e-4722-b044-080d70c0b04f",
+            crate::map::AgentStatus::Busy,
         );
+        let running = identity(
+            &scratch(Some(running)),
+            Naming::Branch,
+            Path::new(HOME),
+            None,
+        );
+        assert_eq!(running.chip, mark(true));
     }
 
     #[test]

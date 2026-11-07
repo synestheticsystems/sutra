@@ -229,10 +229,9 @@ pub struct Card {
     /// The folder, then when its last activity was and where it came from; nested, the branch in
     /// full before them.
     pub name_tooltip: String,
-    /// The chip beside the name, and its tooltip: a worktree's branch (which worktree of which
-    /// repository this is), or `scratch` for a session's scratch folder (whose session it is).
-    /// `None` for a plain folder, and for a card nested under its repository's header, which goes
-    /// by its branch.
+    /// The chip beside the name: a worktree's branch, or a scratch folder's place in its session's
+    /// scratch. `None` for a plain folder, and for a card nested under its repository's header,
+    /// which goes by its branch.
     pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
@@ -248,10 +247,27 @@ pub struct Card {
     pub menu: Vec<MenuEntry>,
 }
 
+/// The chip beside a card's name, whose look says what it marks before its words do.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Chip {
+    /// A worktree's branch, a filled label: the branch, `detached abc1234` or `no commits`, and in
+    /// its tooltip the branch in full and which worktree of which repository this is.
+    Branch { text: String, tooltip: String },
+    /// A scratch folder's place in its session's scratch.
+    Scratch { mark: ScratchMark },
+}
+
+/// The mark of Claude Code's scratch space: outlined in dashes, behind a scribble, so that nothing
+/// about it reads as a branch, which is kept, where scratch is thrown away. It fades, as a still
+/// robot does, once its session has ended and will build there no more.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct Chip {
-    pub text: String,
+pub struct ScratchMark {
+    /// Where the folder it marks lies in its session's folder, as `scratchpad/r567fixture` reads.
+    pub place: String,
+    /// `Claude Code's scratch space`, and the session's whole id.
     pub tooltip: String,
+    /// The session runs, and may build in its scratch again.
+    pub session_runs: bool,
 }
 
 /// One agent, as one of the robots on its card's tray: the robot says which AI it is, and the light

@@ -1,8 +1,8 @@
 import SutraCore
 import SwiftUI
 
-/// A card's identity: the name, the chip (a branch, or `scratch`), and the age at the right, whose
-/// place the buttons that open the folder take while the pointer is over the card.
+/// A card's identity: the name, the chip (a branch, or the scratch space's mark), and the age at
+/// the right, whose place the buttons that open the folder take while the pointer is over the card.
 struct CardHeader: View {
     let card: Card
     let hovered: Bool
@@ -43,8 +43,9 @@ struct CardHeader: View {
 
     @ViewBuilder
     private var chip: some View {
-        if let chip = card.chip {
-            Text(chip.text)
+        switch card.chip {
+        case .branch(let text, let tooltip):
+            Text(text)
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -52,7 +53,13 @@ struct CardHeader: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
-                .hoverTip(chip.tooltip)
+                .hoverTip(tooltip)
+        case .scratch(let mark):
+            // Once its session has ended, the scratch steps back as a robot at rest does.
+            ScratchMarkView(mark: mark)
+                .opacity(mark.sessionRuns ? 1 : Still.opacity)
+        case nil:
+            EmptyView()
         }
     }
 }
