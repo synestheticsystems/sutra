@@ -10,10 +10,10 @@ mod repository;
 use std::path::PathBuf;
 
 use super::card::{self, CardContext, Naming, agents};
-use crate::dashboard::listing::{FOCUS_LARGE_BYTES, FOCUS_RECENT, Folds, Listing, Row};
+use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing, Row};
 use crate::dashboard::{List, ListRow, format};
-use crate::map::Snapshot;
 use crate::map::grant::GrantError;
+use crate::map::{LARGE_FOLDER_BYTES, Snapshot};
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
@@ -107,7 +107,7 @@ fn what_makes_one_quiet() -> String {
         "No agent session, no dev-runner environment, no activity in the last {} days, and less \
          than {} on disk",
         FOCUS_RECENT.as_secs() / 86_400,
-        format::bytes(FOCUS_LARGE_BYTES),
+        format::bytes(LARGE_FOLDER_BYTES),
     )
 }
 

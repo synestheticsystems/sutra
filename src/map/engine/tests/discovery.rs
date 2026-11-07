@@ -1,6 +1,7 @@
 //! Discovery while running: what it reports, what it finds, and what it reads again.
 
 use super::*;
+use crate::map::test_support::CACHEDIR_TAG;
 
 #[test]
 fn scan_once_reports_the_sources_it_cannot_read_instead_of_showing_them_empty() {
@@ -141,6 +142,7 @@ fn the_folders_outside_the_roots_to_watch_are_the_readable_projects_and_shared_g
     let roots = Roots {
         home: home.clone(),
         dirs: vec![home],
+        scratch: None,
         sandboxed: false,
     };
     let mut state = MapState::new(&roots, &ScanOptions::default());
@@ -161,5 +163,40 @@ fn the_folders_outside_the_roots_to_watch_are_the_readable_projects_and_shared_g
         folders,
         [open, blog],
         "a git dir that does not read goes unwatched"
+    );
+}
+
+#[test]
+fn the_folders_in_the_scratch_root_need_no_watch_of_their_own() {
+    let fixture = TempDir::new("engine-scratch-not-outside");
+    let home = fixture.path("home");
+    let main = fixture.repo("home/code/app");
+    let session = fixture.dir("claude-501/-Users-me-code-app/e26ca359");
+    fixture.write(
+        "claude-501/-Users-me-code-app/e26ca359/scratchpad/out/CACHEDIR.TAG",
+        CACHEDIR_TAG,
+    );
+    // A linked worktree of a repository in the home folder, checked out in the session's scratch.
+    let worktree = session.join("scratchpad/wt-567");
+    let branch_out = ["worktree", "add", "-q", "-b", "wt-567"];
+    git(
+        &main,
+        &[&branch_out[..], &[worktree.to_str().unwrap()]].concat(),
+    );
+    let roots = Roots {
+        home: home.clone(),
+        dirs: vec![home],
+        scratch: Some(fixture.path("claude-501")),
+        sandboxed: false,
+    };
+    let mut state = MapState::new(&roots, &ScanOptions::default());
+
+    state.rediscover(None);
+
+    let on_map = state.project_paths();
+    assert!(on_map.contains(&session) && on_map.contains(&worktree));
+    assert!(
+        state.folders_outside_the_roots().is_empty(),
+        "the stream over the scratch root hears them"
     );
 }

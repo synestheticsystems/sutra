@@ -4,20 +4,16 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::map::Project;
+use crate::map::{LARGE_FOLDER_BYTES, Project};
 
 /// How recent a project's last activity must be to keep it in focus. A first guess.
 pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-
-/// How much disk a project's folder must hold to bring it into focus on size alone. A first
-/// guess.
-pub(in crate::dashboard) const FOCUS_LARGE_BYTES: u64 = 1 << 30;
 
 /// Whether the project belongs in the focused view. A project is in focus when any of these holds:
 ///   - a coding agent has a session or a subagent at work in it;
 ///   - a dev-runner environment describes it, from `~/.dev-runner/` or its own `.dev-runner/`;
 ///   - its last activity lies within `FOCUS_RECENT` of `now`;
-///   - its folder holds at least `FOCUS_LARGE_BYTES` (see `disk_bytes`), so a forgotten folder
+///   - its folder holds at least `LARGE_FOLDER_BYTES` (see `disk_bytes`), so a forgotten folder
 ///     that fills the disk is not hidden. A large project joins the focus when the
 ///     measurement that shows it lands.
 ///
@@ -30,7 +26,7 @@ pub(super) fn in_focus(project: &Project, now: SystemTime) -> bool {
             // A time ahead of the clock (a file touched with a future date) is recent.
             now.duration_since(at).unwrap_or(Duration::ZERO) <= FOCUS_RECENT
         })
-        || disk_bytes(project) >= FOCUS_LARGE_BYTES
+        || disk_bytes(project) >= LARGE_FOLDER_BYTES
 }
 
 /// What the Disk sort and the focus rule weigh: the whole folder once it is measured, and until
@@ -62,13 +58,13 @@ mod tests {
 
     /// A project that misses every reason, each by the smallest margin: no agent, no environment,
     /// last active one second before `FOCUS_RECENT`, and build folders one byte short of
-    /// `FOCUS_LARGE_BYTES`, beside one still measuring and one whose measurement failed. Its own
+    /// `LARGE_FOLDER_BYTES`, beside one still measuring and one whose measurement failed. Its own
     /// files are not measured yet, so its build folders are all its size is known by.
     fn out_of_focus() -> Project {
         Project {
             last_activity: Some(now() - FOCUS_RECENT - Duration::from_secs(1)),
             artifacts: vec![
-                target(measured(FOCUS_LARGE_BYTES - 1)),
+                target(measured(LARGE_FOLDER_BYTES - 1)),
                 node_modules("/code/app/web/node_modules", Measurement::Measuring),
                 cargo_target(
                     "/code/app/old/target",
@@ -142,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn build_folders_that_reach_focus_large_bytes_between_them_bring_a_project_into_focus() {
+    fn build_folders_that_reach_large_folder_bytes_between_them_bring_a_project_into_focus() {
         let mut project = out_of_focus();
         project
             .artifacts
@@ -151,10 +147,10 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_folder_that_reaches_focus_large_bytes_brings_a_project_into_focus() {
-        let small_target_large_folder = sized(measured(FOCUS_LARGE_BYTES - 10), measured(10));
+    fn a_whole_folder_that_reaches_large_folder_bytes_brings_a_project_into_focus() {
+        let small_target_large_folder = sized(measured(LARGE_FOLDER_BYTES - 10), measured(10));
         assert!(in_focus(&small_target_large_folder, now()));
-        let one_byte_short = sized(measured(FOCUS_LARGE_BYTES - 11), measured(10));
+        let one_byte_short = sized(measured(LARGE_FOLDER_BYTES - 11), measured(10));
         assert!(!in_focus(&one_byte_short, now()));
     }
 

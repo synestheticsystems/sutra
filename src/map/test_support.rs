@@ -272,6 +272,7 @@ pub(crate) fn project_at(path: impl Into<PathBuf>) -> Project {
             .into_owned(),
         path,
         repo: None,
+        scratch: None,
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),

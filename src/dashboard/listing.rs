@@ -13,7 +13,7 @@ mod repository;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
-pub(super) use focus::{FOCUS_LARGE_BYTES, FOCUS_RECENT};
+pub(super) use focus::FOCUS_RECENT;
 pub(super) use folds::Folds;
 pub(super) use repository::Group;
 

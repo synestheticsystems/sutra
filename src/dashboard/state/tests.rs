@@ -29,6 +29,7 @@ fn dashboard_at(
     let roots = Roots {
         home: home.to_path_buf(),
         dirs: vec![root.to_path_buf()],
+        scratch: None,
         sandboxed: false,
     };
     let mut notifier = Notifier::new(|_, _| {});

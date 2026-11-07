@@ -72,7 +72,7 @@ pub(super) fn run(
         return;
     }
     // Watching starts before the scan, so a change made while it runs is not missed.
-    let watches = Watches::over_roots(state.roots(), messages.clone());
+    let watches = Watches::over_roots(&state.watched_roots(), messages.clone());
     state.report_problems(&[Source::Watcher], watches.problems());
     state.rediscover(None);
     let mut engine = Engine::new(state, watches, messages, snapshots);
@@ -218,7 +218,7 @@ impl<'a> Engine<'a> {
             // The watcher lost track of the file system: the remedy is the one for dropped events.
             Err(err) => {
                 let lost = if err.paths.is_empty() {
-                    self.state.roots().to_vec()
+                    self.watches.roots().to_vec()
                 } else {
                     err.paths
                 };
@@ -268,7 +268,7 @@ impl<'a> Engine<'a> {
                     // private folder would raise the privacy prompt.
                     let moved_folder = renamed && readable && !path.is_file();
                     if folder_appeared_or_vanished || moved_folder {
-                        self.timers.layout.mark(project.clone(), now);
+                        self.layout_changed(project.clone(), now);
                     }
                     self.timers.own_files.mark(project, now);
                 }
@@ -307,7 +307,7 @@ impl<'a> Engine<'a> {
                 // is unverified, since testing it means touching a real private folder, so the
                 // stream begins again, now that Sutra may. The rediscovery this answer starts reads
                 // again whatever the restart left undelivered.
-                self.watches.restart_over_roots(self.state.roots());
+                self.watches.restart_over_roots(&self.state.watched_roots());
                 self.dirty |= self
                     .state
                     .report_problems(&[Source::Watcher], self.watches.problems());
@@ -315,6 +315,34 @@ impl<'a> Engine<'a> {
             }
             MacOsAnswer::Refused => self.dirty = true,
         }
+    }
+
+    /// A folder appeared, vanished or moved in `project`, so look for its build folders again once
+    /// its folders settle: soon in a worktree, which is searched two levels down, and later in a
+    /// session's scratch folder, which is searched through (see `timers::SCRATCH_LAYOUT`).
+    fn layout_changed(&mut self, project: PathBuf, now: Instant) {
+        if self.state.is_scratch_folder(&project) {
+            self.timers.scratch_layout.mark(project, now);
+        } else {
+            self.timers.layout.mark(project, now);
+        }
+    }
+
+    /// Watch the scratch root once it is there, and stop when it goes. Claude Code makes it with
+    /// the first session after the Mac starts, often after Sutra, and no stream over a folder that
+    /// is not there yet can tell of it. Discovery reads again what the new stream did not hear.
+    fn follow_the_scratch_root(&mut self, now: Instant) {
+        let Some(root) = self.state.scratch_root() else {
+            return;
+        };
+        if root.is_dir() == self.watches.roots().iter().any(|watched| watched == root) {
+            return;
+        }
+        self.watches.restart_over_roots(&self.state.watched_roots());
+        self.dirty |= self
+            .state
+            .report_problems(&[Source::Watcher], self.watches.problems());
+        self.timers.rediscover.mark((), now);
     }
 
     fn on_measured(&mut self, measured: Measured) {
@@ -348,6 +376,11 @@ impl<'a> Engine<'a> {
         if rediscover {
             self.state.rediscover(Some(SystemTime::now()));
             self.remeasure_changed_under(&rescanned, now);
+            // A rediscovery searches a scratch folder only when it is new (see `state::scratch`),
+            // and lost events may have hidden a build folder made in one.
+            for folder in self.state.scratch_folders_meeting(&rescanned) {
+                self.timers.scratch_layout.mark(folder, now);
+            }
             self.dirty = true;
             reshaped = true;
         }
@@ -369,13 +402,18 @@ impl<'a> Engine<'a> {
             if self.watches.stop_watching_gone_folders() {
                 self.timers.rediscover.mark((), now);
             }
+            self.follow_the_scratch_root(now);
             self.timers.next_tick = now + TICK;
         }
         let walking_after_loss = tick && self.walk_trees_after_lost_events(now);
         for worktree in self.timers.git.take_due(now) {
             self.dirty |= self.state.refresh_git(&worktree);
         }
-        for project in self.timers.layout.take_due(now) {
+        let layouts = self.timers.layout.take_due(now);
+        for project in layouts
+            .into_iter()
+            .chain(self.timers.scratch_layout.take_due(now))
+        {
             if self.state.refind_artifacts(&project) {
                 self.dirty = true;
                 reshaped = true;
@@ -484,7 +522,7 @@ impl<'a> Engine<'a> {
         let after = self.state.project_paths();
         for changed in before.symmetric_difference(&after) {
             for enclosing in self.state.enclosing_projects(changed) {
-                self.timers.layout.mark(enclosing.clone(), now);
+                self.layout_changed(enclosing.clone(), now);
                 self.timers.own_files.mark(enclosing, now);
             }
         }

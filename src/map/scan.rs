@@ -1,4 +1,5 @@
-//! Discovery: find every git worktree under the roots, and the build artifacts inside each.
+//! Discovery: find every git worktree under the roots, and the build artifacts inside each, and
+//! every session's folder in Claude Code's scratch root (`scratch`).
 //!
 //! The walk stops at each repository root, then each repository's worktree registry supplies its
 //! linked worktrees wherever they live. On Daniel's M4 Max (2026-10-31) that found every worktree
@@ -9,6 +10,7 @@ mod boundary;
 mod cargo_target;
 mod git;
 mod registry;
+mod scratch;
 mod walk;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,10 +20,11 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-pub use artifacts::find_artifacts;
+pub use artifacts::{find_artifacts, find_artifacts_throughout};
 pub use boundary::{Boundary, MacOsAnswer, folder_access};
 pub use cargo_target::{CACHEDIR_TAG_FILE, holds_cargo_tag, is_cargo_target};
 pub use git::{git_activity, repo_info};
+pub use scratch::{ScratchFolder, scratch_folders, scratch_root};
 
 use super::{FolderAccess, RepoInfo, ScanStats, Source, SourceProblem};
 

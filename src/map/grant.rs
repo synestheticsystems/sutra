@@ -1,10 +1,13 @@
 //! Which folders Sutra may read, and how it got them.
 //!
-//! The direct edition reads the real home folder with no questions asked. The Mac App Store edition
-//! runs in the App Sandbox, where it can read only what the user picked in the window's open panel;
-//! that choice is kept as a security-scoped bookmark so the question is asked once.
+//! The direct edition reads the real home folder and Claude Code's scratch root with no questions
+//! asked. The Mac App Store edition runs in the App Sandbox, where it can read only what the user
+//! picked in the window's open panel; that choice is kept as a security-scoped bookmark so the
+//! question is asked once.
 
 use std::path::PathBuf;
+
+use super::scan;
 
 #[cfg(target_os = "macos")]
 pub use macos::GrantError;
@@ -26,16 +29,21 @@ impl std::fmt::Display for GrantError {
 pub struct Roots {
     /// The real home directory (see `crate::home::real_home`).
     pub home: PathBuf,
+    /// The folders walked for worktrees and project folders.
     pub dirs: Vec<PathBuf>,
+    /// Claude Code's scratch root, read for its sessions' scratch folders (see `scan::scratch`).
+    /// The store edition has none: the sandbox keeps it out of `/private/tmp`, and reading it
+    /// there would take a grant of its own, kept as a second bookmark beside the one of `dirs`.
+    pub scratch: Option<PathBuf>,
     /// Running inside the App Sandbox.
     pub sandboxed: bool,
 }
 
-/// Decide the roots for this process: the real home folder outside the sandbox; inside it, the
-/// folder granted on an earlier launch. Inside the sandbox with no folder granted yet, `dirs` is
-/// empty and the window asks, so the user reads why before any panel opens; the folder chosen is
-/// kept with `save_grant`. A saved grant that could not be used is returned beside the roots, for
-/// the window to explain.
+/// Decide the roots for this process: the real home folder and Claude Code's scratch root outside
+/// the sandbox; inside it, the folder granted on an earlier launch. Inside the sandbox with no
+/// folder granted yet, `dirs` is empty and the window asks, so the user reads why before any panel
+/// opens; the folder chosen is kept with `save_grant`. A saved grant that could not be used is
+/// returned beside the roots, for the window to explain.
 pub fn resolve_roots() -> (Roots, Option<GrantError>) {
     let home = crate::home::real_home()
         .expect("the passwd database or $HOME names the user's home folder");
@@ -48,6 +56,7 @@ pub fn resolve_roots() -> (Roots, Option<GrantError>) {
         let roots = Roots {
             home,
             dirs,
+            scratch: None,
             sandboxed: true,
         };
         return (roots, lost);
@@ -55,6 +64,7 @@ pub fn resolve_roots() -> (Roots, Option<GrantError>) {
     let roots = Roots {
         dirs: vec![home.clone()],
         home,
+        scratch: Some(scan::scratch_root()),
         sandboxed: false,
     };
     (roots, None)
@@ -200,13 +210,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_roots_outside_the_sandbox_watches_the_real_home_folder() {
+    fn resolve_roots_outside_the_sandbox_watches_the_real_home_folder_and_claudes_scratch() {
         // `cargo test` runs unsandboxed, so this exercises the direct edition's path.
         let (roots, lost) = resolve_roots();
         let home = crate::home::real_home().unwrap();
         assert!(!roots.sandboxed);
         assert_eq!(roots.home, home);
         assert_eq!(roots.dirs, vec![home]);
+        assert_eq!(roots.scratch, Some(scan::scratch_root()));
         assert!(lost.is_none());
     }
 }

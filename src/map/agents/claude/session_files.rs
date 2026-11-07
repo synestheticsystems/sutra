@@ -1,12 +1,15 @@
 //! Claude Code keeps the files of each session under `<home>/.claude/projects`, in a folder named
 //! after the working directory the session started in: the session's own transcript,
 //! `<session id>.jsonl`, and beside it a folder `<session id>/` of its other files, its subagents'
-//! transcripts among them.
+//! transcripts among them. It names the session's scratch folder after that directory the same way
+//! (see `scan::scratch`).
 
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::map::scan::Boundary;
 
 /// The longest folder name Claude Code derives from a working directory. It cuts a longer one to
 /// this length and appends `-` and a hash of the whole path.
@@ -66,9 +69,58 @@ pub(super) fn folder_name(cwd: &str) -> String {
         .collect()
 }
 
+/// The name of the working directory Claude Code derived the folder name `derived` from (see
+/// `folder_name`), as far as the disk still shows it where Sutra may look. Several paths derive one
+/// name, as every character but a letter or a digit becomes `-`, so each step down from `/` takes
+/// the longest folder whose name derives the next part. Where none does, because the directory has
+/// gone since or lies where Sutra may not look, the rest of `derived` is the best name left.
+pub(crate) fn working_directory_name(derived: &str, boundary: &Boundary) -> String {
+    let mut folder = PathBuf::from("/");
+    let mut rest = derived;
+    while let Some(below) = rest.strip_prefix('-') {
+        if !boundary.may_read(&folder) {
+            break;
+        }
+        let Some((name, after)) = longest_subfolder_deriving(&folder, below) else {
+            break;
+        };
+        folder.push(name);
+        rest = after;
+    }
+    let name = match rest {
+        "" => folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        rest => Some(rest.trim_start_matches('-').to_string()),
+    };
+    // Only the root folder has no name of its own.
+    name.filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "/".to_string())
+}
+
+/// The folder in `folder` with the longest name that derives the start of `rest` up to a `-` or its
+/// end, and what of `rest` follows it. The listing tells a folder from anything else, so nothing
+/// in `folder` is touched, not even a private folder the boundary keeps Sutra out of. A link is
+/// passed over: Claude Code records the working directory with every link resolved.
+fn longest_subfolder_deriving<'r>(folder: &Path, rest: &'r str) -> Option<(String, &'r str)> {
+    let entries = fs::read_dir(folder).ok()?;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let after = rest.strip_prefix(folder_name(&name).as_str())?;
+            let whole_part = after.is_empty() || after.starts_with('-');
+            // `DirEntry::file_type` comes from the listing and does not follow links.
+            let is_folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            (whole_part && is_folder).then_some((name, after))
+        })
+        .min_by_key(|(_, after)| after.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::ScanOptions;
     use crate::map::test_support::TempDir;
 
     #[test]
@@ -89,6 +141,48 @@ mod tests {
         for (cwd, name) in cases {
             assert_eq!(folder_name(cwd), name, "{cwd}");
         }
+    }
+
+    /// The name of the working directory whose derived folder name is that of `cwd`.
+    fn named_back(fixture: &TempDir, cwd: &Path) -> String {
+        let boundary = fixture.boundary(&ScanOptions::default());
+        working_directory_name(&folder_name(cwd.to_str().unwrap()), &boundary)
+    }
+
+    #[test]
+    fn a_working_directory_is_named_back_from_its_folder_name_by_the_folders_still_there() {
+        let fixture = TempDir::new("session-files-named-back");
+        fixture.dir("vt/greyorange/greyorange");
+        let foundry = fixture.dir("vt/greyorange/greyorange-foundry");
+        let worktree = fixture.dir("vt/sim/.claude/worktrees/sad-pare-30adf7");
+        let support = fixture.dir("Library/Application Support/Claude");
+
+        assert_eq!(
+            named_back(&fixture, &foundry),
+            "greyorange-foundry",
+            "the longest name of two that derive the part"
+        );
+        assert_eq!(named_back(&fixture, &worktree), "sad-pare-30adf7");
+        assert_eq!(named_back(&fixture, &support), "Claude");
+
+        fs::remove_dir_all(worktree.parent().unwrap()).unwrap();
+        assert_eq!(
+            named_back(&fixture, &worktree),
+            "worktrees-sad-pare-30adf7",
+            "past the folders still there, the rest of the name"
+        );
+    }
+
+    #[test]
+    fn a_working_directory_in_a_private_folder_is_named_without_looking_inside() {
+        let fixture = TempDir::new("session-files-named-back-private");
+        let app = fixture.dir("Documents/app");
+
+        assert_eq!(
+            named_back(&fixture, &app.join("gone")),
+            "app-gone",
+            "Documents, which Settings keep Sutra out of, is never listed"
+        );
     }
 
     #[test]

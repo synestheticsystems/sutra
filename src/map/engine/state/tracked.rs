@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::artifacts::keep_measurements;
 use super::new_project;
 use crate::map::devrunner::FolderEnvironments;
-use crate::map::scan::{self, Boundary, Worktree};
-use crate::map::{ActivitySource, FolderAccess, Project};
+use crate::map::scan::{self, Boundary, ScratchFolder, Worktree};
+use crate::map::{ActivitySource, FolderAccess, Project, ScratchSpace};
 use crate::model::Environment;
 
 pub(super) struct Tracked {
@@ -35,6 +35,7 @@ impl Tracked {
             project: new_project(
                 worktree.path,
                 Some(worktree.repo),
+                None,
                 worktree.access,
                 boundary,
             ),
@@ -49,7 +50,28 @@ impl Tracked {
     pub(super) fn plain(folder: PathBuf, boundary: &Boundary) -> Tracked {
         let access = scan::folder_access(&folder, boundary);
         Tracked {
-            project: new_project(folder, None, access, boundary),
+            project: new_project(folder, None, None, access, boundary),
+            git_activity: None,
+            observed: None,
+            agent_activity: None,
+            environments: None,
+        }
+    }
+
+    /// The scratch folder of a session that started in a folder named `started_in`, its build
+    /// folders found anywhere in it.
+    pub(super) fn scratch(
+        folder: ScratchFolder,
+        started_in: String,
+        boundary: &Boundary,
+    ) -> Tracked {
+        let access = scan::folder_access(&folder.path, boundary);
+        let space = ScratchSpace {
+            session_id: folder.session_id,
+            started_in,
+        };
+        Tracked {
+            project: new_project(folder.path, None, Some(space), access, boundary),
             git_activity: None,
             observed: None,
             agent_activity: None,
@@ -181,6 +203,7 @@ mod tests {
         Tracked {
             project: new_project(
                 PathBuf::from("/code/app"),
+                None,
                 None,
                 FolderAccess::Missing,
                 &boundary,

@@ -1,6 +1,7 @@
 //! The worktree map: everything Sutra knows about each project folder on this machine, in one shape.
 //!
-//! A project is a git worktree (main or linked) or any folder a dev-runner environment names. One
+//! A project is a git worktree (main or linked), any folder a dev-runner environment names, or the
+//! scratch folder of a Claude Code session that holds a build folder or a lot of disk. One
 //! `Project` row merges four sources:
 //!   - git: branch, head and the time of the last git activity, read from the worktree's git dir
 //!     without ever writing to it (a write would show up in our own file watcher);
@@ -10,10 +11,10 @@
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
-//! The same code serves both editions. The direct build scans the real home folder; the Mac App
-//! Store build scans the folder the user granted through an open panel (see `grant`). Inside the
-//! sandbox `$HOME` points at the app's container, so every path here starts from
-//! `crate::home::real_home`.
+//! The same code serves both editions. The direct build scans the real home folder and Claude
+//! Code's scratch root; the Mac App Store build scans the folder the user granted through an open
+//! panel (see `grant`). Inside the sandbox `$HOME` points at the app's container, so every path
+//! here starts from `crate::home::real_home`.
 
 pub mod agents;
 pub mod clean;
@@ -38,8 +39,8 @@ pub use agents::{
 };
 pub use disk::{DirUsage, Measurement};
 pub use project::{
-    ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, KeptOutBy, Project,
-    RepoInfo,
+    ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, KeptOutBy,
+    LARGE_FOLDER_BYTES, Project, RepoInfo, ScratchSpace,
 };
 
 /// A home folder macOS guards with a privacy prompt the first time an app reads anything inside.

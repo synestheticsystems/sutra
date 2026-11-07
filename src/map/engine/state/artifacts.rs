@@ -5,17 +5,27 @@ use std::path::Path;
 
 use super::{State, owner};
 use crate::map::scan::{self, Boundary};
-use crate::map::{ArtifactDir, Measurement};
+use crate::map::{ArtifactDir, Measurement, Project};
 
 impl State {
     /// Look for artifact directories in one project again, after a folder appeared or vanished in
     /// it. Sizes of the ones still there are kept. Returns whether the set changed.
     pub(in crate::map::engine) fn refind_artifacts(&mut self, project: &Path) -> bool {
+        let Some(tracked) = self.projects.get(project) else {
+            return false;
+        };
         if !self.is_readable(project) {
             return false;
         }
-        let mut found = artifact_dirs(project, &self.boundary);
-        found.retain(|dir| owner(&self.projects, &dir.path) == Some(project));
+        let mut found = match tracked.project.scratch {
+            // Searched through on discovery's threads, not this one alone: it can hold thousands
+            // of folders.
+            Some(_) => {
+                scan::on_discovery_threads(|| artifact_dirs(&tracked.project, &self.boundary))
+            }
+            None => artifact_dirs(&tracked.project, &self.boundary),
+        };
+        found.retain(|dir| owner(&self.projects, &dir.path, |_| true) == Some(project));
         let Some(tracked) = self.projects.get_mut(project) else {
             return false;
         };
@@ -48,8 +58,14 @@ impl State {
     }
 }
 
-pub(super) fn artifact_dirs(project: &Path, boundary: &Boundary) -> Vec<ArtifactDir> {
-    scan::find_artifacts(project, boundary)
+/// The build folders in `project`'s folder: anywhere in a session's scratch folder, where agents
+/// build under any name, and in any other as deep as `scan::find_artifacts` looks.
+pub(super) fn artifact_dirs(project: &Project, boundary: &Boundary) -> Vec<ArtifactDir> {
+    let found = match project.scratch {
+        Some(_) => scan::find_artifacts_throughout(&project.path),
+        None => scan::find_artifacts(&project.path, boundary),
+    };
+    found
         .into_iter()
         .map(|(path, kind)| ArtifactDir {
             path,

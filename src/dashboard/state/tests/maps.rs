@@ -144,6 +144,7 @@ fn a_folder_granted_is_watched_in_place_of_none_and_its_first_map_awaited() {
     let roots = Roots {
         home: fixture.root().to_path_buf(),
         dirs: Vec::new(),
+        scratch: None,
         sandboxed: false,
     };
     let mut notifier = Notifier::new(|_, _| {});

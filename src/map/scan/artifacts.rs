@@ -1,9 +1,10 @@
-//! Build-artifact directories inside one worktree.
+//! Build-artifact directories inside one worktree or one session's scratch folder.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use super::boundary::Boundary;
 use super::cargo_target::{CACHEDIR_TAG_FILE, is_tagged_build_folder};
@@ -49,6 +50,50 @@ fn search(dir: &Path, depth: usize, boundary: &Boundary, found: &mut Vec<(PathBu
     found.extend(build_folders);
     for subfolder in subfolders {
         search(&subfolder, depth + 1, boundary, found);
+    }
+}
+
+/// Build-artifact directories anywhere in `folder`, a session's scratch folder: each
+/// `node_modules/`, and each Cargo build folder (see `is_cargo_target`), at any depth, in the
+/// repositories cloned there too. Sorted by path. Agents build anywhere in their scratch, often
+/// into a folder `CARGO_TARGET_DIR` named. The search lists every folder but the build folders and
+/// `.git`, on the current rayon pool's threads at once, as discovery's walk does, and skips a folder
+/// it cannot list.
+pub fn find_artifacts_throughout(folder: &Path) -> Vec<(PathBuf, ArtifactKind)> {
+    let found = Mutex::new(Vec::new());
+    rayon::scope(|scope| search_throughout(scope, folder.to_path_buf(), true, &found));
+    let mut found = found
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
+/// `top` is the scratch folder itself, which is never a build folder of its own.
+fn search_throughout<'s>(
+    scope: &rayon::Scope<'s>,
+    dir: PathBuf,
+    top: bool,
+    found: &'s Mutex<Vec<(PathBuf, ArtifactKind)>>,
+) {
+    let Some(listed) = Listed::read(&dir, None) else {
+        return;
+    };
+    let lock = || {
+        found
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    if !top && listed.is_cargo_target(&dir) {
+        lock().push((dir, ArtifactKind::CargoTarget));
+        return;
+    }
+    let (build_folders, subfolders) = listed.into_parts();
+    if !build_folders.is_empty() {
+        lock().extend(build_folders);
+    }
+    for subfolder in subfolders {
+        scope.spawn(move |scope| search_throughout(scope, subfolder, false, found));
     }
 }
 
@@ -268,6 +313,55 @@ mod tests {
                 fixture.path("home/web/node_modules"),
                 ArtifactKind::NodeModules
             )]
+        );
+    }
+
+    #[test]
+    fn a_scratch_folder_is_searched_at_any_depth_its_clones_too_and_no_build_folder_is_entered() {
+        let fixture = TempDir::new("scan-artifacts-throughout");
+        let session = fixture.dir("e26ca359");
+        let at = |rel: &str| session.join(rel);
+        // `CARGO_TARGET_DIR` named these, with no `Cargo.toml` anywhere near.
+        fixture.write(
+            "e26ca359/scratchpad/r567fixture/target/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        fixture.write(
+            "e26ca359/scratchpad/target-567-fix/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        fixture.write(
+            "e26ca359/scratchpad/target-567-fix/wasm/CACHEDIR.TAG",
+            CACHEDIR_TAG,
+        );
+        // A clone with its own `target/` and one of a member six levels down.
+        fixture.dir("e26ca359/scratchpad/followup/repo/.git/objects");
+        fixture.write("e26ca359/scratchpad/followup/repo/Cargo.toml", "");
+        fixture.dir("e26ca359/scratchpad/followup/repo/target/debug");
+        fixture.write(
+            "e26ca359/scratchpad/followup/repo/crates/web/app/Cargo.toml",
+            "",
+        );
+        fixture.dir("e26ca359/scratchpad/followup/repo/crates/web/app/target");
+        fixture.dir("e26ca359/scratchpad/ui/a/b/node_modules/dep/node_modules");
+        // Neither another tool's cache, a `target` cargo did not make, nor the folder itself.
+        fixture.write("e26ca359/scratchpad/.pytest_cache/CACHEDIR.TAG", PYTEST_TAG);
+        fixture.dir("e26ca359/scratchpad/copied/target/debug");
+        fixture.write("e26ca359/CACHEDIR.TAG", CACHEDIR_TAG);
+
+        let cargo = |rel: &str| (at(rel), ArtifactKind::CargoTarget);
+        assert_eq!(
+            find_artifacts_throughout(&session),
+            [
+                cargo("scratchpad/followup/repo/crates/web/app/target"),
+                cargo("scratchpad/followup/repo/target"),
+                cargo("scratchpad/r567fixture/target"),
+                cargo("scratchpad/target-567-fix"),
+                (
+                    at("scratchpad/ui/a/b/node_modules"),
+                    ArtifactKind::NodeModules
+                ),
+            ]
         );
     }
 }

@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use notify::event::{DataChange, Flag, MetadataKind, RenameMode};
 
 use super::*;
-use crate::map::test_support::{TempDir, at, commit, git, set_mtime};
+use crate::map::test_support::{CACHEDIR_TAG, TempDir, at, commit, git, set_mtime};
 use crate::map::{ActivitySource, AgentStatus, SourceProblem, agents};
 
 /// A repository at `rel` in `fixture`, with a `target/` Cargo made.
@@ -22,9 +22,32 @@ fn engine_over<'a>(
     let roots = Roots {
         home: root.to_path_buf(),
         dirs: vec![root.to_path_buf()],
+        scratch: None,
         sandboxed: false,
     };
-    let mut state = State::new(&roots, &ScanOptions::default());
+    engine_on_roots(&roots, snapshots)
+}
+
+/// An engine on the map of `fixture`'s folder `home`, with its folder `claude-501` for Claude
+/// Code's scratch root, unstarted and watching no root.
+fn engine_with_scratch<'a>(
+    fixture: &TempDir,
+    snapshots: &'a SyncSender<Arc<Snapshot>>,
+) -> (Engine<'a>, Receiver<Message>) {
+    let roots = Roots {
+        home: fixture.dir("home"),
+        dirs: vec![fixture.path("home")],
+        scratch: Some(fixture.path("claude-501")),
+        sandboxed: false,
+    };
+    engine_on_roots(&roots, snapshots)
+}
+
+fn engine_on_roots<'a>(
+    roots: &Roots,
+    snapshots: &'a SyncSender<Arc<Snapshot>>,
+) -> (Engine<'a>, Receiver<Message>) {
+    let mut state = State::new(roots, &ScanOptions::default());
     state.rediscover(None);
     let (messages, inbox) = mpsc::channel();
     let watches = Watches::over_roots(&[], messages.clone());
@@ -108,6 +131,7 @@ fn the_first_walk_waits_for_macos_until_every_folder_is_answered_its_wait_is_up_
     let roots = Roots {
         home: fixture.root().to_path_buf(),
         dirs: vec![fixture.root().to_path_buf()],
+        scratch: None,
         sandboxed: false,
     };
     let all = ScanOptions {
@@ -627,6 +651,100 @@ fn lost_events_mark_changed_only_the_trees_whose_top_changed() {
         engine.timers.rescan.next_due(),
         Some(now + Duration::from_secs(60)),
         "the next recovery waits a minute after the last"
+    );
+}
+
+#[test]
+fn the_scratch_root_is_watched_once_claude_code_makes_it_and_read_again_then() {
+    let fixture = TempDir::new("live-scratch-root-appears");
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
+    let scratch_root = fixture.path("claude-501");
+    let now = Instant::now();
+    let watched = |engine: &Engine| engine.watches.roots().contains(&scratch_root);
+
+    engine.run_due(now + Duration::from_secs(3));
+    assert!(!watched(&engine));
+    assert_eq!(engine.timers.rediscover.next_due(), None, "no root yet");
+
+    fixture.dir("claude-501/-code-app/e26ca359/scratchpad");
+    engine.run_due(now + Duration::from_secs(6));
+    assert!(watched(&engine));
+    assert!(engine.timers.rediscover.next_due().is_some());
+
+    fs::remove_dir_all(&scratch_root).unwrap();
+    engine.run_due(now + Duration::from_secs(9));
+    assert!(
+        !watched(&engine),
+        "a stream over a folder that went hears nothing"
+    );
+}
+
+#[test]
+fn a_build_folder_made_in_a_scratch_folder_while_its_events_went_missing_is_found() {
+    let fixture = TempDir::new("live-scratch-lost-events");
+    let session = fixture.dir("claude-501/-code-app/e26ca359/scratchpad");
+    let session = session.parent().unwrap().to_path_buf();
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
+    assert!(engine.state.project_paths().contains(&session));
+    let carded = |engine: &Engine| {
+        let snapshot = engine.state.snapshot();
+        snapshot
+            .projects
+            .iter()
+            .any(|project| project.path == session)
+    };
+    assert!(!carded(&engine), "no card while it holds no build folder");
+
+    fixture.write(
+        "claude-501/-code-app/e26ca359/scratchpad/out-567/CACHEDIR.TAG",
+        CACHEDIR_TAG,
+    );
+    engine.on_fs_event(Ok(Event::new(EventKind::Other)
+        .set_flag(Flag::Rescan)
+        .add_path(fixture.path("claude-501"))));
+    let now = Instant::now() + Duration::from_secs(3);
+    engine.run_due(now);
+    assert!(!carded(&engine), "searched again once the folder is quiet");
+    engine.run_due(now + Duration::from_secs(11));
+
+    assert_eq!(
+        build_folders(&engine, &session),
+        [session.join("scratchpad/out-567")]
+    );
+}
+
+#[test]
+fn a_folder_made_in_a_scratch_folder_has_it_searched_through_once_its_folders_settle() {
+    let fixture = TempDir::new("live-scratch-layout");
+    let session = fixture.dir("claude-501/-code-app/e26ca359");
+    let (snapshots, _published) = mpsc::sync_channel(1);
+    let (mut engine, _inbox) = engine_with_scratch(&fixture, &snapshots);
+    let now = Instant::now();
+
+    let made = fixture.write(
+        "claude-501/-code-app/e26ca359/scratchpad/r567/target/CACHEDIR.TAG",
+        CACHEDIR_TAG,
+    );
+    let folder = made.parent().unwrap().to_path_buf();
+    engine.on_fs_event(Ok(
+        Event::new(EventKind::Create(CreateKind::Folder)).add_path(folder.clone())
+    ));
+
+    assert!(
+        engine
+            .timers
+            .layout
+            .take_due(now + Duration::from_secs(5))
+            .is_empty()
+    );
+    assert_eq!(
+        engine
+            .timers
+            .scratch_layout
+            .take_due(now + Duration::from_secs(11)),
+        [session]
     );
 }
 

@@ -8,15 +8,24 @@ use std::time::SystemTime;
 use super::{AgentSession, Measurement, PrivateFolder, SubagentWithParent};
 use crate::model::Environment;
 
+/// How much disk a folder must hold to matter for its size alone: a project this large stays in
+/// focus however quiet it is, and a session's scratch folder this large has a card with no build
+/// folder in it. A first guess.
+pub const LARGE_FOLDER_BYTES: u64 = 1 << 30;
+
 /// One row of the map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     /// Canonical path (symlinks resolved), the key every source is joined on.
     pub path: PathBuf,
-    /// The folder's own name.
+    /// The folder's own name; a session's scratch folder goes by its session (see
+    /// `ScratchSpace::name`).
     pub name: String,
-    /// `None` for a plain project folder that only a dev-runner environment names.
+    /// `None` for a plain project folder that only a dev-runner environment names, and for a
+    /// session's scratch folder.
     pub repo: Option<RepoInfo>,
+    /// `Some` for the folder where a Claude Code session keeps what it throws away.
+    pub scratch: Option<ScratchSpace>,
     pub last_activity: Option<SystemTime>,
     pub activity_source: Option<ActivitySource>,
     pub agents: Vec<AgentSession>,
@@ -148,6 +157,27 @@ impl RepoInfo {
             Some(dir) if dir == ".git" => self.common_dir.parent().unwrap_or(&self.common_dir),
             _ => &self.common_dir,
         }
+    }
+}
+
+/// A Claude Code session's scratch folder, `<scratch root>/<project key>/<session id>`, where the
+/// session clones, builds and keeps whatever it throws away, outside every project (see
+/// `scan::scratch`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchSpace {
+    /// The session whose folder this is.
+    pub session_id: String,
+    /// The last part of the folder the session started in, as Claude Code's name for that folder
+    /// still shows it on the disk, as `greyorange-foundry` reads.
+    pub started_in: String,
+}
+
+impl ScratchSpace {
+    /// What the folder goes by: the folder its session started in, and the first eight characters
+    /// of the session's id, as `greyorange-foundry e26ca359` reads.
+    pub fn name(&self) -> String {
+        let short_id: String = self.session_id.chars().take(8).collect();
+        format!("{} {short_id}", self.started_in)
     }
 }
 

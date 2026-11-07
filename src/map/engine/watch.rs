@@ -31,6 +31,8 @@ const STREAMS_OUTSIDE: usize = 500;
 pub(super) struct Watches {
     /// Where each watcher sends its events.
     messages: Sender<Message>,
+    /// The roots the stream over them was started on, those it could not watch among them.
+    roots: Vec<PathBuf>,
     /// Kept for its stream to run. `None` when it could not start.
     _over_roots: Option<RecommendedWatcher>,
     root_problems: Vec<SourceProblem>,
@@ -62,6 +64,7 @@ impl Watches {
         let (over_roots, root_problems) = watch_roots(roots, messages.clone());
         Watches {
             messages,
+            roots: roots.to_vec(),
             _over_roots: over_roots,
             root_problems,
             outside: Vec::new(),
@@ -73,8 +76,14 @@ impl Watches {
     /// caller reads again what it needs.
     pub(super) fn restart_over_roots(&mut self, roots: &[PathBuf]) {
         let (over_roots, root_problems) = watch_roots(roots, self.messages.clone());
+        self.roots = roots.to_vec();
         self._over_roots = over_roots;
         self.root_problems = root_problems;
+    }
+
+    /// The roots the stream over them was last started on.
+    pub(super) fn roots(&self) -> &[PathBuf] {
+        &self.roots
     }
 
     /// Watch each of `folders` and no other folder outside the roots, leaving alone the stream of

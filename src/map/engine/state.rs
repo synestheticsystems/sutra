@@ -4,6 +4,7 @@
 mod artifacts;
 mod measurements;
 mod placement;
+mod scratch;
 mod tracked;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -21,22 +22,29 @@ use crate::map::grant::Roots;
 use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
     ActivitySource, AgentSession, FolderAccess, KeptOutBy, Measurement, PrivateFolder, Project,
-    RepoInfo, ScanOptions, ScanStats, Snapshot, Source, SourceProblem, SubagentWithParent, agents,
-    devrunner, scan,
+    RepoInfo, ScanOptions, ScanStats, ScratchSpace, Snapshot, Source, SourceProblem,
+    SubagentWithParent, agents, devrunner, scan,
 };
 use artifacts::artifact_dirs;
 use placement::{Place, Placed};
+use scratch::earns_a_card;
 use tracked::Tracked;
 
 pub(super) struct State {
     /// Canonical, like every path below: FSEvents reports canonical paths and every source is
     /// joined on them.
     home: PathBuf,
+    /// The folders discovery walks.
     roots: Vec<PathBuf>,
+    /// Claude Code's scratch root, whose session folders the map holds as projects of their own
+    /// (see `scratch`), when this edition reads it.
+    scratch_root: Option<PathBuf>,
     sandboxed: bool,
     /// What every source may touch, discovery's walk included, built from the roots, the home
     /// folder and the scan options, and kept up with what macOS answers about the private folders.
     boundary: Boundary,
+    /// Every project the engine tracks, the sessions' scratch folders that have no card among
+    /// them (see `scratch::earns_a_card`), which the snapshot leaves out.
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
     unplaced_subagents: Vec<SubagentWithParent>,
@@ -58,11 +66,13 @@ impl State {
         let dirs: Vec<PathBuf> = roots.dirs.iter().map(|root| canonical(root)).collect();
         let mut boundary = Boundary::new(&dirs, &home, opts);
         boundary.keep_out_until_macos_answers();
+        let scratch_root = roots.scratch.as_deref().map(canonical);
         State {
-            index: Index::new(&home, []),
+            index: Index::new(&home, scratch_root.as_deref(), []),
             boundary,
             home,
             roots: dirs,
+            scratch_root,
             sandboxed: roots.sandboxed,
             projects: BTreeMap::new(),
             unplaced_agents: Vec::new(),
@@ -78,18 +88,33 @@ impl State {
         &self.roots
     }
 
+    pub(super) fn scratch_root(&self) -> Option<&Path> {
+        self.scratch_root.as_deref()
+    }
+
+    /// The roots a file watcher can watch now: the folders discovery walks, and the scratch root
+    /// while it is there. Claude Code makes it with the first session after the Mac starts, which
+    /// is often after Sutra starts, so the engine looks again on its tick.
+    pub(super) fn watched_roots(&self) -> Vec<PathBuf> {
+        let scratch_root = self.scratch_root.as_ref().filter(|root| root.is_dir());
+        self.roots.iter().chain(scratch_root).cloned().collect()
+    }
+
     pub(super) fn index(&self) -> &Index {
         &self.index
     }
 
-    /// The folders outside the roots that the map needs file events from: each readable project's
-    /// folder, and each repository's shared git dir, which holds the git dirs of its worktrees. One
-    /// inside another of them is left out, because a watch covers what lies below it. One that does
-    /// not read is left out too: inside the store edition's sandbox every folder outside the grant
-    /// is one, and watching one in a private folder would raise the privacy prompt. One that has
-    /// gone stays, so that failing to watch it has discovery read again.
+    /// The folders outside the roots and the scratch root that the map needs file events from: each
+    /// readable project's folder, and each repository's shared git dir, which holds the git dirs of
+    /// its worktrees. One inside another of them is left out, because a watch covers what lies below
+    /// it. One that does not read is left out too: inside the store edition's sandbox every folder
+    /// outside the grant is one, and watching one in a private folder would raise the privacy
+    /// prompt. One that has gone stays, so that failing to watch it has discovery read again.
     pub(super) fn folders_outside_the_roots(&self) -> BTreeSet<PathBuf> {
-        let outside = |folder: &Path| !self.roots.iter().any(|root| folder.starts_with(root));
+        let outside = |folder: &Path| {
+            let mut roots = self.roots.iter().chain(&self.scratch_root);
+            !roots.any(|root| folder.starts_with(root))
+        };
         let forbidden = |folder: &Path| {
             matches!(
                 scan::folder_access(folder, &self.boundary),
@@ -179,19 +204,22 @@ impl State {
                 tracked.carry_over(before);
             }
         }
+        let (scratch_folders, scratch_problems) = self.rediscover_scratch(&mut previous, &projects);
         // Plain folders come from environments; the reload below decides which stay. Each is read
         // again like a worktree, because no event may have told of a change to it.
         let plain_folders = previous
             .into_iter()
-            .filter(|(_, before)| before.project.repo.is_none())
+            .filter(|(_, before)| before.project.repo.is_none() && before.project.scratch.is_none())
             .map(|(path, before)| {
                 let mut tracked = Tracked::plain(path.clone(), boundary);
                 tracked.carry_over(before);
                 (path, tracked)
             });
         projects.extend(plain_folders);
+        projects.extend(scratch_folders);
         self.projects = projects;
-        self.report_problems(&[Source::Scan], discovery.problems);
+        let problems = [discovery.problems, scratch_problems].concat();
+        self.report_problems(&[Source::Scan], problems);
         self.state_folders = discovery.state_folders;
         self.place_environments(observed_at);
         self.leave_build_folders_to_nested_projects();
@@ -237,8 +265,10 @@ impl State {
             .map(|folder| (folder.dir().to_path_buf(), folder))
             .collect();
         let before = self.projects.len();
-        self.projects
-            .retain(|path, tracked| tracked.project.repo.is_some() || by_dir.contains_key(path));
+        self.projects.retain(|path, tracked| {
+            let project = &tracked.project;
+            project.repo.is_some() || project.scratch.is_some() || by_dir.contains_key(path)
+        });
         let mut reshaped = self.projects.len() != before;
         changed |= reshaped;
         for (path, tracked) in &mut self.projects {
@@ -353,7 +383,7 @@ impl State {
     }
 
     /// Record that a file in `project` was worked on at `at`. Returns whether that is news: the
-    /// project is on the map, and nothing seen in it was as late.
+    /// project has a card on the map, and nothing seen in it was as late.
     pub(super) fn touch(&mut self, project: &Path, at: SystemTime) -> bool {
         let Some(tracked) = self.projects.get_mut(project) else {
             return false;
@@ -363,7 +393,7 @@ impl State {
         }
         tracked.observed = Some((at, ActivitySource::FileChange));
         tracked.recompute_activity();
-        true
+        earns_a_card(&tracked.project)
     }
 
     /// Replace the problems `sources` reported last time with `fresh`, what they reported now.
@@ -388,11 +418,18 @@ impl State {
         let mut projects: Vec<Project> = self
             .projects
             .values()
-            .map(|tracked| tracked.project.clone())
+            .map(|tracked| &tracked.project)
+            .filter(|project| earns_a_card(project))
+            .cloned()
             .collect();
         projects.sort_by(Project::newest_first);
         Snapshot {
-            roots: self.roots.clone(),
+            roots: self
+                .roots
+                .iter()
+                .chain(&self.scratch_root)
+                .cloned()
+                .collect(),
             skipped_private_folders: self.boundary.skipped_private_folders(),
             refused_private_folders: self.boundary.refused_private_folders(),
             sandboxed: self.sandboxed,
@@ -406,58 +443,68 @@ impl State {
     }
 
     fn reindex(&mut self) {
-        self.index = Index::new(&self.home, self.projects.values().map(|t| &t.project));
+        let projects = self.projects.values().map(|t| &t.project);
+        self.index = Index::new(&self.home, self.scratch_root.as_deref(), projects);
     }
 }
 
+/// A project at `path`: a worktree of `repo`, a session's scratch folder (`scratch`), or a plain
+/// folder when neither, its build folders found where `access` lets Sutra look.
 fn new_project(
     path: PathBuf,
     repo: Option<RepoInfo>,
+    scratch: Option<ScratchSpace>,
     access: FolderAccess,
     boundary: &Boundary,
 ) -> Project {
-    // An unreadable folder is not entered: it may be a private folder whose first read raises the
-    // privacy prompt.
-    let artifacts = if access == FolderAccess::Readable {
-        artifact_dirs(&path, boundary)
-    } else {
-        Vec::new()
+    let name = match &scratch {
+        Some(space) => space.name(),
+        None => path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
     };
-    let name = path.file_name().map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    Project {
+    let mut project = Project {
         path,
         name,
         repo,
+        scratch,
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),
         subagents: Vec::new(),
         environment: None,
-        artifacts,
+        artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access,
+    };
+    // An unreadable folder is not entered: it may be a private folder whose first read raises the
+    // privacy prompt.
+    if access == FolderAccess::Readable {
+        project.artifacts = artifact_dirs(&project, boundary);
     }
+    project
 }
 
-/// The project an agent working in `path` works on: the deepest project holding `path`, or, when
-/// none does, the one project `path` holds. Codex Desktop records a task's folder as the thread's
-/// working directory, one level above the worktree the task checks out in it
-/// (`<task>/work/<repo>`). A folder holding several projects is no one project's.
-fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option<&'a Path> {
-    if let Some(holder) = path
-        .ancestors()
-        .find(|folder| projects.contains_key(*folder))
-    {
+/// The project an agent working in `path` works on, of those `counts` lets in: the deepest project
+/// holding `path`, or, when none does, the one project `path` holds. Codex Desktop records a task's
+/// folder as the thread's working directory, one level above the worktree the task checks out in
+/// it (`<task>/work/<repo>`). A folder holding several projects is no one project's.
+fn owner<'a>(
+    projects: &'a BTreeMap<PathBuf, Tracked>,
+    path: &'a Path,
+    counts: impl Fn(&Tracked) -> bool,
+) -> Option<&'a Path> {
+    let counted = |folder: &Path| projects.get(folder).is_some_and(&counts);
+    if let Some(holder) = path.ancestors().find(|folder| counted(folder)) {
         return Some(holder);
     }
     // Paths order by component, so the projects inside `path` follow it in a run.
     let mut held = projects
         .range::<Path, _>((Bound::Excluded(path), Bound::Unbounded))
-        .map(|(project, _)| project.as_path())
-        .take_while(|project| project.starts_with(path));
+        .take_while(|(project, _)| project.starts_with(path))
+        .filter(|(_, tracked)| counts(tracked))
+        .map(|(project, _)| project.as_path());
     match (held.next(), held.next()) {
         (Some(only), None) => Some(only),
         _ => None,
@@ -484,12 +531,23 @@ mod tests {
     fn tracked(path: &str) -> Tracked {
         let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
         Tracked {
-            project: new_project(PathBuf::from(path), None, FolderAccess::Missing, &boundary),
+            project: new_project(
+                PathBuf::from(path),
+                None,
+                None,
+                FolderAccess::Missing,
+                &boundary,
+            ),
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
         }
+    }
+
+    /// Lets every project count.
+    fn every(_: &Tracked) -> bool {
+        true
     }
 
     #[test]
@@ -499,14 +557,18 @@ mod tests {
             .map(|path| (PathBuf::from(path), tracked(path)))
             .collect();
         assert_eq!(
-            owner(&projects, Path::new("/code/app/.claude/worktrees/wt/src")),
+            owner(
+                &projects,
+                Path::new("/code/app/.claude/worktrees/wt/src"),
+                every
+            ),
             Some(Path::new("/code/app/.claude/worktrees/wt"))
         );
         assert_eq!(
-            owner(&projects, Path::new("/code/app/src")),
+            owner(&projects, Path::new("/code/app/src"), every),
             Some(Path::new("/code/app"))
         );
-        assert_eq!(owner(&projects, Path::new("/code/other")), None);
+        assert_eq!(owner(&projects, Path::new("/code/other"), every), None);
     }
 
     #[test]
@@ -521,17 +583,37 @@ mod tests {
         .map(|path| (PathBuf::from(path), tracked(path)))
         .collect();
         assert_eq!(
-            owner(&projects, Path::new("/tasks/fix")),
+            owner(&projects, Path::new("/tasks/fix"), every),
             Some(Path::new("/tasks/fix/work/app")),
             "the task folder Codex Desktop records holds one worktree"
         );
-        assert_eq!(owner(&projects, Path::new("/tasks/pair")), None);
-        assert_eq!(owner(&projects, Path::new("/tasks")), None);
+        assert_eq!(owner(&projects, Path::new("/tasks/pair"), every), None);
+        assert_eq!(owner(&projects, Path::new("/tasks"), every), None);
         assert_eq!(
-            owner(&projects, Path::new("/tasks/pair-2")),
+            owner(&projects, Path::new("/tasks/pair-2"), every),
             Some(Path::new("/tasks/pair-2/work/app")),
             "a folder whose name begins like another's holds only its own"
         );
+    }
+
+    #[test]
+    fn owner_passes_over_the_projects_that_do_not_count() {
+        let projects: BTreeMap<PathBuf, Tracked> =
+            ["/code", "/code/app", "/code/app/wt", "/tasks/one/work/app"]
+                .into_iter()
+                .map(|path| (PathBuf::from(path), tracked(path)))
+                .collect();
+        let not_app = |tracked: &Tracked| !tracked.project.path.ends_with("app");
+        assert_eq!(
+            owner(&projects, Path::new("/code/app/src"), not_app),
+            Some(Path::new("/code")),
+            "the deepest project that counts"
+        );
+        assert_eq!(
+            owner(&projects, Path::new("/code/app/wt/src"), not_app),
+            Some(Path::new("/code/app/wt"))
+        );
+        assert_eq!(owner(&projects, Path::new("/tasks/one"), not_app), None);
     }
 
     /// A state reading the fixture `home`, with `projects` on its map.
@@ -539,6 +621,7 @@ mod tests {
         let roots = Roots {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -739,10 +822,51 @@ mod tests {
     }
 
     #[test]
+    fn a_subagent_in_a_scratch_folder_stands_on_its_card_and_elsewhere_while_it_has_none() {
+        let home = TempDir::new("state-subagents-scratch");
+        let carded = "/private/tmp/claude-501/-code-app/e26ca359";
+        let uncarded = "/private/tmp/claude-501/-code-app/0b1d4f00";
+        let (in_carded, in_uncarded) = (
+            "/private/tmp/claude-501/-code-app/e26ca359/scratchpad/r567",
+            "/private/tmp/claude-501/-code-app/0b1d4f00/scratchpad/probe",
+        );
+        session_with_subagents(&home, "/code/app", &[in_carded, in_uncarded]);
+        let mut state = state_with(&home, &["/code/app"]);
+        for (path, build_folders) in [(carded, &["scratchpad/r567/target"][..]), (uncarded, &[])] {
+            let mut tracked = tracked(path);
+            let project = &mut tracked.project;
+            project.scratch = Some(ScratchSpace {
+                session_id: path.rsplit('/').next().unwrap().to_string(),
+                started_in: "app".to_string(),
+            });
+            project.artifacts = build_folders
+                .iter()
+                .map(|dir| {
+                    crate::map::test_support::cargo_target(
+                        project.path.join(dir),
+                        Measurement::Pending,
+                    )
+                })
+                .collect();
+            state.projects.insert(PathBuf::from(path), tracked);
+        }
+
+        state.refresh_agents();
+
+        assert_eq!(
+            subagents_at(&state, Some(carded)),
+            [PathBuf::from(in_carded)]
+        );
+        assert_eq!(subagents_at(&state, None), [PathBuf::from(in_uncarded)]);
+        assert!(subagents_at(&state, Some(uncarded)).is_empty());
+    }
+
+    #[test]
     fn report_problems_replaces_only_the_sources_named_and_says_whether_they_changed() {
         let roots = Roots {
             home: PathBuf::from("/nonexistent/home"),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -773,6 +897,7 @@ mod tests {
         let roots = Roots {
             home: fixture.root().to_path_buf(),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -807,6 +932,7 @@ mod tests {
         let roots = Roots {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -834,6 +960,7 @@ mod tests {
         let roots = Roots {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());

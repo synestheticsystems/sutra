@@ -40,8 +40,10 @@ pub(super) struct State {
     home: PathBuf,
     /// The store edition, which reads only the folder the user granted.
     sandboxed: bool,
-    /// The folders the engine watches. Empty while the store edition has no folder granted.
+    /// The folders the engine walks. Empty while the store edition has no folder granted.
     roots: Vec<PathBuf>,
+    /// Claude Code's scratch root, which the engine reads beside them in the direct edition.
+    scratch: Option<PathBuf>,
     /// Why the folder granted on an earlier launch could not be reopened, until another is.
     lost_grant: Option<GrantError>,
     watching: Option<Watching>,
@@ -104,6 +106,7 @@ impl State {
             home: roots.home,
             sandboxed: roots.sandboxed,
             roots: roots.dirs,
+            scratch: roots.scratch,
             lost_grant,
             watching: None,
             cleaning: Cleaning::new(Threads::new(events.clone()), settings.keep_free_bytes),
@@ -329,6 +332,7 @@ impl State {
         let roots = Roots {
             home: self.home.clone(),
             dirs: self.roots.clone(),
+            scratch: self.scratch.clone(),
             sandboxed: self.sandboxed,
         };
         let options = self.settings.scan_options();

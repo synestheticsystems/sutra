@@ -8,9 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(crate) use claude::is_subagent_transcript;
 #[cfg(test)]
 pub(crate) use claude::{TestCall, write_test_subagent_acting, write_test_subagent_at_work};
+pub(crate) use claude::{is_subagent_transcript, working_directory_name};
 pub use session::{
     AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };

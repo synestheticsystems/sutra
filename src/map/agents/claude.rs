@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+pub(crate) use self::session_files::working_directory_name;
 use self::session_files::{session_folder, session_transcript};
 pub use self::session_model::SessionModels;
 pub use self::subagents::{Transcripts, is_subagent_transcript};

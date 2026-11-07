@@ -179,13 +179,19 @@ mod tests {
         let roots = Roots {
             home: PathBuf::from("/nonexistent/home"),
             dirs: Vec::new(),
+            scratch: None,
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
         for (n, path) in paths.iter().enumerate() {
             let path = PathBuf::from(path);
-            let mut project =
-                new_project(path.clone(), None, FolderAccess::Missing, &state.boundary);
+            let mut project = new_project(
+                path.clone(),
+                None,
+                None,
+                FolderAccess::Missing,
+                &state.boundary,
+            );
             project.access = FolderAccess::Readable;
             // Later paths are more recently active.
             project.last_activity = Some(at(n as u64));
