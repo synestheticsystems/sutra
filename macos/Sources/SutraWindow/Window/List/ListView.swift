@@ -64,6 +64,8 @@ private struct Rows: View {
                         GroupLineRow(line: line, fold: fold, dashboard: dashboard)
                     case .nested(let card, let guide):
                         NestedCardRow(model: card, guide: guide, dashboard: dashboard)
+                    case .docker(let card):
+                        DockerCardView(card: card)
                     case .elsewhere(let heading, let lines, let waiting):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
                     case .quietProjects(let open, let label, let tooltip):

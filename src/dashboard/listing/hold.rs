@@ -126,6 +126,7 @@ impl Hold {
         let row_place = |row: &SectionRow| match row {
             SectionRow::Project(card) => card_place(card),
             SectionRow::Group(group) => group.cards.iter().filter_map(card_place).min(),
+            SectionRow::Docker(docker) => place.get(docker.socket.as_path()).copied(),
         };
         keep_places(sorted, row_place)
             .into_iter()
@@ -134,7 +135,7 @@ impl Hold {
                     cards: keep_places(group.cards, card_place),
                     ..group
                 }),
-                SectionRow::Project(card) => SectionRow::Project(card),
+                row @ (SectionRow::Project(_) | SectionRow::Docker(_)) => row,
             })
             .collect()
     }

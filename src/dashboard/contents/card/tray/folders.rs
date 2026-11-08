@@ -10,9 +10,11 @@ use crate::dashboard::cleaning::CleanState;
 use crate::dashboard::format;
 use crate::map::{ArtifactDir, Measurement, Project};
 
+/// One entry of a tray's disk use after its total: a build folder, or on Docker's card one of the
+/// stores Docker keeps on disk. Its name keeps the word from when every entry was a folder.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct TrayFolder {
-    /// As `target/` reads.
+    /// As `target/` reads, or `volumes`.
     pub label: String,
     /// Its own size, and while cleaning, what is left of it.
     pub tooltip: String,
@@ -35,11 +37,11 @@ pub(super) enum Entry<'a> {
     Cleaned { dir: &'a ArtifactDir, left: u64 },
 }
 
-/// The least a measured build folder holds to earn a place on the tray. A `node_modules` of 100 MB
-/// beside a 46 GB `target/` is only noise.
+/// The least a measured build folder holds to earn a place on the tray, as one of Docker's stores
+/// does on its card. A `node_modules` of 100 MB beside a 46 GB `target/` is only noise.
 const WORTH_SHOWING_BYTES: u64 = 1 << 30;
 
-fn worth_showing(bytes: u64) -> bool {
+pub(in crate::dashboard::contents) fn worth_showing(bytes: u64) -> bool {
     bytes >= WORTH_SHOWING_BYTES
 }
 

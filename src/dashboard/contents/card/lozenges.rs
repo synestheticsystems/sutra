@@ -6,7 +6,7 @@
 //! folded line shows the lozenges of the cards it holds, so whatever serves in a card shows there
 //! too.
 
-mod containers;
+pub(in crate::dashboard::contents) mod containers;
 mod processes;
 mod units;
 
@@ -63,10 +63,10 @@ pub(in crate::dashboard::contents) fn lozenges(
     }
     lozenges.extend(processes::lozenges(&project.listening, &shown, ctx.home));
     shown.extend(project.listening.iter().flat_map(|process| process.ports()));
-    let containers = &project.containers;
+    let on = containers::CardOf::Project(&project.path);
     lozenges.extend(containers::lozenges(
-        containers,
-        &project.path,
+        &project.containers,
+        on,
         &shown,
         ctx.home,
     ));

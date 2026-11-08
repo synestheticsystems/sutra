@@ -1,13 +1,15 @@
-//! The orders the project list can take, as the toolbar names them.
+//! The orders the project list can take, as the toolbar names them, and where each puts Docker's
+//! card among the projects': by when its newest container was made, by its name, and by the disk
+//! Docker takes.
 
 use std::cmp::Reverse;
 use std::path::Path;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::focus::disk_bytes;
-use super::{SectionRow, group};
+use super::focus::{disk_bytes, docker_bytes};
+use super::{DOCKER, SectionRow, group};
 use crate::dashboard::SortOrder;
-use crate::map::{Project, Snapshot};
+use crate::map::{Docker, Project, Snapshot};
 
 /// How finely the Activity sort tells activity apart. Projects whose last activity falls in the
 /// same five minutes of the clock rank alike and stand in name order, so that agents at work in
@@ -53,6 +55,24 @@ impl SortOrder {
         }
     }
 
+    /// `rows`, laid out in this order, with Docker's card where this order puts it: after every row
+    /// that ranks before it or alike.
+    pub(super) fn place_docker<'a>(self, rows: &mut Vec<SectionRow<'a>>, docker: &'a Docker) {
+        let card = SectionRow::Docker(docker);
+        let at = match self {
+            SortOrder::Activity => {
+                let rank = card.activity_rank();
+                rows.partition_point(|row| row.activity_rank() <= rank)
+            }
+            SortOrder::Name => rows.partition_point(|row| row.name_key() <= card.name_key()),
+            SortOrder::Disk => {
+                let bytes = card.disk_bytes();
+                rows.partition_point(|row| row.disk_bytes() >= bytes)
+            }
+        };
+        rows.insert(at, card);
+    }
+
     /// `projects` in this order, every card alone, as the quiet section lists them in every sort.
     /// They arrive newest activity first, and the Disk sort is stable, so projects of the same size
     /// keep that order; it weighs `focus::disk_bytes`.
@@ -75,8 +95,56 @@ impl SortOrder {
 /// The slice of the clock (see `ACTIVITY_SLICE`) holding `project`'s last activity; `None`, which
 /// the Activity sort puts last, for a project with no activity known.
 pub(super) fn activity_slice(project: &Project) -> Option<u64> {
-    let since_epoch = project.last_activity?.duration_since(UNIX_EPOCH).ok()?;
+    slice_of(project.last_activity?)
+}
+
+/// The slice of the clock holding `at`.
+fn slice_of(at: SystemTime) -> Option<u64> {
+    let since_epoch = at.duration_since(UNIX_EPOCH).ok()?;
     Some(since_epoch.as_secs() / ACTIVITY_SLICE.as_secs())
+}
+
+impl<'a> SectionRow<'a> {
+    /// Where the Activity sort stands the row (see `activity_rank`): a card by its own activity, a
+    /// group by its newest card's, and Docker's card by when the newest container on it was made.
+    pub(super) fn activity_rank(&self) -> (Reverse<Option<u64>>, String, &'a Path) {
+        match self {
+            SectionRow::Project(project) => {
+                activity_rank(activity_slice(project), &project.name, &project.path)
+            }
+            SectionRow::Group(group) => {
+                let newest = group.cards.iter().map(|card| activity_slice(card)).max();
+                activity_rank(newest.flatten(), &group.name, group.parent.folder())
+            }
+            SectionRow::Docker(docker) => {
+                let newest = docker
+                    .containers
+                    .iter()
+                    .map(|container| container.created)
+                    .max();
+                activity_rank(newest.and_then(slice_of), DOCKER, &docker.socket)
+            }
+        }
+    }
+
+    /// Where the Name sort stands the row: by the name it goes by, ignoring case.
+    fn name_key(&self) -> String {
+        match self {
+            SectionRow::Project(project) => project.name.to_lowercase(),
+            SectionRow::Group(group) => group.name.to_lowercase(),
+            SectionRow::Docker(_) => DOCKER.to_lowercase(),
+        }
+    }
+
+    /// What the Disk sort weighs the row by: a card's folder, a group's cards between them, and
+    /// Docker's disk use.
+    fn disk_bytes(&self) -> u64 {
+        match self {
+            SectionRow::Project(project) => disk_bytes(project),
+            SectionRow::Group(group) => group.cards.iter().map(|card| disk_bytes(card)).sum(),
+            SectionRow::Docker(docker) => docker_bytes(docker),
+        }
+    }
 }
 
 /// Where the Activity sort stands a card, or a group, that goes by `name`, its newest activity in

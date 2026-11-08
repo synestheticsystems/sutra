@@ -18,6 +18,7 @@ pub use tray::{DiskUse, Tray, TrayFolder};
 
 pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};
+pub(super) use tray::worth_showing;
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

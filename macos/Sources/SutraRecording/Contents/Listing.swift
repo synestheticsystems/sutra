@@ -174,11 +174,14 @@ extension Project {
         let days = Int(focusRecent / 86_400)
         return switch sort {
         case .activity:
-            "No agent session, no dev-runner environment, and no activity in the last \(days) "
-                + "days. Scratch from Claude Code sessions that have ended waits here too."
+            "No agent session, no dev-runner environment, nothing listening on a port, no "
+                + "container running, and no activity in the last \(days) days. Scratch from "
+                + "Claude Code sessions that have ended waits here too, as does Docker's card "
+                + "while it shows no container."
         case .name, .disk:
-            "No agent session, no dev-runner environment, no activity in the last \(days) days, "
-                + "and less than \(Words.size(focusLargeBytes)) on disk"
+            "No agent session, no dev-runner environment, nothing listening on a port, no "
+                + "container running, no activity in the last \(days) days, and less than "
+                + "\(Words.size(focusLargeBytes)) on disk"
         }
     }
 

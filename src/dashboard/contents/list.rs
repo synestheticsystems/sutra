@@ -1,12 +1,14 @@
 //! The list, or what stands in its place: what the store edition needs before it can read
 //! anything, the wait for the first map, or why nothing is listed. Otherwise the rows: a card per
 //! project, or in the Activity sort the group of a parent's cards, under a line with its name and
-//! disk, then the agents working outside every project, and the row standing for the quiet
-//! projects.
+//! disk, and Docker's card among them, then the agents working outside every project, and the row
+//! standing for the quiet projects.
 
+mod docker;
 mod elsewhere;
 mod group;
 
+pub use docker::DockerCard;
 pub use elsewhere::ElsewhereLine;
 pub use group::{GroupFold, GroupLine, MoreUnits, Parent};
 
@@ -57,6 +59,13 @@ pub enum ListRow {
         // Boxed, as a line and what it holds dwarf the other rows; the window receives it as a
         // plain fold.
         fold: Box<GroupFold>,
+    },
+    /// Docker, on a card of its own, which the sort places among the projects' cards: the
+    /// containers running for no project, and the disk Docker takes. The window knows it as the
+    /// one Docker card there is.
+    Docker {
+        // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
+        card: Box<DockerCard>,
     },
     /// The agents working outside every project, under `heading`: a line for each session, in the
     /// map's order, then one for each other folder subagents work in, in the order of the first
@@ -119,6 +128,9 @@ fn list_row(row: &Row, listing: &Listing, folds: &Folds, cards: &CardContext) ->
             card: Box::new(card::card(project, Naming::Alone, map, cards)),
         },
         Row::Group(group) => group::row(group, map, folds, cards),
+        Row::Docker(docker) => ListRow::Docker {
+            card: Box::new(docker::card(docker, cards)),
+        },
         Row::Elsewhere(working) => ListRow::Elsewhere {
             heading: "Elsewhere".to_string(),
             lines: elsewhere::lines(working, cards),
@@ -169,12 +181,14 @@ fn what_makes_one_quiet(sort: SortOrder) -> String {
     let days = FOCUS_RECENT.as_secs() / 86_400;
     match sort {
         SortOrder::Activity => format!(
-            "No agent session, no dev-runner environment, and no activity in the last {days} \
-             days. Scratch from Claude Code sessions that have ended waits here too."
+            "No agent session, no dev-runner environment, nothing listening on a port, no \
+             container running, and no activity in the last {days} days. Scratch from Claude \
+             Code sessions that have ended waits here too, as does Docker's card while it shows \
+             no container."
         ),
         SortOrder::Name | SortOrder::Disk => format!(
-            "No agent session, no dev-runner environment, no activity in the last {days} days, \
-             and less than {} on disk",
+            "No agent session, no dev-runner environment, nothing listening on a port, no \
+             container running, no activity in the last {days} days, and less than {} on disk",
             format::bytes(LARGE_FOLDER_BYTES),
         ),
     }
@@ -391,11 +405,14 @@ mod tests {
         assert_eq!(how_many(764), "764 quiet");
         assert_eq!(
             what_makes_one_quiet(SortOrder::Activity),
-            "No agent session, no dev-runner environment, and no activity in the last 7 days. \
-             Scratch from Claude Code sessions that have ended waits here too."
+            "No agent session, no dev-runner environment, nothing listening on a port, no \
+             container running, and no activity in the last 7 days. Scratch from Claude Code \
+             sessions that have ended waits here too, as does Docker's card while it shows no \
+             container."
         );
-        let by_size = "No agent session, no dev-runner environment, no activity in the last 7 \
-                       days, and less than 1.1 GB on disk";
+        let by_size = "No agent session, no dev-runner environment, nothing listening on a port, \
+                       no container running, no activity in the last 7 days, and less than 1.1 \
+                       GB on disk";
         assert_eq!(what_makes_one_quiet(SortOrder::Name), by_size);
         assert_eq!(what_makes_one_quiet(SortOrder::Disk), by_size);
     }

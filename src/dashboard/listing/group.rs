@@ -14,7 +14,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use super::SectionRow;
-use super::sort::{activity_rank, activity_slice};
+use super::sort::activity_slice;
 use crate::map::{Project, RepoInfo, ScratchSpace, Snapshot};
 
 /// The cards that share one parent on the list, under the line that names it.
@@ -94,15 +94,7 @@ pub(super) fn gather<'a>(projects: Vec<&'a Project>, map: &'a Snapshot) -> Vec<S
     }
     let groups = gatherings.into_values().map(Gathering::into_group);
     rows.extend(groups.map(SectionRow::Group));
-    rows.sort_by_cached_key(|row| match row {
-        SectionRow::Project(project) => {
-            activity_rank(activity_slice(project), &project.name, &project.path)
-        }
-        SectionRow::Group(group) => {
-            let newest = group.cards.iter().map(|card| activity_slice(card)).max();
-            activity_rank(newest.flatten(), &group.name, group.parent.folder())
-        }
-    });
+    rows.sort_by_cached_key(SectionRow::activity_rank);
     rows
 }
 
@@ -221,6 +213,7 @@ mod tests {
         rows.map(|row| match row {
             SectionRow::Group(group) => group,
             SectionRow::Project(alone) => panic!("{} stands alone", alone.name),
+            SectionRow::Docker(_) => panic!("gathering makes no Docker card"),
         })
         .collect()
     }

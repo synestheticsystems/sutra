@@ -22,6 +22,8 @@ public enum Row: Identifiable, Equatable {
     case groupLine(line: GroupLine, fold: Fold)
     /// A card of an open group, under the group's line.
     case nested(CardModel, guide: GuideStretch)
+    /// Docker, on a card of its own: the containers it runs for no project, and its disk use.
+    case docker(DockerCard)
     case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool)
     case quietProjects(open: Bool, label: String, tooltip: String)
 
@@ -29,6 +31,8 @@ public enum Row: Identifiable, Equatable {
         /// A card's, alone or nested.
         case card(path: String)
         case groupLine(parent: Parent)
+        /// The one Docker card there is.
+        case docker
         case elsewhere
         case quietProjects
     }
@@ -37,6 +41,7 @@ public enum Row: Identifiable, Equatable {
         switch self {
         case .card(let model), .nested(let model, _): .card(path: model.path)
         case .groupLine(let line, _): .groupLine(parent: line.parent)
+        case .docker: .docker
         case .elsewhere: .elsewhere
         case .quietProjects: .quietProjects
         }
@@ -50,6 +55,7 @@ public enum Row: Identifiable, Equatable {
             lhsLine == rhsLine && lhsFold == rhsFold
         case (.nested(let lhs, let lhsGuide), .nested(let rhs, let rhsGuide)):
             lhs === rhs && lhsGuide == rhsGuide
+        case (.docker(let lhs), .docker(let rhs)): lhs == rhs
         case (.elsewhere(let lhsHeading, let lhsLines, let lhsWaiting),
               .elsewhere(let rhsHeading, let rhsLines, let rhsWaiting)):
             lhsHeading == rhsHeading && lhsLines == rhsLines && lhsWaiting == rhsWaiting
@@ -151,6 +157,8 @@ struct CardModels {
                         moreUnits: moreUnits
                     )
                     shown.append(.groupLine(line: line, fold: fold))
+                case .docker(let card):
+                    shown.append(.docker(card))
                 case .elsewhere(let heading, let lines, let waiting):
                     shown.append(.elsewhere(heading: heading, lines: lines, waiting: waiting))
                 case .quietProjects(_, let open, let label, let tooltip):

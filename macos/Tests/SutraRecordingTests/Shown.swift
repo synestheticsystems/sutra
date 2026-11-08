@@ -6,8 +6,8 @@ let takeOpening = [
 ]
 
 /// What the list in `contents` shows, a few words a row, as the core's own tests write it: a
-/// card's name, a group's line as `name: card, card` or `name: folded`, and the quiet row as
-/// `quiet:<count>`.
+/// card's name, a group's line as `name: card, card` or `name: folded`, Docker's card as `docker`,
+/// and the quiet row as `quiet:<count>`.
 func shown(_ contents: WindowContents) -> [String] {
     guard case .rows(let rows) = contents.list else { return [] }
     return rows.map { row in
@@ -18,6 +18,8 @@ func shown(_ contents: WindowContents) -> [String] {
             "\(line.name): \(cards.map(\.name).joined(separator: ", "))"
         case .group(let line, .folded):
             "\(line.name): folded"
+        case .docker:
+            "docker"
         case .elsewhere:
             "elsewhere"
         case .quietProjects(let count, _, _, _):
@@ -33,7 +35,7 @@ func card(at path: String, in contents: WindowContents) -> Card? {
         switch row {
         case .card(let card): [card]
         case .group(_, .open(let cards)): cards
-        case .group, .elsewhere, .quietProjects: []
+        case .group, .docker, .elsewhere, .quietProjects: []
         }
     }
     return cards.first { $0.path == path }

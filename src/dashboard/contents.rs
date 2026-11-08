@@ -27,7 +27,7 @@ pub use card::{
 };
 pub use dialog::Dialog;
 pub use footer::Footer;
-pub use list::{ElsewhereLine, GroupFold, GroupLine, List, ListRow, MoreUnits, Parent};
+pub use list::{DockerCard, ElsewhereLine, GroupFold, GroupLine, List, ListRow, MoreUnits, Parent};
 pub use menu::{MenuAction, MenuEntry};
 pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings};
 pub use toolbar::{CleanControl, DiskGauge, GaugeLook, SortChoice, SortControl, Toolbar};

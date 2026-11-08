@@ -3,7 +3,8 @@
 
 use std::path::Path;
 
-use crate::map::{Project, ScratchSpace};
+use super::DOCKER;
+use crate::map::{Docker, Project, ScratchSpace};
 
 /// Typed text matched against a project's name, the name its card's chip or its parent's line
 /// shows beside it (a worktree's branch, a scratch folder's session), and its path, ignoring case.
@@ -30,6 +31,14 @@ impl Query {
             || branch.is_some_and(|branch| self.matches(branch))
             || session.is_some_and(|session| self.matches(&session))
             || self.admits_folder(&project.path)
+    }
+
+    /// Whether the query matches Docker's card: its name, or a container's on it, or its image.
+    pub(super) fn admits_docker(&self, docker: &Docker) -> bool {
+        let mut containers = docker.containers.iter();
+        self.matches(DOCKER)
+            || containers
+                .any(|container| self.matches(&container.name) || self.matches(&container.image))
     }
 
     /// Whether the query matches a folder's path, as it does for the folder an agent outside every

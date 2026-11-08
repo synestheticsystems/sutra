@@ -162,7 +162,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::super::fixtures::{
-        agent, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+        agent, docker, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
     };
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
@@ -192,6 +192,28 @@ mod tests {
 
         arrangement.pointer_left();
         assert_eq!(listed(&b_active, &arrangement), ["b", "a"], "re-sorted");
+    }
+
+    #[test]
+    fn while_the_pointer_is_over_the_list_dockers_card_keeps_its_place_as_a_cards_does() {
+        let with = |containers: &[(&str, u64)]| Snapshot {
+            docker: Some(docker(containers, 0)),
+            ..snapshot(vec![project("a", 10), project("b", 20)], vec![])
+        };
+        let before = with(&[("pg", 15)]);
+        let mut arrangement = pointed_at(&before);
+        assert_eq!(listed(&before, &arrangement), ["a", "docker", "b"]);
+
+        let started = with(&[("pg", 15), ("cache", 0)]);
+        arrangement.observe(&started, &cleaning(), now());
+        assert_eq!(listed(&started, &arrangement), ["a", "docker", "b"]);
+
+        arrangement.pointer_left();
+        assert_eq!(
+            listed(&started, &arrangement),
+            ["docker", "a", "b"],
+            "re-sorted"
+        );
     }
 
     #[test]

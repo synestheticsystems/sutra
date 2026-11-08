@@ -11,29 +11,36 @@ use super::{UnitLook, UnitLozenge, link, reach};
 use crate::dashboard::format;
 use crate::map::docker::{Container, PublishedPort};
 
-/// The lozenges of `containers`, in their order, on the card of the project at `project`, leaving
-/// out each port in `shown`.
-pub(super) fn lozenges(
+/// The card the lozenges stand on, which says which of a container's folders its tooltip names.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::dashboard::contents) enum CardOf<'a> {
+    /// The card of the project at this folder: the first of the container's folders there.
+    Project(&'a Path),
+    /// Docker's own card, for the containers for no project: the first of their folders, if any.
+    Docker,
+}
+
+/// The lozenges of `containers`, in their order, on the card `on`, leaving out each port in
+/// `shown`.
+pub(in crate::dashboard::contents) fn lozenges(
     containers: &[Container],
-    project: &Path,
+    on: CardOf,
     shown: &BTreeSet<u16>,
     home: &Path,
 ) -> Vec<UnitLozenge> {
     containers
         .iter()
-        .flat_map(|container| of(container, project, shown, home))
+        .flat_map(|container| of(container, on, shown, home))
         .collect()
 }
 
 /// The lozenges of `container`: one for each TCP port it publishes but those in `shown`, or one
 /// with no port when it publishes none.
-fn of(
-    container: &Container,
-    project: &Path,
-    shown: &BTreeSet<u16>,
-    home: &Path,
-) -> Vec<UnitLozenge> {
-    let folder = container.folder_in(project);
+fn of(container: &Container, on: CardOf, shown: &BTreeSet<u16>, home: &Path) -> Vec<UnitLozenge> {
+    let folder = match on {
+        CardOf::Project(project) => container.folder_in(project),
+        CardOf::Docker => container.folders().next(),
+    };
     let folder = folder.map(|folder| format::tilde(folder, home));
     let named = format!("Container {}, of {}", container.name, container.image);
     let tcp: Vec<&PublishedPort> = container.ports.iter().filter(|port| !port.udp).collect();
@@ -127,8 +134,8 @@ mod tests {
             vec![published(3306, 3306, &["0.0.0.0", "::"], false)],
         );
 
-        let app = Path::new("/Users/dev/code/app");
-        let [lozenge] = lozenges(&[database], app, &BTreeSet::new(), Path::new(HOME))
+        let on_app = CardOf::Project(Path::new("/Users/dev/code/app"));
+        let [lozenge] = lozenges(&[database], on_app, &BTreeSet::new(), Path::new(HOME))
             .try_into()
             .unwrap();
 
@@ -165,7 +172,8 @@ mod tests {
         let shown = BTreeSet::from([8080]);
         let core = Path::new("/Users/dev/GT/repo/gt-core");
 
-        let lozenges = lozenges(&[payment, web], core, &shown, Path::new(HOME));
+        let on_core = CardOf::Project(core);
+        let lozenges = lozenges(&[payment, web], on_core, &shown, Path::new(HOME));
 
         let [lozenge] = lozenges.as_slice() else {
             panic!("payment's alone, :8080 shown already: {lozenges:?}");
@@ -181,6 +189,22 @@ mod tests {
              publishing no TCP port\n\
              ~/GT/repo/gt-core"
         );
+    }
+
+    #[test]
+    fn on_dockers_card_a_container_names_the_first_folder_it_is_for_none_of_which_a_project_holds()
+    {
+        let api = container(
+            "api",
+            "gcr.io/retailops-1/gt-dispatcher:2020-06-15",
+            &["/Users/dev/GT/backplane", "/Users/dev/GT/private/api"],
+            vec![published(8440, 8443, &["0.0.0.0", "::"], false)],
+        );
+
+        let lozenges = lozenges(&[api], CardOf::Docker, &BTreeSet::new(), Path::new(HOME));
+
+        let tooltip = &lozenges[0].tooltip;
+        assert!(tooltip.ends_with("\n~/GT/backplane"), "{tooltip}");
     }
 
     #[test]

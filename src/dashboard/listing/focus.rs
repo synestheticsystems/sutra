@@ -7,7 +7,7 @@
 use std::time::{Duration, SystemTime};
 
 use crate::dashboard::SortOrder;
-use crate::map::{LARGE_FOLDER_BYTES, Project};
+use crate::map::{Docker, LARGE_FOLDER_BYTES, Project};
 
 /// How recent a project's last activity must be to keep it in focus. A first guess.
 pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -37,6 +37,24 @@ pub(super) fn in_focus(project: &Project, sort: SortOrder, now: SystemTime) -> b
                 recent || disk_bytes(project) >= LARGE_FOLDER_BYTES
             }
         }
+}
+
+/// Whether Docker's card belongs in the focused view of `sort`, as a project's would: in every sort
+/// while a container runs on it, and in the Name and Disk sorts also while Docker takes
+/// `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as for a scratch folder
+/// whose session has ended.
+pub(super) fn docker_in_focus(docker: &Docker, sort: SortOrder) -> bool {
+    !docker.containers.is_empty()
+        || match sort {
+            SortOrder::Activity => false,
+            SortOrder::Name | SortOrder::Disk => docker_bytes(docker) >= LARGE_FOLDER_BYTES,
+        }
+}
+
+/// What the Disk sort and the focus rule weigh of Docker: all it takes, as its engine last said,
+/// and nothing until it has.
+pub(super) fn docker_bytes(docker: &Docker) -> u64 {
+    docker.disk.map_or(0, |disk| disk.bytes())
 }
 
 /// Whether `project` is a scratch folder whose session has ended, so that nothing will build in it

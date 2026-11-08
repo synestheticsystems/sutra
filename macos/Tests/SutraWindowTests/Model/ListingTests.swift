@@ -30,6 +30,20 @@ struct ListingTests {
         #expect(rows == ["line app, folded"])
     }
 
+    @Test func dockersCardIsARowOfItsOwnKnownAsTheOneDockerCard() {
+        let docker = DockerCard(
+            name: "Docker", nameTooltip: "", age: nil, units: [], tray: nil,
+            location: "~/.docker/run/docker.sock"
+        )
+        var models = CardModels()
+        guard case .rows(let rows) = models.listing(of: .rows(rows: [.docker(card: docker)])) else {
+            Issue.record("a list of rows")
+            return
+        }
+        #expect(rows.map(\.id) == [.docker])
+        #expect(rows == [.docker(docker)])
+    }
+
     @Test func aCardKeepsItsModelAsItMovesIntoAGroupAndOutAgain() throws {
         var models = CardModels()
         let alone = models.listing(of: .rows(rows: [.card(card: card("/code/app"))]))
@@ -79,6 +93,8 @@ struct ListingTests {
             case .nested(let model, let guide):
                 "nested \(model.path)" + (guide.first ? ", first" : "")
                     + (guide.dotted ? ", dotted" : ", unbroken")
+            case .docker:
+                "docker"
             case .elsewhere:
                 "elsewhere"
             case .quietProjects:
@@ -93,7 +109,7 @@ struct ListingTests {
         return rows.lazy.compactMap { row -> CardModel? in
             switch row {
             case .card(let model), .nested(let model, _): model.path == path ? model : nil
-            case .groupLine, .elsewhere, .quietProjects: nil
+            case .groupLine, .docker, .elsewhere, .quietProjects: nil
             }
         }.first
     }
