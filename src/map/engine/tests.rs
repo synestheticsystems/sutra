@@ -84,6 +84,7 @@ fn roots(fixture: &TempDir) -> Roots {
         home: fixture.root().to_path_buf(),
         dirs: vec![fixture.root().to_path_buf()],
         scratch: None,
+        docker: Vec::new(),
         sandboxed: false,
     }
 }

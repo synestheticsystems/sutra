@@ -198,6 +198,7 @@ mod tests {
             home: PathBuf::from("/nonexistent/home"),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());

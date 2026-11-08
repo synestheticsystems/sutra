@@ -2,7 +2,7 @@
 //!
 //! A project is a git worktree (main or linked), any folder a dev-runner environment names, or one
 //! of a Claude Code session's scratch folders that holds a build folder or a lot of disk. One
-//! `Project` row merges five sources:
+//! `Project` row merges six sources:
 //!   - git: branch, head and the time of the last git activity, read from the worktree's git dir
 //!     without ever writing to it (a write would show up in our own file watcher);
 //!   - dev-runner environments, from `~/.dev-runner/` and from the project's own `.dev-runner/`;
@@ -10,6 +10,9 @@
 //!     and the subagents at work inside it, whichever session they work for;
 //!   - the user's processes that listen for TCP connections and run inside the project, as libproc
 //!     tells of them, in the direct edition alone (see `processes`);
+//!   - the Docker containers running for the project, as Docker's engine tells of them through its
+//!     socket, in the direct edition alone (see `docker`), which also keeps those for no project,
+//!     and Docker's disk use, for a card of Docker's own;
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
@@ -22,6 +25,7 @@ pub mod agents;
 pub mod clean;
 pub mod devrunner;
 pub mod disk;
+pub mod docker;
 pub mod engine;
 pub mod grant;
 pub mod processes;
@@ -41,6 +45,7 @@ pub use agents::{
     AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };
 pub use disk::{DirUsage, Measurement};
+pub use docker::Docker;
 pub use project::{
     ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, KeptOutBy,
     LARGE_FOLDER_BYTES, Project, RepoInfo, ScratchSpace,
@@ -108,6 +113,9 @@ pub struct Snapshot {
     /// Subagents at work outside every known project, which holds none of the folders they may be
     /// said to work in (see `Subagent::folders`), whichever session they work for, by session.
     pub unplaced_subagents: Vec<SubagentWithParent>,
+    /// Docker, with the containers running in no project's folder, as its engine last said;
+    /// `None` while Docker is not here, or has said nothing yet (see `docker`).
+    pub docker: Option<Docker>,
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.
     pub problems: Vec<SourceProblem>,
@@ -233,6 +241,14 @@ pub enum Source {
     /// The user's processes, which macOS would not list, so no port they listen on shows. The
     /// problem names no path.
     Processes,
+    /// Docker, through the socket the problem names, which refused Sutra, or whose engine failed to
+    /// answer: with an error status, which reads as `Other`, with what cannot be read, which reads
+    /// as `InvalidData`, or not in time. Its containers do not show meanwhile. Docker not running,
+    /// or not installed, is no problem.
+    Docker,
+    /// Docker's disk use, which its engine would not give, failing as `Docker` does. Its containers
+    /// still show, and its card the disk use it gave last.
+    DockerDiskUse,
     /// A file watcher could not start, or could not watch a root or a folder outside the roots that
     /// the map needs file events from. The map then misses file changes there and refreshes only
     /// what its 2 s tick re-reads.
@@ -241,9 +257,9 @@ pub enum Source {
 
 impl Source {
     /// Whether the source tells what is at work in a project: failing to read it may hide an agent,
-    /// a running environment, a server or a project's latest activity. Discovery failing only loses folders,
-    /// or the name of a session that has ended, a subagent's meta file only its name, and a
-    /// session's transcript only its model.
+    /// a running environment, a server, a container or a project's latest activity. Discovery
+    /// failing only loses folders, or the name of a session that has ended, a subagent's meta file
+    /// only its name, a session's transcript only its model, and Docker's disk use only that.
     pub fn tells_what_is_at_work(self) -> bool {
         match self {
             Source::Registry
@@ -252,26 +268,33 @@ impl Source {
             | Source::ClaudeSessionFile
             | Source::CodexDatabase
             | Source::Processes
+            | Source::Docker
             | Source::Watcher => true,
-            Source::Scan | Source::ClaudeSubagentMeta | Source::ClaudeSessionTranscript => false,
+            Source::Scan
+            | Source::ClaudeSubagentMeta
+            | Source::ClaudeSessionTranscript
+            | Source::DockerDiskUse => false,
         }
     }
 
     /// Whether the source alone tells of a kind of thing: Claude Code's sessions, Codex's
     /// threads, the environments registered in `~/.dev-runner/`, the ports the user's processes
-    /// listen on. One that cannot be read hides that kind from the map whole, where discovery or
-    /// the watcher failing, or one environment's or one session's file, loses only some of it.
+    /// listen on, Docker's containers. One that cannot be read hides that kind from the map whole,
+    /// where discovery or the watcher failing, or one environment's or one session's file, loses
+    /// only some of it.
     pub fn is_sole_source(self) -> bool {
         match self {
             Source::Registry
             | Source::ClaudeSessions
             | Source::CodexDatabase
-            | Source::Processes => true,
+            | Source::Processes
+            | Source::Docker => true,
             Source::Scan
             | Source::EnvironmentState
             | Source::ClaudeSessionFile
             | Source::ClaudeSubagentMeta
             | Source::ClaudeSessionTranscript
+            | Source::DockerDiskUse
             | Source::Watcher => false,
         }
     }

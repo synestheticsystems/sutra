@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::clean::CargoEnv;
+use super::docker::Container;
 use super::processes::ListeningProcess;
 use super::scan::Boundary;
 use super::{
@@ -283,6 +284,7 @@ pub(crate) fn project_at(path: impl Into<PathBuf>) -> Project {
         subagents: Vec::new(),
         environment: None,
         listening: Vec::new(),
+        containers: Vec::new(),
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access: FolderAccess::Readable,
@@ -359,6 +361,19 @@ pub(crate) fn listening_in(
     }
 }
 
+/// The running container `name` of `postgres:17`, bind-mounting `folder`, publishing no port.
+pub(crate) fn container_for(folder: impl Into<PathBuf>, name: &str) -> Container {
+    Container {
+        id: name.to_string(),
+        name: name.to_string(),
+        image: "postgres:17".to_string(),
+        compose_folder: None,
+        bound: vec![folder.into()],
+        ports: Vec::new(),
+        created: UNIX_EPOCH,
+    }
+}
+
 /// A map of `projects`, in the order given, under the one root `/code`, generated at the epoch,
 /// with nothing else on it.
 pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
@@ -370,6 +385,7 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
         projects,
         unplaced_agents: Vec::new(),
         unplaced_subagents: Vec::new(),
+        docker: None,
         problems: Vec::new(),
         scan: ScanStats::default(),
         generated_at: UNIX_EPOCH,

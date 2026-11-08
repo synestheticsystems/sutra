@@ -365,9 +365,10 @@ struct TrackedFolders {
 
 /// Whether `project` has a card on the map. A scratch folder earns one while something works in it
 /// (see `Project::is_at_work`): an agent standing on it, a session or a subagent at work there (see
-/// `Place`), or a dev-runner environment describing it or a process listening in it, whose servers
-/// would show nowhere else. It earns one too by holding a build folder outside every worktree on
-/// the map, which keeps its own, or `LARGE_FOLDER_BYTES` without one; every other project has one.
+/// `Place`), or a dev-runner environment describing it, a process listening in it or a container
+/// running for it, whose servers would show nowhere else. It earns one too by holding a build
+/// folder outside every worktree on the map, which keeps its own, or `LARGE_FOLDER_BYTES` without
+/// one; every other project has one.
 /// The session whose scratch it is earns it none by running: the session stands where it works.
 pub(super) fn earns_a_card(project: &Project) -> bool {
     let large = || {
@@ -470,6 +471,7 @@ mod tests {
             home: fixture.dir("home"),
             dirs: vec![fixture.path("home")],
             scratch: Some(fixture.path("claude-501")),
+            docker: Vec::new(),
             sandboxed: false,
         };
         State::new(&roots, &ScanOptions::default())

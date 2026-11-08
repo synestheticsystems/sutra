@@ -3,11 +3,10 @@
 //! project's folder is left off the map: most are apps and their helpers, which run in `/` or in
 //! their own containers, and would bury the projects.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use super::State;
-use super::tracked::Tracked;
+use super::{State, holder};
 use crate::map::processes::{self, ListeningProcess};
 use crate::map::{Source, SourceProblem};
 
@@ -49,20 +48,15 @@ impl State {
     }
 }
 
-/// The deepest project on the map holding `folder`, itself included.
-fn holder<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, folder: &Path) -> Option<&'a Path> {
-    let mut held = folder
-        .ancestors()
-        .filter_map(|ancestor| projects.get_key_value(ancestor));
-    held.next().map(|(path, _)| path.as_path())
-}
-
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::{Ipv4Addr, TcpListener};
+    use std::path::Path;
 
     use super::*;
     use crate::map::ScanOptions;
+    use crate::map::engine::state::tracked::Tracked;
     use crate::map::grant::Roots;
     use crate::map::scan::Boundary;
 
@@ -76,30 +70,13 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn a_folder_belongs_to_the_deepest_project_holding_it_and_to_none_when_none_holds_it() {
-        let projects = projects(&[Path::new("/code/app"), Path::new("/code/app/.claude/wt")]);
-        let holder = |folder: &str| holder(&projects, Path::new(folder));
-        assert_eq!(holder("/code/app/web"), Some(Path::new("/code/app")));
-        assert_eq!(holder("/code/app"), Some(Path::new("/code/app")));
-        assert_eq!(
-            holder("/code/app/.claude/wt/server"),
-            Some(Path::new("/code/app/.claude/wt"))
-        );
-        assert_eq!(
-            holder("/code"),
-            None,
-            "a folder holding a project is no project's"
-        );
-        assert_eq!(holder("/"), None);
-    }
-
     /// A map of no root, under a home that is no folder, holding `projects` alone.
     fn state_holding(projects: &[&Path]) -> State {
         let roots = Roots {
             home: PathBuf::from("/nonexistent/home"),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());

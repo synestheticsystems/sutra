@@ -21,7 +21,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
-use libproc::ProcessId;
+pub(crate) use libproc::ProcessId;
 
 /// One of the user's processes listening for TCP connections, in the folder it runs in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +108,45 @@ pub fn listening(
     Ok(Vec::new())
 }
 
+/// The process serving the Unix socket at `socket`, as long as it runs: connected to, asked which
+/// process accepted, and let go, with nothing sent, so that what serves the socket is told nothing.
+#[cfg(target_os = "macos")]
+pub(crate) fn server_of(socket: &Path) -> io::Result<ProcessId> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    let connection = UnixStream::connect(socket)?;
+    let mut pid: libc::pid_t = 0;
+    let mut size = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: `pid` holds `size` bytes, and the descriptor is the connection's, open throughout.
+    let failed = unsafe {
+        libc::getsockopt(
+            connection.as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut size,
+        )
+    } != 0;
+    if failed {
+        return Err(io::Error::last_os_error());
+    }
+    let pid = u32::try_from(pid).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    // Ended since it accepted: nothing serves the socket now.
+    let ended = || io::Error::from(io::ErrorKind::ConnectionRefused);
+    libproc::name_and_id(pid)
+        .map(|(_, id)| id)
+        .ok_or_else(ended)
+}
+
+/// Where `process` listens for TCP connections while it runs; `None` once it has ended.
+#[cfg(target_os = "macos")]
+pub(crate) fn sockets_of(process: ProcessId) -> Option<BTreeSet<SocketAddr>> {
+    let (_, running) = libproc::name_and_id(process.pid())?;
+    (running == process)
+        .then(|| libproc::listening_sockets(process.pid(), &mut libproc::Descriptors::default()))
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
@@ -175,5 +214,23 @@ mod tests {
         assert_eq!(found.command.as_deref(), Some("as the last pass found it"));
         listening(|_| false, &mut last_read).unwrap();
         assert!(last_read.commands.is_empty(), "nothing was found listening");
+    }
+
+    #[test]
+    fn the_server_of_a_unix_socket_is_the_process_that_accepts_and_its_ports_are_where_it_listens()
+    {
+        let folder = crate::map::test_support::TempDir::new("processes-server-of");
+        let socket = folder.path("served.sock");
+        let _served = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let tcp = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+
+        let server = server_of(&socket).unwrap();
+
+        let (_, me) = libproc::name_and_id(std::process::id()).unwrap();
+        assert_eq!(server, me, "this test process accepts on the socket");
+        let sockets = sockets_of(server).unwrap();
+        assert!(sockets.contains(&tcp.local_addr().unwrap()), "{sockets:?}");
+        let gone = server_of(&folder.path("unserved.sock")).unwrap_err();
+        assert_eq!(gone.kind(), io::ErrorKind::NotFound);
     }
 }

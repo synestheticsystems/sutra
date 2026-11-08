@@ -2,6 +2,7 @@
 //! holding what each source contributed, so a refresh of one source leaves the others alone.
 
 mod artifacts;
+mod containers;
 mod listening;
 mod measurements;
 mod placement;
@@ -19,6 +20,7 @@ use rayon::prelude::*;
 
 use super::route::Index;
 use crate::map::devrunner::FolderEnvironments;
+use crate::map::docker::{self, Container};
 use crate::map::grant::Roots;
 use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
@@ -39,6 +41,8 @@ pub(super) struct State {
     /// Claude Code's scratch root, whose sessions' scratch folders the map holds as projects of
     /// their own (see `scratch`), when this edition reads it.
     scratch_root: Option<PathBuf>,
+    /// The sockets Docker may be served on, none in the store edition (see `Roots::docker`).
+    docker_sockets: Vec<PathBuf>,
     sandboxed: bool,
     /// What every source may touch, discovery's walk included, built from the roots, the home
     /// folder and the scan options, and kept up with what macOS answers about the private folders.
@@ -48,6 +52,10 @@ pub(super) struct State {
     projects: BTreeMap<PathBuf, Tracked>,
     unplaced_agents: Vec<AgentSession>,
     unplaced_subagents: Vec<SubagentWithParent>,
+    /// What Docker is, as its reader last found it.
+    docker: docker::Reading,
+    /// The containers Docker said were running that are for no project on the map, by name.
+    unplaced_containers: Vec<Container>,
     /// What each source reported when it was last read, ordered by source.
     problems: Vec<SourceProblem>,
     /// What the last rediscovery could not read, which the problems of `Source::Scan` hold with the
@@ -78,10 +86,13 @@ impl State {
             home,
             roots: dirs,
             scratch_root,
+            docker_sockets: roots.docker.clone(),
             sandboxed: roots.sandboxed,
             projects: BTreeMap::new(),
             unplaced_agents: Vec::new(),
             unplaced_subagents: Vec::new(),
+            docker: docker::Reading::Away,
+            unplaced_containers: Vec::new(),
             problems: Vec::new(),
             unread_by_rediscovery: Vec::new(),
             state_folders: Vec::new(),
@@ -98,6 +109,11 @@ impl State {
     /// Running inside the App Sandbox, as the store edition does.
     pub(super) fn is_sandboxed(&self) -> bool {
         self.sandboxed
+    }
+
+    /// The sockets Docker may be served on, in the order tried; none in the store edition.
+    pub(super) fn docker_sockets(&self) -> &[PathBuf] {
+        &self.docker_sockets
     }
 
     pub(super) fn scratch_root(&self) -> Option<&Path> {
@@ -462,6 +478,7 @@ impl State {
             projects,
             unplaced_agents: self.unplaced_agents.clone(),
             unplaced_subagents: self.unplaced_subagents.clone(),
+            docker: self.docker_on_the_map(),
             problems: self.problems.clone(),
             scan: self.scan.clone(),
             generated_at: SystemTime::now(),
@@ -497,6 +514,7 @@ fn new_project(
         subagents: Vec::new(),
         environment: None,
         listening: Vec::new(),
+        containers: Vec::new(),
         artifacts: Vec::new(),
         own_files: Measurement::Pending,
         access,
@@ -508,10 +526,7 @@ fn new_project(
 /// working directory, one level above the worktree the task checks out in it (`<task>/work/<repo>`).
 /// A folder holding several projects is no one project's.
 fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option<&'a Path> {
-    if let Some(holder) = path
-        .ancestors()
-        .find(|folder| projects.contains_key(*folder))
-    {
+    if let Some(holder) = holder(projects, path) {
         return Some(holder);
     }
     // Paths order by component, so the projects inside `path` follow it in a run.
@@ -523,6 +538,15 @@ fn owner<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, path: &'a Path) -> Option
         (Some(only), None) => Some(only),
         _ => None,
     }
+}
+
+/// The deepest project on the map holding `folder`, itself included: where a process running in
+/// it, or a container for it, shows.
+fn holder<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, folder: &Path) -> Option<&'a Path> {
+    let mut held = folder
+        .ancestors()
+        .filter_map(|ancestor| projects.get_key_value(ancestor));
+    held.next().map(|(path, _)| path.as_path())
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -552,6 +576,27 @@ mod tests {
             inode: None,
             unlisted: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_folder_is_held_by_the_deepest_project_holding_it_and_by_none_when_none_holds_it() {
+        let projects: BTreeMap<PathBuf, Tracked> = ["/code/app", "/code/app/.claude/wt"]
+            .into_iter()
+            .map(|path| (PathBuf::from(path), tracked(path)))
+            .collect();
+        let holder = |folder: &str| holder(&projects, Path::new(folder));
+        assert_eq!(holder("/code/app/web"), Some(Path::new("/code/app")));
+        assert_eq!(holder("/code/app"), Some(Path::new("/code/app")));
+        assert_eq!(
+            holder("/code/app/.claude/wt/server"),
+            Some(Path::new("/code/app/.claude/wt"))
+        );
+        assert_eq!(
+            holder("/code"),
+            None,
+            "a folder holding a project is no project's"
+        );
+        assert_eq!(holder("/"), None);
     }
 
     #[test]
@@ -602,6 +647,7 @@ mod tests {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -876,6 +922,7 @@ mod tests {
             home: PathBuf::from("/nonexistent/home"),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -907,6 +954,7 @@ mod tests {
             home: fixture.root().to_path_buf(),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -942,6 +990,7 @@ mod tests {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());
@@ -970,6 +1019,7 @@ mod tests {
             home: home.root().to_path_buf(),
             dirs: Vec::new(),
             scratch: None,
+            docker: Vec::new(),
             sandboxed: false,
         };
         let mut state = State::new(&roots, &ScanOptions::default());

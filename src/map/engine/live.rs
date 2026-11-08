@@ -21,6 +21,7 @@ use super::sizing::{Job, Measured, Sizing, Urgency};
 use super::state::State;
 use super::timers::{PROCESSES, TICK, Timers, WALK_AFTER_LOST_EVENTS};
 use super::watch::Watches;
+use crate::map::docker;
 use crate::map::grant::Roots;
 use crate::map::scan::MacOsAnswer;
 use crate::map::{PrivateFolder, ScanOptions, Snapshot, Source};
@@ -43,6 +44,8 @@ pub(super) enum Message {
     Cleaned(Vec<PathBuf>),
     /// macOS answered whether Sutra may read this private folder (see `probe`).
     MacOsAnswered(PrivateFolder, MacOsAnswer),
+    /// What Docker is changed (see `docker::Reader`).
+    Docker(docker::Seen),
     /// The dashboard is about to start another engine, or is stopping, so this one ends.
     Stop,
 }
@@ -81,6 +84,20 @@ pub(super) fn run(
     engine.run(inbox);
 }
 
+/// Read Docker on a thread of its own, at the sockets `state`'s roots name, telling the engine
+/// through `messages`; never in the store edition, whose roots name none.
+#[cfg(target_os = "macos")]
+fn read_docker(state: &State, messages: &Sender<Message>) -> Option<docker::Reader> {
+    let sockets = state.docker_sockets();
+    if sockets.is_empty() {
+        return None;
+    }
+    let messages = messages.clone();
+    // Fails only once the engine has stopped, which ends the reader.
+    let tell = move |seen| messages.send(Message::Docker(seen)).is_ok();
+    Some(docker::Reader::start(sockets.to_vec(), tell))
+}
+
 /// Wait up to `WAIT_FOR_MACOS` for macOS to answer about the `unanswered` private folders `state`
 /// keeps out until it does, so the first walk enters each one answered by then. `Break` when the
 /// engine is told to stop meanwhile.
@@ -98,7 +115,9 @@ fn wait_for_macos(
             }
             Ok(Message::Stop) => return ControlFlow::Break(()),
             // The first walk measures every folder a clean left. Nothing else runs yet to send.
-            Ok(Message::Cleaned(_) | Message::Fs(_) | Message::Measured(_)) => {}
+            Ok(
+                Message::Cleaned(_) | Message::Fs(_) | Message::Measured(_) | Message::Docker(_),
+            ) => {}
             // `run` holds a sender, so the inbox stays open until the wait is up.
             Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
         }
@@ -124,6 +143,9 @@ struct Engine<'a> {
     dirty: bool,
     /// `None` until the first snapshot is offered, which goes out at once.
     last_publish_attempt: Option<Instant>,
+    /// What reads Docker, outside the sandbox, and stops when the engine does.
+    #[cfg(target_os = "macos")]
+    _docker: Option<docker::Reader>,
 }
 
 impl<'a> Engine<'a> {
@@ -133,6 +155,8 @@ impl<'a> Engine<'a> {
         messages: Sender<Message>,
         snapshots: &'a SyncSender<Arc<Snapshot>>,
     ) -> Self {
+        #[cfg(target_os = "macos")]
+        let docker = read_docker(&state, &messages);
         let sizing = Sizing::new(move |measured| {
             // Fails only while the engine shuts down, when the result has no map to land in.
             let _ = messages.send(Message::Measured(measured));
@@ -149,6 +173,8 @@ impl<'a> Engine<'a> {
             lost_events: None,
             dirty: true,
             last_publish_attempt: None,
+            #[cfg(target_os = "macos")]
+            _docker: docker,
         };
         engine.keep_watches_current(now);
         engine
@@ -168,6 +194,7 @@ impl<'a> Engine<'a> {
                 Ok(Message::MacOsAnswered(folder, answer)) => {
                     self.on_macos_answer(folder, answer, Instant::now());
                 }
+                Ok(Message::Docker(seen)) => self.dirty |= self.state.saw_docker(seen),
                 Ok(Message::Stop) => return,
                 Err(RecvTimeoutError::Timeout) => {}
                 // The sizing pool holds a sender for as long as the engine runs.
@@ -463,6 +490,8 @@ impl<'a> Engine<'a> {
             }
         }
         if reshaped {
+            // A project that joined may be one a container is for, and one that left may have been.
+            self.dirty |= self.state.place_containers();
             let on_map: HashSet<Job> = self.state.jobs_newest_first().into_iter().collect();
             self.sizing.forget_unless(|job| on_map.contains(job));
             // Before the walks queued below begin, so a new watch hears a change made during one.

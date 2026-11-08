@@ -23,6 +23,7 @@ fn engine_over<'a>(
         home: root.to_path_buf(),
         dirs: vec![root.to_path_buf()],
         scratch: None,
+        docker: Vec::new(),
         sandboxed: false,
     };
     engine_on_roots(&roots, snapshots)
@@ -38,6 +39,7 @@ fn engine_with_scratch<'a>(
         home: fixture.dir("home"),
         dirs: vec![fixture.path("home")],
         scratch: Some(fixture.path("claude-501")),
+        docker: Vec::new(),
         sandboxed: false,
     };
     engine_on_roots(&roots, snapshots)
@@ -132,6 +134,7 @@ fn the_first_walk_waits_for_macos_until_every_folder_is_answered_its_wait_is_up_
         home: fixture.root().to_path_buf(),
         dirs: vec![fixture.root().to_path_buf()],
         scratch: None,
+        docker: Vec::new(),
         sandboxed: false,
     };
     let all = ScanOptions {
@@ -713,6 +716,7 @@ fn a_build_folder_changed_as_the_stream_over_the_roots_starts_again_is_measured_
         home: fixture.path("home"),
         dirs: vec![fixture.path("home")],
         scratch: Some(fixture.path("claude-501")),
+        docker: Vec::new(),
         sandboxed: false,
     };
     let mut state = State::new(&roots, &ScanOptions::default());
@@ -969,6 +973,7 @@ fn the_direct_edition_reads_the_processes_every_few_seconds_and_the_store_editio
         home: fixture.root().to_path_buf(),
         dirs: vec![fixture.root().to_path_buf()],
         scratch: None,
+        docker: Vec::new(),
         sandboxed,
     };
 
@@ -986,4 +991,39 @@ fn the_direct_edition_reads_the_processes_every_few_seconds_and_the_store_editio
 
     let (store, _inbox) = engine_on_roots(&roots(true), &snapshots);
     assert_eq!(store.timers.next_processes, None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn docker_is_read_at_the_sockets_the_roots_name_and_never_where_they_name_none() {
+    let fixture = TempDir::new("live-docker");
+    let roots = |docker| Roots {
+        home: fixture.root().to_path_buf(),
+        dirs: vec![fixture.root().to_path_buf()],
+        scratch: None,
+        docker,
+        sandboxed: false,
+    };
+    let (messages, inbox) = mpsc::channel();
+
+    let none = State::new(&roots(Vec::new()), &ScanOptions::default());
+    assert!(
+        read_docker(&none, &messages).is_none(),
+        "as in the store edition"
+    );
+
+    let named = State::new(
+        &roots(vec![fixture.path("docker.sock")]),
+        &ScanOptions::default(),
+    );
+    let _reader = read_docker(&named, &messages).expect("a reader");
+    let Ok(Message::Docker(seen)) = inbox.recv_timeout(Duration::from_secs(10)) else {
+        panic!("the reader tells the engine what it found at once");
+    };
+    assert_eq!(
+        seen.reading,
+        docker::Reading::Away,
+        "nothing serves the socket"
+    );
+    assert_eq!(seen.problem, None);
 }

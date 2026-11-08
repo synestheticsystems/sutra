@@ -143,6 +143,7 @@ fn the_folders_outside_the_roots_to_watch_are_the_readable_projects_and_shared_g
         home: home.clone(),
         dirs: vec![home],
         scratch: None,
+        docker: Vec::new(),
         sandboxed: false,
     };
     let mut state = MapState::new(&roots, &ScanOptions::default());
@@ -187,6 +188,7 @@ fn the_folders_in_the_scratch_root_need_no_watch_of_their_own() {
         home: home.clone(),
         dirs: vec![home],
         scratch: Some(fixture.path("claude-501")),
+        docker: Vec::new(),
         sandboxed: false,
     };
     let mut state = MapState::new(&roots, &ScanOptions::default());

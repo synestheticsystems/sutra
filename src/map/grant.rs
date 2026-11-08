@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use super::scan;
+use super::{docker, scan};
 
 #[cfg(target_os = "macos")]
 pub use macos::GrantError;
@@ -35,15 +35,18 @@ pub struct Roots {
     /// The store edition has none: the sandbox keeps it out of `/private/tmp`, and reading it
     /// there would take a grant of its own, kept as a second bookmark beside the one of `dirs`.
     pub scratch: Option<PathBuf>,
+    /// The sockets Docker's engine may be served on, in the order tried (see `docker`). The store
+    /// edition has none: the sandbox keeps it out of them.
+    pub docker: Vec<PathBuf>,
     /// Running inside the App Sandbox.
     pub sandboxed: bool,
 }
 
-/// Decide the roots for this process: the real home folder and Claude Code's scratch root outside
-/// the sandbox; inside it, the folder granted on an earlier launch. Inside the sandbox with no
-/// folder granted yet, `dirs` is empty and the window asks, so the user reads why before any panel
-/// opens; the folder chosen is kept with `save_grant`. A saved grant that could not be used is
-/// returned beside the roots, for the window to explain.
+/// Decide the roots for this process: the real home folder, Claude Code's scratch root and Docker's
+/// sockets outside the sandbox; inside it, the folder granted on an earlier launch. Inside the
+/// sandbox with no folder granted yet, `dirs` is empty and the window asks, so the user reads why
+/// before any panel opens; the folder chosen is kept with `save_grant`. A saved grant that could
+/// not be used is returned beside the roots, for the window to explain.
 pub fn resolve_roots() -> (Roots, Option<GrantError>) {
     let home = crate::home::real_home()
         .expect("the passwd database or $HOME names the user's home folder");
@@ -57,12 +60,15 @@ pub fn resolve_roots() -> (Roots, Option<GrantError>) {
             home,
             dirs,
             scratch: None,
+            docker: Vec::new(),
             sandboxed: true,
         };
         return (roots, lost);
     }
+    let docker_host = std::env::var("DOCKER_HOST").ok();
     let roots = Roots {
         dirs: vec![home.clone()],
+        docker: docker::socket_candidates(&home, docker_host.as_deref()),
         home,
         scratch: Some(scan::scratch_root()),
         sandboxed: false,
@@ -210,14 +216,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_roots_outside_the_sandbox_watches_the_real_home_folder_and_claudes_scratch() {
+    fn resolve_roots_outside_the_sandbox_watches_the_real_home_folder_claudes_scratch_and_docker() {
         // `cargo test` runs unsandboxed, so this exercises the direct edition's path.
         let (roots, lost) = resolve_roots();
         let home = crate::home::real_home().unwrap();
         assert!(!roots.sandboxed);
         assert_eq!(roots.home, home);
-        assert_eq!(roots.dirs, vec![home]);
+        assert_eq!(roots.dirs, std::slice::from_ref(&home));
         assert_eq!(roots.scratch, Some(scan::scratch_root()));
+        let usual = [
+            home.join(".docker/run/docker.sock"),
+            "/var/run/docker.sock".into(),
+        ];
+        assert!(
+            roots.docker.ends_with(&usual),
+            "after the one $DOCKER_HOST may name: {:?}",
+            roots.docker
+        );
         assert!(lost.is_none());
     }
 }

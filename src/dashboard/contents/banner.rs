@@ -3,6 +3,7 @@
 //! running. In the store edition it offers the remedy: granting a larger folder. And how any source
 //! that could not be read is worded, which the footer's lines share.
 
+use std::io;
 use std::path::Path;
 
 use crate::dashboard::format;
@@ -48,6 +49,7 @@ fn hidden_sources(problems: &[SourceProblem]) -> Option<String> {
         (Source::CodexDatabase, "Codex threads"),
         (Source::Registry, "dev environments in ~/.dev-runner"),
         (Source::Processes, "processes' ports"),
+        (Source::Docker, "Docker containers"),
     ]
     .into_iter()
     .filter(|(source, _)| hides(*source))
@@ -58,10 +60,27 @@ fn hidden_sources(problems: &[SourceProblem]) -> Option<String> {
 
 /// A source the map could not read: `Couldn't read ~/.claude/sessions: permission denied`, with
 /// `and 3 more` when discovery met the same error in several folders. The processes have no path:
-/// `Couldn't list your processes: permission denied`.
+/// `Couldn't list your processes: permission denied`. Docker is read through its socket: `Couldn't
+/// read Docker at ~/.docker/run/docker.sock: timed out`, or, when its engine answered with an error
+/// status, `Docker at ~/.docker/run/docker.sock answered with an error`, and alike for its disk
+/// use.
 pub(super) fn problem_line(problem: &SourceProblem, home: &Path) -> String {
     let verb = match problem.source {
         Source::Processes => return format!("Couldn't list your processes: {}", problem.kind),
+        Source::Docker | Source::DockerDiskUse => {
+            let socket = format::tilde(&problem.path, home);
+            let disk_use = problem.source == Source::DockerDiskUse;
+            return match (problem.kind, disk_use) {
+                (io::ErrorKind::Other, false) => {
+                    format!("Docker at {socket} answered with an error")
+                }
+                (io::ErrorKind::Other, true) => {
+                    format!("Docker at {socket} answered with an error when asked for its disk use")
+                }
+                (kind, false) => format!("Couldn't read Docker at {socket}: {kind}"),
+                (kind, true) => format!("Couldn't read Docker's disk use at {socket}: {kind}"),
+            };
+        }
         Source::Watcher => "watch",
         Source::Scan
         | Source::Registry
@@ -121,6 +140,7 @@ mod tests {
             Source::ClaudeSessions,
             Source::CodexDatabase,
             Source::Processes,
+            Source::Docker,
             Source::Watcher,
         ];
         for source in sources {
@@ -167,6 +187,38 @@ mod tests {
         assert_eq!(
             hidden_sources(&[unlisted]).as_deref(),
             Some("Sutra can't see your processes' ports.")
+        );
+    }
+
+    #[test]
+    fn docker_that_cannot_be_read_hides_its_containers_and_says_how_its_engine_failed() {
+        let socket = "/Users/dev/.docker/run/docker.sock";
+        let failed = |kind| SourceProblem::new(Source::Docker, PathBuf::from(socket), kind);
+        let home = Path::new(HOME);
+        assert_eq!(
+            problem_line(&failed(io::ErrorKind::TimedOut), home),
+            "Couldn't read Docker at ~/.docker/run/docker.sock: timed out"
+        );
+        assert_eq!(
+            problem_line(&failed(io::ErrorKind::Other), home),
+            "Docker at ~/.docker/run/docker.sock answered with an error"
+        );
+        assert_eq!(
+            hidden_sources(&[failed(io::ErrorKind::TimedOut)]).as_deref(),
+            Some("Sutra can't see your Docker containers.")
+        );
+        let disk_use = SourceProblem {
+            source: Source::DockerDiskUse,
+            ..failed(io::ErrorKind::TimedOut)
+        };
+        assert_eq!(
+            problem_line(&disk_use, home),
+            "Couldn't read Docker's disk use at ~/.docker/run/docker.sock: timed out"
+        );
+        assert_eq!(
+            hidden_sources(&[disk_use]),
+            None,
+            "its containers still show"
         );
     }
 

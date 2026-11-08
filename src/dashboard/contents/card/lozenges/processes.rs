@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::path::Path;
 
-use super::{UnitLook, UnitLozenge, link};
+use super::{UnitLook, UnitLozenge, link, reach};
 use crate::dashboard::format;
 use crate::map::processes::ListeningProcess;
 
@@ -54,18 +54,6 @@ fn lozenge(port: u16, listening: &[ListeningProcess], home: &Path) -> UnitLozeng
     }
 }
 
-/// Who can reach a port listened on at `addresses`: this Mac alone, while every one of them is a
-/// loopback address, or else the network.
-fn reach(addresses: &BTreeSet<IpAddr>) -> String {
-    let words: Vec<String> = addresses.iter().map(IpAddr::to_string).collect();
-    let at = format::all(&words.iter().map(String::as_str).collect::<Vec<_>>());
-    if addresses.iter().all(|ip| ip.to_canonical().is_loopback()) {
-        format!("Listening on this Mac only, at {at}")
-    } else {
-        format!("Listening on the network, at {at}")
-    }
-}
-
 /// `command` as a tooltip shows it: the home folder written `~`, and cut short past
 /// `COMMAND_SHOWN` characters.
 fn shortened(command: &str, home: &Path) -> String {
@@ -78,7 +66,7 @@ fn shortened(command: &str, home: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::net::{Ipv6Addr, SocketAddr};
 
     use super::*;
     use crate::map::test_support::listening_in;
@@ -115,29 +103,6 @@ mod tests {
              node, pid 4242\n\
              node ~/site/node_modules/vite/bin/vite.js --port 5177\n\
              ~/site"
-        );
-    }
-
-    #[test]
-    fn a_port_any_address_beyond_loopback_listens_on_reaches_the_network() {
-        let loopback = [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()];
-        let mapped = [Ipv4Addr::LOCALHOST.to_ipv6_mapped().into()];
-        let everywhere = [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::UNSPECIFIED.into()];
-        let reach = |addresses: &[IpAddr]| {
-            let set: BTreeSet<IpAddr> = addresses.iter().copied().collect();
-            reach(&set)
-        };
-        assert_eq!(
-            reach(&loopback),
-            "Listening on this Mac only, at 127.0.0.1 and ::1"
-        );
-        assert_eq!(
-            reach(&mapped),
-            "Listening on this Mac only, at ::ffff:127.0.0.1"
-        );
-        assert_eq!(
-            reach(&everywhere),
-            "Listening on the network, at 127.0.0.1 and ::"
         );
     }
 

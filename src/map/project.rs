@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use super::docker::Container;
 use super::processes::ListeningProcess;
 use super::{AgentSession, Measurement, PrivateFolder, SubagentWithParent};
 use crate::model::Environment;
@@ -38,6 +39,9 @@ pub struct Project {
     /// The user's processes listening for TCP connections that run in the folder, and in no project
     /// nested in it, in the order macOS lists them.
     pub listening: Vec<ListeningProcess>,
+    /// The Docker containers running for the folder, by name: those compose made there, else those
+    /// bind-mounting a folder of it, and in no project nested in it.
+    pub containers: Vec<Container>,
     pub artifacts: Vec<ArtifactDir>,
     /// Everything in the folder but its build folders and the projects nested inside it, which
     /// are measured on their own. Never measured while the folder cannot be read.
@@ -47,13 +51,14 @@ pub struct Project {
 
 impl Project {
     /// Whether something is at work in the folder: an agent's session, or a subagent whichever
-    /// session it works for, a dev-runner environment, running or not, or a process listening for
-    /// connections.
+    /// session it works for, a dev-runner environment, running or not, a process listening for
+    /// connections, or a Docker container running for it.
     pub fn is_at_work(&self) -> bool {
         !self.agents.is_empty()
             || !self.subagents.is_empty()
             || self.environment.is_some()
             || !self.listening.is_empty()
+            || !self.containers.is_empty()
     }
 
     /// The bytes the project's build folders hold, counting the measured ones only.

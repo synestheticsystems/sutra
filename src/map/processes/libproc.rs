@@ -87,9 +87,15 @@ const _: () = assert!(offset_of!(TcpSockInfo, state) == 80);
 /// A process as long as it runs: its pid, and when it started, which tells it from a process
 /// given the same pid after it ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct ProcessId {
+pub(crate) struct ProcessId {
     pid: u32,
     started: (u64, u64),
+}
+
+impl ProcessId {
+    pub(super) fn pid(self) -> u32 {
+        self.pid
+    }
 }
 
 /// The processes whose effective user is this process's. Fails only when macOS will not list them.

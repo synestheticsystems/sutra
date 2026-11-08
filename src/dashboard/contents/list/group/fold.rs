@@ -21,9 +21,9 @@ pub enum GroupFold {
         /// One of those sessions waits on the user, so the line throbs as its card would.
         waiting: bool,
         /// After the line's total, the first two of the lozenges up or on their way in the cards
-        /// it holds, dev-runner units and the ports processes listen on alike, in the cards'
-        /// order, as their cards draw them, so folding a group shut never hides that a server runs
-        /// in it.
+        /// it holds, dev-runner units, ports processes listen on and containers alike, in the
+        /// cards' order, as their cards draw them, so folding a group shut never hides that a
+        /// server runs in it.
         units: Vec<UnitLozenge>,
         /// The lozenges up or on their way past those two; `None` while there are none.
         more_units: Option<MoreUnits>,

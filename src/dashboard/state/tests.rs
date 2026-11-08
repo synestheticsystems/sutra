@@ -31,6 +31,7 @@ fn dashboard_at(
         home: home.to_path_buf(),
         dirs: vec![root.to_path_buf()],
         scratch: None,
+        docker: Vec::new(),
         sandboxed: false,
     };
     let mut notifier = Notifier::new(|_, _| {});

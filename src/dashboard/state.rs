@@ -44,6 +44,8 @@ pub(super) struct State {
     roots: Vec<PathBuf>,
     /// Claude Code's scratch root, which the engine reads beside them in the direct edition.
     scratch: Option<PathBuf>,
+    /// The sockets Docker may be served on, which the engine reads in the direct edition.
+    docker: Vec<PathBuf>,
     /// Why the folder granted on an earlier launch could not be reopened, until another is.
     lost_grant: Option<GrantError>,
     watching: Option<Watching>,
@@ -109,6 +111,7 @@ impl State {
             sandboxed: roots.sandboxed,
             roots: roots.dirs,
             scratch: roots.scratch,
+            docker: roots.docker,
             lost_grant,
             watching: None,
             cleaning: Cleaning::new(Threads::new(events.clone()), settings.keep_free_bytes),
@@ -342,6 +345,7 @@ impl State {
             home: self.home.clone(),
             dirs: self.roots.clone(),
             scratch: self.scratch.clone(),
+            docker: self.docker.clone(),
             sandboxed: self.sandboxed,
         };
         let options = self.settings.scan_options();

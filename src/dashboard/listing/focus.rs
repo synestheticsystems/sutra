@@ -15,7 +15,7 @@ pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 
 /// Whether the project belongs in the focused view of `sort`. In every sort, a project is in focus
 /// while something is at work in it (see `Project::is_at_work`): a coding agent's session or
 /// subagent, a dev-runner environment describing it, from `~/.dev-runner/` or its own
-/// `.dev-runner/`, or a process listening there. Past that:
+/// `.dev-runner/`, a process listening there, or a Docker container running for it. Past that:
 ///   - in the Activity sort, while its last activity lies within `FOCUS_RECENT` of `now`, unless it
 ///     is the scratch of a session that has ended: that is disk news, not activity news, whatever
 ///     its age or size;
@@ -60,8 +60,8 @@ mod tests {
 
     use super::*;
     use crate::map::test_support::{
-        agent_session, at, cargo_target, environment_at, listening_in, measured, node_modules,
-        project_at, subagent_at_work,
+        agent_session, at, cargo_target, container_for, environment_at, listening_in, measured,
+        node_modules, project_at, subagent_at_work,
     };
     use crate::map::{AgentStatus, ArtifactDir, Measurement, SubagentWithParent};
 
@@ -149,12 +149,17 @@ mod tests {
     }
 
     #[test]
-    fn a_process_listening_in_a_project_brings_it_into_focus_in_every_sort() {
+    fn a_process_listening_in_a_project_or_a_container_for_it_brings_it_into_focus_in_every_sort() {
         let serving = Project {
             listening: vec![listening_in("/code/app", "node", &[5177])],
             ..out_of_focus()
         };
         assert_eq!(focused_in(&serving), SortOrder::ALL);
+        let contained = Project {
+            containers: vec![container_for("/code/app", "app-db-1")],
+            ..out_of_focus()
+        };
+        assert_eq!(focused_in(&contained), SortOrder::ALL);
     }
 
     #[test]
