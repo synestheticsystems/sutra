@@ -11,9 +11,9 @@ use crate::dashboard::format;
 use crate::map::{ArtifactDir, Measurement, Project};
 
 /// One entry of a tray's disk use after its total: a build folder, or on Docker's card one of the
-/// stores Docker keeps on disk. Its name keeps the word from when every entry was a folder.
+/// stores Docker keeps on disk.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct TrayFolder {
+pub struct TrayEntry {
     /// As `target/` reads, or `volumes`.
     pub label: String,
     /// Its own size, and while cleaning, what is left of it.
@@ -24,9 +24,9 @@ pub struct TrayFolder {
 
 /// One build folder on the tray.
 #[derive(Debug, PartialEq)]
-pub(super) enum Entry<'a> {
+pub(super) enum BuildFolder<'a> {
     /// At rest: measured, or its measurement failed, which its tooltip says.
-    Folder(&'a ArtifactDir),
+    AtRest(&'a ArtifactDir),
     /// A clean is at work on it, or is worked out, asked about or waiting its turn, holding `left`
     /// if its size was known.
     Cleaning {
@@ -59,14 +59,14 @@ pub(super) fn off_the_card(project: &Project) -> Vec<&ArtifactDir> {
         .collect()
 }
 
-/// The tray's entries, largest first: each build folder large enough to show, whose measurement
+/// The build folders on the tray, largest first: each one large enough to show, whose measurement
 /// failed, or with a clean under way. One not yet measured is left out until it has a size, and one
 /// just cleaned counts at what the clean left in it.
-pub(super) fn entries<'a>(
+pub(super) fn build_folders<'a>(
     project: &'a Project,
     clean_state: impl Fn(&ArtifactDir) -> Option<CleanState>,
-) -> Vec<Entry<'a>> {
-    let mut entries: Vec<(u64, Entry<'a>)> = project
+) -> Vec<BuildFolder<'a>> {
+    let mut folders: Vec<(u64, BuildFolder<'a>)> = project
         .artifacts
         .iter()
         .filter_map(|dir| {
@@ -74,35 +74,35 @@ pub(super) fn entries<'a>(
             let bytes = state
                 .and_then(CleanState::left)
                 .unwrap_or_else(|| measured_bytes(dir));
-            let entry = match (state, &dir.measurement) {
-                (Some(CleanState::Deleting { .. }), _) => Some(Entry::Cleaning {
+            let folder = match (state, &dir.measurement) {
+                (Some(CleanState::Deleting { .. }), _) => Some(BuildFolder::Cleaning {
                     dir,
                     left: state.and_then(CleanState::left),
                 }),
                 (Some(CleanState::Deleted { left }), _) => {
-                    worth_showing(left).then_some(Entry::Cleaned { dir, left })
+                    worth_showing(left).then_some(BuildFolder::Cleaned { dir, left })
                 }
                 (None, Measurement::Measured(usage)) => {
-                    worth_showing(usage.bytes).then_some(Entry::Folder(dir))
+                    worth_showing(usage.bytes).then_some(BuildFolder::AtRest(dir))
                 }
-                (None, Measurement::Failed(_)) => Some(Entry::Folder(dir)),
+                (None, Measurement::Failed(_)) => Some(BuildFolder::AtRest(dir)),
                 (None, Measurement::Pending | Measurement::Measuring) => None,
             };
-            entry.map(|entry| (bytes, entry))
+            folder.map(|folder| (bytes, folder))
         })
         .collect();
-    entries.sort_by_key(|(bytes, _)| Reverse(*bytes));
-    entries.into_iter().map(|(_, entry)| entry).collect()
+    folders.sort_by_key(|(bytes, _)| Reverse(*bytes));
+    folders.into_iter().map(|(_, folder)| folder).collect()
 }
 
-/// An entry: the folder's path, with its size in the tooltip.
-pub(super) fn folder(entry: Entry, project: &Path, home: &Path) -> TrayFolder {
-    let (dir, tooltip, cleaning) = match entry {
-        Entry::Folder(dir) => (dir, artifact_tooltip(dir, home), false),
-        Entry::Cleaning { dir, left } => (dir, cleaning_tooltip(dir, left, home), true),
-        Entry::Cleaned { dir, left } => (dir, cleaning_tooltip(dir, Some(left), home), false),
+/// The tray's entry for `folder`: its path, with its size in the tooltip.
+pub(super) fn entry(folder: BuildFolder, project: &Path, home: &Path) -> TrayEntry {
+    let (dir, tooltip, cleaning) = match folder {
+        BuildFolder::AtRest(dir) => (dir, artifact_tooltip(dir, home), false),
+        BuildFolder::Cleaning { dir, left } => (dir, cleaning_tooltip(dir, left, home), true),
+        BuildFolder::Cleaned { dir, left } => (dir, cleaning_tooltip(dir, Some(left), home), false),
     };
-    TrayFolder {
+    TrayEntry {
         label: format!("{}/", format::artifact_name(dir, project)),
         tooltip,
         cleaning,
@@ -169,12 +169,12 @@ mod tests {
             cargo_target("/code/app/target", measured(12_300_000_000)),
             node_modules("/code/app/web/node_modules", measured(1_200_000_000)),
         ]);
-        let entries = entries(&app, |_| None);
+        let folders = build_folders(&app, |_| None);
         assert_eq!(
-            entries,
+            folders,
             [
-                Entry::Folder(&app.artifacts[0]),
-                Entry::Folder(&app.artifacts[1]),
+                BuildFolder::AtRest(&app.artifacts[0]),
+                BuildFolder::AtRest(&app.artifacts[1]),
             ]
         );
     }
@@ -186,10 +186,10 @@ mod tests {
             cargo_target("/code/app/target", measured(46_400_000_000)),
         ]);
         assert_eq!(
-            entries(&app, |_| None),
+            build_folders(&app, |_| None),
             [
-                Entry::Folder(&app.artifacts[1]),
-                Entry::Folder(&app.artifacts[0]),
+                BuildFolder::AtRest(&app.artifacts[1]),
+                BuildFolder::AtRest(&app.artifacts[0]),
             ]
         );
     }
@@ -200,7 +200,7 @@ mod tests {
             node_modules("/code/app/ui/node_modules", measured(168_100_000)),
             cargo_target("/code/app/target", measured(3_000_000)),
         ]);
-        assert_eq!(entries(&app, |_| None), []);
+        assert_eq!(build_folders(&app, |_| None), []);
         assert_eq!(off_the_card(&app), [&app.artifacts[0], &app.artifacts[1]]);
     }
 
@@ -211,7 +211,10 @@ mod tests {
             cargo_target("/code/app/target", Measurement::Measuring),
             cargo_target("/code/app/old/target", failed),
         ]);
-        assert_eq!(entries(&app, |_| None), [Entry::Folder(&app.artifacts[1])]);
+        assert_eq!(
+            build_folders(&app, |_| None),
+            [BuildFolder::AtRest(&app.artifacts[1])]
+        );
     }
 
     #[test]
@@ -225,8 +228,8 @@ mod tests {
             freed: 8_000_000_000,
         };
         assert_eq!(
-            entries(&app, |_| Some(state)),
-            [Entry::Cleaning {
+            build_folders(&app, |_| Some(state)),
+            [BuildFolder::Cleaning {
                 dir: &app.artifacts[0],
                 left: Some(4_000_000_000)
             }]
@@ -240,10 +243,10 @@ mod tests {
             measured(12_300_000_000),
         )]);
         let cleaned = |left| move |_: &ArtifactDir| Some(CleanState::Deleted { left });
-        assert_eq!(entries(&app, cleaned(4096)), []);
+        assert_eq!(build_folders(&app, cleaned(4096)), []);
         assert_eq!(
-            entries(&app, cleaned(2_000_000_000)),
-            [Entry::Cleaned {
+            build_folders(&app, cleaned(2_000_000_000)),
+            [BuildFolder::Cleaned {
                 dir: &app.artifacts[0],
                 left: 2_000_000_000
             }]

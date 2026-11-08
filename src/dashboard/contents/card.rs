@@ -14,7 +14,7 @@ pub use agents::{AgentBadge, AgentLook};
 pub use header::{Chip, ScratchMark};
 pub use lozenges::{Lozenge, LozengeLook};
 pub use robots::Robot;
-pub use tray::{DiskUse, Tray, TrayFolder};
+pub use tray::{DiskUse, Tray, TrayEntry};
 
 pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};

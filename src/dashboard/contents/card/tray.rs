@@ -7,7 +7,7 @@
 
 mod folders;
 
-pub use folders::TrayFolder;
+pub use folders::TrayEntry;
 pub(in crate::dashboard::contents) use folders::worth_showing;
 
 use std::path::Path;
@@ -15,7 +15,7 @@ use std::path::Path;
 use crate::dashboard::cleaning::CleanState;
 use crate::dashboard::{AgentBadge, format};
 use crate::map::{ArtifactDir, FolderAccess, FolderSize, Measurement, Project};
-use folders::{entries, folder, measured_bytes, off_the_card, off_the_card_tooltip};
+use folders::{build_folders, entry, measured_bytes, off_the_card, off_the_card_tooltip};
 
 /// The card's tray, all on one line: the folder's disk use at its start, and at its end the agents
 /// in the folder, its sessions, a divider, and the subagents at work in it.
@@ -42,7 +42,7 @@ pub struct DiskUse {
     /// Why the folder has no total, when measuring its own files failed: an alert sign's tooltip.
     pub warning: Option<String>,
     /// The build folders large enough to matter, largest first; on Docker's card, its stores.
-    pub folders: Vec<TrayFolder>,
+    pub entries: Vec<TrayEntry>,
     /// How far the clean of its build folders has come, from 0 to 1, by the space given back:
     /// the bar along the seam above the tray. Empty while a clean is worked out or waits its turn.
     pub progress: Option<f32>,
@@ -78,10 +78,10 @@ fn disk_use(
     if project.access != FolderAccess::Readable {
         return None;
     }
-    let entries = entries(project, &clean_state);
+    let folders = build_folders(project, &clean_state);
     let total = total_on_card(project, &clean_state);
     let warning = own_files_failure(project);
-    if total.is_none() && entries.is_empty() && warning.is_none() {
+    if total.is_none() && folders.is_empty() && warning.is_none() {
         return None;
     }
     Some(DiskUse {
@@ -91,9 +91,9 @@ fn disk_use(
         total_tooltip: total
             .and_then(|_| off_the_card_tooltip(&off_the_card(project), &project.path)),
         warning,
-        folders: entries
+        entries: folders
             .into_iter()
-            .map(|entry| folder(entry, &project.path, home))
+            .map(|folder| entry(folder, &project.path, home))
             .collect(),
         progress: clean_progress(project, &clean_state),
     })
@@ -194,12 +194,12 @@ mod tests {
         assert_eq!(disk.total_tooltip.as_deref(), Some("ui/node_modules/ 5 MB"));
         assert_eq!(disk.warning, None);
         let folders: Vec<(&str, bool)> = disk
-            .folders
+            .entries
             .iter()
             .map(|folder| (folder.label.as_str(), folder.cleaning))
             .collect();
         assert_eq!(folders, [("target/", true), ("node_modules/", false)]);
-        assert_eq!(disk.folders[0].tooltip, "9 GB\n~/app/target");
+        assert_eq!(disk.entries[0].tooltip, "9 GB\n~/app/target");
         assert_eq!(disk.progress, Some(0.25));
     }
 

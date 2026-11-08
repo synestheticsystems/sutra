@@ -65,9 +65,9 @@ extension Project {
                 ? nil
                 : offTheCard.map { "\($0.name)/ \(Words.size($0.bytes))" }.joined(separator: "\n"),
             warning: nil,
-            folders: shown.map { folder in
+            entries: shown.map { folder in
                 let location = Words.tilde("\(path)/\(folder.name)")
-                return TrayFolder(
+                return TrayEntry(
                     label: "\(folder.name)/",
                     tooltip: "\(Words.size(folder.bytes))\n\(location)",
                     cleaning: false

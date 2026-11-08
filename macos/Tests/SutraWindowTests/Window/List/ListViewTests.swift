@@ -140,7 +140,7 @@ struct ListViewTests {
             unreadable: nil, lozenges: [],
             tray: Tray(
                 disk: DiskUse(
-                    total: "1.2 GB", totalTooltip: nil, warning: nil, folders: [], progress: nil
+                    total: "1.2 GB", totalTooltip: nil, warning: nil, entries: [], progress: nil
                 ),
                 sessions: robots, subagents: []
             ),

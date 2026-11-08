@@ -68,12 +68,12 @@ private struct DiskUseLine: View {
                     .font(.callout.weight(.medium))
                     .hoverTip(disk.totalTooltip)
             }
-            ForEach(Array(disk.folders.enumerated()), id: \.offset) { _, folder in
-                Text(folder.label)
+            ForEach(Array(disk.entries.enumerated()), id: \.offset) { _, entry in
+                Text(entry.label)
                     .font(.callout)
                     // A folder a clean is at work on fades: what it holds is on its way out.
-                    .foregroundStyle(folder.cleaning ? .tertiary : .secondary)
-                    .hoverTip(folder.tooltip)
+                    .foregroundStyle(entry.cleaning ? .tertiary : .secondary)
+                    .hoverTip(entry.tooltip)
             }
         }
     }

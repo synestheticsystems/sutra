@@ -23,7 +23,7 @@ pub use action::Action;
 pub use banner::Banner;
 pub use card::{
     AgentBadge, AgentLook, Card, Chip, DiskUse, Lozenge, LozengeLook, Robot, ScratchMark, Tray,
-    TrayFolder, Unreadable, UnreadableLook,
+    TrayEntry, Unreadable, UnreadableLook,
 };
 pub use dialog::Dialog;
 pub use footer::Footer;

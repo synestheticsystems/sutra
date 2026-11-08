@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use crate::dashboard::contents::card::lozenges::containers::{self, CardOf};
 use crate::dashboard::contents::card::{CardContext, worth_showing};
 use crate::dashboard::listing::DOCKER;
-use crate::dashboard::{DiskUse, Lozenge, Tray, TrayFolder, format};
+use crate::dashboard::{DiskUse, Lozenge, Tray, TrayEntry, format};
 use crate::map::Docker;
 use crate::map::docker::{DockerDisk, Store};
 
@@ -98,9 +98,9 @@ fn disk_use(disk: &DockerDisk) -> DiskUse {
         total: Some(format::size(disk.bytes(), false)),
         total_tooltip: (!total_tooltip.is_empty()).then(|| total_tooltip.join("\n")),
         warning: None,
-        folders: shown
+        entries: shown
             .iter()
-            .map(|named| TrayFolder {
+            .map(|named| TrayEntry {
                 label: named.label.to_string(),
                 tooltip: store_tooltip(named),
                 cleaning: false,
@@ -162,14 +162,18 @@ mod tests {
         let shown = disk_use(&disk());
 
         assert_eq!(shown.total.as_deref(), Some("48 GB"));
-        let labels: Vec<&str> = shown.folders.iter().map(|f| f.label.as_str()).collect();
+        let labels: Vec<&str> = shown
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
         assert_eq!(labels, ["volumes", "images", "build cache"]);
         assert_eq!(
-            shown.folders[0].tooltip,
+            shown.entries[0].tooltip,
             "23 GB in 68 volumes, 21 in use\n5 GB reclaimable"
         );
         assert_eq!(
-            shown.folders[2].tooltip,
+            shown.entries[2].tooltip,
             "5.4 GB in 28 records, none in use\n5.4 GB reclaimable"
         );
         let said = format::timestamp(now()).unwrap();
@@ -178,7 +182,7 @@ mod tests {
             Some(format!("containers 660 MB\nAs Docker said at {said}"))
         );
         assert!(
-            shown.folders.iter().all(|folder| !folder.cleaning),
+            shown.entries.iter().all(|entry| !entry.cleaning),
             "Sutra cleans none"
         );
     }
