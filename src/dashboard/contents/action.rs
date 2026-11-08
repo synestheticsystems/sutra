@@ -2,7 +2,7 @@
 //! action of a line of one of its menus (`MenuAction::Dashboard`), or what one of the window's own
 //! controls asks for.
 
-use crate::dashboard::{Parent, SortOrder};
+use crate::dashboard::{LineKey, SortOrder};
 
 /// What the user asks the dashboard to do (`Dashboard::perform`).
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
@@ -11,11 +11,10 @@ pub enum Action {
     Clean {
         folder: String,
     },
-    /// Clean every build folder the scratch folders of the session whose folder is
-    /// `session_folder` hold, as a click on each one's card would, so each goes only where it
-    /// would go alone.
-    CleanScratch {
-        session_folder: String,
+    /// Clean every build folder in what the line of `line` holds on the map that its menu
+    /// offered, as a click on each one's card would, so each goes only where it would go alone.
+    CleanBuildFolders {
+        line: LineKey,
     },
     /// Clean every idle build folder, after one question.
     CleanIdle,
@@ -34,10 +33,10 @@ pub enum Action {
     },
     HideFilter,
     ToggleQuietProjects,
-    /// Fold shut the group of `parent`, as its line names it, or open it again. The fold is kept
-    /// for the next run.
+    /// Fold shut what the line of `line` holds, or open it again. The fold is kept for the next
+    /// run.
     ToggleFold {
-        parent: Parent,
+        line: LineKey,
     },
     /// The pointer entered or left the list, which holds the cards in place while it is there.
     PointerEnteredList,

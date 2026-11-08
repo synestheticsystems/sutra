@@ -7,8 +7,7 @@ import SwiftUI
 struct ListView: View {
     let dashboard: DashboardModel
 
-    /// The room between the list's rows: between cards, and between a group's line and its first
-    /// card.
+    /// The room between the list's rows: between cards, and between a line and its first row.
     static let rowSpacing: CGFloat = 8
 
     @State private var pointerInside = false
@@ -58,16 +57,18 @@ private struct Rows: View {
             LazyVStack(alignment: .leading, spacing: ListView.rowSpacing) {
                 ForEach(rows) { row in
                     switch row {
-                    case .card(let card):
+                    case .line(let line, let place):
+                        LineRow(line: line, dashboard: dashboard)
+                            .hanging(at: place)
+                    case .card(let card, let place):
                         CardView(model: card, dashboard: dashboard)
-                    case .groupLine(let line, let fold):
-                        GroupLineRow(line: line, fold: fold, dashboard: dashboard)
-                    case .nested(let card, let guide):
-                        NestedCardRow(model: card, guide: guide, dashboard: dashboard)
-                    case .docker(let card):
+                            .hanging(at: place)
+                    case .docker(let card, let place):
                         DockerCardView(card: card)
-                    case .elsewhere(let heading, let lines, let waiting):
+                            .hanging(at: place)
+                    case .elsewhere(let heading, let lines, let waiting, let place):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)
+                            .hanging(at: place)
                     case .quietProjects(let open, let label, let tooltip):
                         QuietProjectsRow(open: open, label: label, tooltip: tooltip, dashboard: dashboard)
                     }
@@ -80,14 +81,14 @@ private struct Rows: View {
     }
 }
 
-/// The lines of the list that fold something away, a group's and the one standing for the quiet
-/// projects, all laid out alike, so their chevrons stand in one column.
+/// The lines of the list that fold something away, a group's, a checkout's and the one standing for
+/// the quiet groups, all laid out alike, so the chevrons of lines at one depth stand in one column.
 enum FoldingLine {
-    /// How far a line's chevron stands in from the list's edge.
+    /// How far a line's chevron stands in from where its row begins.
     static let inset: CGFloat = 8
-    /// The room above and below a line's text, which a folded group's throb fills.
+    /// The room above and below a line's text, which a folded line's throb fills.
     static let padding: CGFloat = 7
-    /// The width of the chevron's slot, fixed so the guide under an open group's chevron runs down
+    /// The width of the chevron's slot, fixed so the guide under an open line's chevron runs down
     /// its middle.
     static let chevronWidth: CGFloat = 10
 }

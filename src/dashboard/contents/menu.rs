@@ -1,5 +1,5 @@
-//! The lines of the window's right-click menus, which the toolbar's clean, each card and a
-//! session's line offer, and what each line does.
+//! The lines of the window's right-click menus, which the toolbar's clean, each card and each of
+//! the list's lines offer, and what each line does.
 
 use crate::dashboard::Action;
 

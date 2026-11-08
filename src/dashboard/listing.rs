@@ -1,14 +1,18 @@
-//! What the list shows, in order: the projects in focus in the user's sort (see `focus`), with
-//! Docker's card among them where the sort puts it, the agents working outside every project, and
-//! one row standing for the quiet projects, which opens to list them; of a session's scratch
-//! folders, those with something to show (see `scratch_rows`). A typed filter lists every project
-//! it admits instead. In the Activity sort, the cards of a parent above the quiet row, a
-//! repository's worktrees, two or more, or a session's scratch folders, however few, stand
-//! together in its group, under the line that names it (see `group`). Judged at one instant, so
-//! the cards and the counts always agree.
+//! What the list shows, in order: the groups in focus in the user's sort (see `focus`), each under
+//! its line, then one row standing for the quiet groups, which opens to list them. Every card stands
+//! in the group of the upstream its project came from, in a tree of provenance (see `group`), and
+//! the agents working outside every project stand in Other. Docker's card stands in a group of its
+//! own, which the sort places among the others: it came from no upstream, and what it holds, the
+//! containers for no project and the disk Docker takes, is no project's. A group is in focus while
+//! any card in it is, so each stands wholly on one side of the quiet row, and no line stands twice.
+//! Of a session's scratch folders, those with something to show have a card (see `scratch_rows`). A
+//! typed filter lists every project it admits instead. Judged at one instant, so the cards and the
+//! counts always agree.
 
 mod arrangement;
 mod filter;
+#[cfg(test)]
+pub(super) mod fixtures;
 mod focus;
 mod folds;
 mod group;
@@ -19,41 +23,35 @@ mod sort;
 pub(super) use arrangement::Arrangement;
 pub(super) use focus::FOCUS_RECENT;
 pub(super) use folds::Folds;
-pub(super) use group::{Group, Parent, nested_name};
+pub(super) use group::{Checkout, Group, Naming, Node};
 
 use std::path::Path;
 use std::time::SystemTime;
 
-use self::focus::{docker_in_focus, in_focus};
+use self::focus::docker_in_focus;
+use self::group::Members;
 use self::hold::{Hold, Order, Section};
 use self::scratch_rows::has_a_row;
-use crate::dashboard::SortOrder;
 use crate::dashboard::cleaning::Cleaning;
+use crate::dashboard::{LineKey, SortOrder};
 use crate::map::{AgentSession, Docker, Project, Snapshot, SubagentWithParent};
 
-/// What Docker's card goes by, as the Name sort and the filter read it too.
+/// What Docker's card and its group's line go by, as the Name sort and the filter read it too.
 pub(super) const DOCKER: &str = "Docker";
 
 /// One row of the list.
 pub(super) enum Row<'a> {
-    Project(&'a Project),
-    /// The cards that share a parent, under the line that names it: the Activity sort's group.
+    /// A group, under its line.
     Group(Group<'a>),
-    /// Docker, on a card of its own: the containers it runs for no project, and its disk use.
+    /// Docker's group, under its line: its card alone, with the containers it runs for no
+    /// project, and its disk use.
     Docker(&'a Docker),
-    /// The agents working outside every project: all of them, or those the filter admits.
-    Elsewhere(Elsewhere<'a>),
-    /// "▸ 764 quiet": the projects outside the focus, behind one row.
-    QuietProjects {
-        count: usize,
-        shown: bool,
-    },
+    /// "▸ 764 quiet": the projects of the groups outside the focus, behind one row.
+    QuietProjects { count: usize, shown: bool },
 }
 
-/// One row of a section of the list, as the sort lays the section out: a card standing alone, the
-/// group of the cards that share a parent, or Docker's card.
+/// One row of a section of the list, as the sort lays the section out: a group, or Docker's.
 pub(super) enum SectionRow<'a> {
-    Project(&'a Project),
     Group(Group<'a>),
     Docker(&'a Docker),
 }
@@ -61,7 +59,6 @@ pub(super) enum SectionRow<'a> {
 impl<'a> From<SectionRow<'a>> for Row<'a> {
     fn from(row: SectionRow<'a>) -> Row<'a> {
         match row {
-            SectionRow::Project(project) => Row::Project(project),
             SectionRow::Group(group) => Row::Group(group),
             SectionRow::Docker(docker) => Row::Docker(docker),
         }
@@ -127,49 +124,42 @@ impl<'a> Listing<'a> {
         hold: &Hold,
     ) -> Listing<'a> {
         let sort = arrangement.sort();
-        let with_rows = snapshot.projects.iter();
-        let with_rows = with_rows.filter(|project| has_a_row(project, cleaning));
-        let cards = |section, projects: Vec<&'a Project>, docker: Option<&'a Docker>| {
-            let mut sorted = match section {
-                Section::Main => sort.lay_out(projects, snapshot),
-                // No line stands below the quiet row, so no parent has two lines, nor two groups
-                // that one click on a line would fold: one with cards on both sides of the row
-                // has its group above it, or none.
-                Section::Quiet => {
-                    let arranged = sort.arrange(projects).into_iter();
-                    arranged.map(SectionRow::Project).collect()
-                }
-            };
-            if let Some(docker) = docker {
-                sort.place_docker(&mut sorted, docker);
-            }
-            hold.arrange(section, sorted).into_iter().map(Row::from)
-        };
+        let with_rows: Vec<&Project> = snapshot
+            .projects
+            .iter()
+            .filter(|project| has_a_row(project, cleaning))
+            .collect();
+        let members = Members::of(snapshot);
         let docker = snapshot.docker.as_ref();
+        let names = group::names_of(&with_rows, docker.is_some());
+        let section = |section, projects, elsewhere, docker| {
+            let gathered = group::gather(projects, elsewhere, &members, &names, sort);
+            let laid_out = sort.lay_out(gathered, docker);
+            hold.arrange(section, laid_out).into_iter().map(Row::from)
+        };
         let mut rows = Vec::new();
         match arrangement.query() {
             Some(query) => {
-                let admitted = with_rows.filter(|p| query.admits(p));
-                let docker = docker.filter(|docker| query.admits_docker(docker));
-                rows.extend(cards(Section::Main, admitted.collect(), docker));
+                let admitted = with_rows.into_iter().filter(|p| query.admits(p)).collect();
                 let elsewhere = Elsewhere::of(snapshot, |folder| query.admits_folder(folder));
-                rows.extend(elsewhere.map(Row::Elsewhere));
+                let docker = docker.filter(|docker| query.admits_docker(docker));
+                rows.extend(section(Section::Main, admitted, elsewhere, docker));
             }
             None => {
-                let (focused, quiet): (Vec<&Project>, Vec<&Project>) =
-                    with_rows.partition(|project| in_focus(project, sort, now));
+                let elsewhere = Elsewhere::of(snapshot, |_| true);
+                let (focused, quiet) =
+                    focus::split_by_group(with_rows, sort, now, elsewhere.is_some());
                 let (docker_focused, docker_quiet) = match docker {
                     Some(docker) if docker_in_focus(docker, sort) => (Some(docker), None),
                     docker => (None, docker),
                 };
-                rows.extend(cards(Section::Main, focused, docker_focused));
-                rows.extend(Elsewhere::of(snapshot, |_| true).map(Row::Elsewhere));
+                rows.extend(section(Section::Main, focused, elsewhere, docker_focused));
                 let count = quiet.len() + usize::from(docker_quiet.is_some());
                 if count > 0 {
                     let shown = arrangement.quiet_shown();
                     rows.push(Row::QuietProjects { count, shown });
                     if shown {
-                        rows.extend(cards(Section::Quiet, quiet, docker_quiet));
+                        rows.extend(section(Section::Quiet, quiet, None, docker_quiet));
                     }
                 }
             }
@@ -181,9 +171,30 @@ impl<'a> Listing<'a> {
         }
     }
 
-    /// The cards of each section, in the order on screen, with the cards of each group folded shut
-    /// where its line stands: the listing lays a group out whether the window shows its cards or
-    /// not, so a folded group holds its place as an open one does.
+    /// What the line of `line` holds on the map, listed or not, while the list shows that line: a
+    /// group's members, or a checkout's.
+    pub(super) fn members_of(&self, line: &LineKey) -> Option<&[&'a Project]> {
+        fn in_rows<'r, 'a>(rows: &'r [Node<'a>], line: &LineKey) -> Option<&'r [&'a Project]> {
+            rows.iter().find_map(|row| match row {
+                Node::Checkout(checkout) if LineKey::checkout(&checkout.project.path) == *line => {
+                    Some(checkout.members.as_slice())
+                }
+                Node::Checkout(checkout) => in_rows(&checkout.children, line),
+                Node::Card { .. } | Node::Elsewhere(_) => None,
+            })
+        }
+        self.rows.iter().find_map(|row| match row {
+            Row::Group(group) if LineKey::group(group.key) == *line => {
+                Some(group.members.as_slice())
+            }
+            Row::Group(group) => in_rows(&group.children, line),
+            Row::Docker(_) | Row::QuietProjects { .. } => None,
+        })
+    }
+
+    /// The cards of each section, in the order on screen, with the cards under each line folded
+    /// shut where it stands: the listing lays a group out whether the window shows its cards or
+    /// not, so a folded line holds its place as an open one does.
     fn order(&self) -> Order {
         let mut order = Order::default();
         let mut past_quiet_row = false;
@@ -194,208 +205,16 @@ impl<'a> Listing<'a> {
                 &mut order.main
             };
             match row {
-                Row::Project(project) => section.push(project.path.clone()),
                 Row::Group(group) => {
-                    section.extend(group.cards.iter().map(|card| card.path.clone()));
+                    let cards = group.cards().into_iter();
+                    section.extend(cards.map(|card| card.path.clone()));
                 }
                 // Held by the socket it is read through, which is no project's folder.
                 Row::Docker(docker) => section.push(docker.socket.clone()),
                 Row::QuietProjects { .. } => past_quiet_row = true,
-                Row::Elsewhere(_) => {}
             }
         }
         order
-    }
-}
-
-/// Snapshots and projects for the listing's tests.
-#[cfg(test)]
-pub(super) mod fixtures {
-    use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
-
-    use crate::map::docker::{Container, DockerDisk, Store};
-    use crate::map::test_support::{agent_session, at, project_at, snapshot_of, subagent_at_work};
-    use crate::map::{
-        AgentSession, AgentStatus, Docker, Project, RepoInfo, ScratchSpace, Snapshot, Subagent,
-        SubagentWithParent,
-    };
-
-    pub(in crate::dashboard) fn now() -> SystemTime {
-        at(1_000_000_000)
-    }
-
-    /// A project last active `minutes_ago`, in focus for that alone.
-    pub(in crate::dashboard) fn project(name: &str, minutes_ago: u64) -> Project {
-        Project {
-            last_activity: Some(now() - Duration::from_secs(minutes_ago * 60)),
-            ..quiet(name)
-        }
-    }
-
-    /// A project out of focus: no activity known, and nothing in it.
-    pub(in crate::dashboard) fn quiet(name: &str) -> Project {
-        project_at(PathBuf::from("/code").join(name))
-    }
-
-    /// `project` as the main worktree of the repository whose git dir is `common_dir`, on
-    /// `branch`.
-    pub(in crate::dashboard) fn main_worktree(
-        common_dir: &str,
-        branch: &str,
-        project: Project,
-    ) -> Project {
-        let common_dir = PathBuf::from(common_dir);
-        Project {
-            repo: Some(RepoInfo {
-                git_dir: common_dir.clone(),
-                common_dir,
-                worktree_name: None,
-                branch: Some(branch.to_string()),
-                head: None,
-            }),
-            ..project
-        }
-    }
-
-    /// `project` as a worktree linked to the repository whose git dir is `common_dir`, under its
-    /// folder's name, on `branch`.
-    pub(in crate::dashboard) fn linked_worktree(
-        common_dir: &str,
-        branch: &str,
-        project: Project,
-    ) -> Project {
-        let common_dir = PathBuf::from(common_dir);
-        Project {
-            repo: Some(RepoInfo {
-                git_dir: common_dir.join("worktrees").join(&project.name),
-                common_dir,
-                worktree_name: Some(project.name.clone()),
-                branch: Some(branch.to_string()),
-                head: None,
-            }),
-            ..project
-        }
-    }
-
-    /// `project` as the scratch folder `folder` of the session `session_id`, which started in
-    /// `/code/app` and has ended, never named, so it goes by the name the engine gives it, as
-    /// `app e26ca359` reads.
-    pub(in crate::dashboard) fn scratch_folder(
-        session_id: &str,
-        folder: &str,
-        project: Project,
-    ) -> Project {
-        let session_folder = PathBuf::from("/private/tmp/claude-501/-code-app").join(session_id);
-        let space = ScratchSpace {
-            session_folder,
-            session_id: session_id.to_string(),
-            started_in: "app".to_string(),
-            started_in_folder: None,
-            session: None,
-            session_name: None,
-        };
-        Project {
-            path: space.session_folder.join("scratchpad").join(folder),
-            name: folder.to_string(),
-            scratch: Some(space),
-            ..project
-        }
-    }
-
-    /// `scratch`, a scratch folder, while its session runs under the name `label`.
-    pub(in crate::dashboard) fn running_as(label: &str, scratch: Project) -> Project {
-        let mut space = scratch.scratch.expect("a scratch folder");
-        space.session = Some(AgentSession {
-            label: Some(label.to_string()),
-            ..agent_session(&space.session_id, AgentStatus::Busy)
-        });
-        space.session_name = Some(label.to_string());
-        Project {
-            scratch: Some(space),
-            ..scratch
-        }
-    }
-
-    pub(in crate::dashboard) fn agent(cwd: &str, status: AgentStatus) -> AgentSession {
-        AgentSession {
-            cwd: PathBuf::from(cwd),
-            ..agent_session(cwd, status)
-        }
-    }
-
-    /// A subagent at work in `cwd`, run there and acting nowhere else, for an idle session in
-    /// `/code/app`.
-    pub(in crate::dashboard) fn subagent_in(cwd: &str) -> SubagentWithParent {
-        let subagent = Subagent {
-            cwd: PathBuf::from(cwd),
-            ..subagent_at_work(cwd)
-        };
-        SubagentWithParent::new(subagent, &agent("/code/app", AgentStatus::Idle))
-    }
-
-    /// Docker read at `/run/docker.sock`, running `containers` for no project, made `minutes_ago`
-    /// each, and taking `bytes` on disk.
-    pub(in crate::dashboard) fn docker(containers: &[(&str, u64)], bytes: u64) -> Docker {
-        let store = |bytes| Store {
-            bytes,
-            count: 1,
-            in_use: 1,
-            reclaimable: 0,
-        };
-        let container = |&(name, minutes_ago): &(&str, u64)| Container {
-            id: name.to_string(),
-            name: name.to_string(),
-            image: "postgres:17".to_string(),
-            compose_folder: None,
-            bound: Vec::new(),
-            ports: Vec::new(),
-            created: now() - Duration::from_secs(minutes_ago * 60),
-        };
-        Docker {
-            socket: PathBuf::from("/run/docker.sock"),
-            containers: containers.iter().map(container).collect(),
-            disk: Some(DockerDisk {
-                images: store(bytes),
-                containers: store(0),
-                volumes: store(0),
-                build_cache: store(0),
-                read_at: now(),
-            }),
-        }
-    }
-
-    /// A map of `projects`, in the order given, which the engine delivers newest activity first.
-    pub(in crate::dashboard) fn snapshot(
-        projects: Vec<Project>,
-        unplaced_agents: Vec<AgentSession>,
-    ) -> Snapshot {
-        Snapshot {
-            unplaced_agents,
-            ..snapshot_of(projects)
-        }
-    }
-
-    /// What `rows` show, a few words each: a project's name, a group as `name: card, card`, each
-    /// card by its folder's own name, `docker`, `elsewhere`, or `quiet:<count>`.
-    pub(in crate::dashboard) fn shown(rows: &[super::Row]) -> Vec<String> {
-        let names = |projects: &[&Project]| {
-            let folder = |project: &&Project| {
-                let name = project.path.file_name().unwrap();
-                name.to_string_lossy().into_owned()
-            };
-            let names: Vec<String> = projects.iter().map(folder).collect();
-            names.join(", ")
-        };
-        rows.iter()
-            .map(|row| match row {
-                super::Row::Project(project) => project.name.clone(),
-                super::Row::Group(group) => format!("{}: {}", group.name, names(&group.cards)),
-                super::Row::Docker(_) => "docker".to_string(),
-                super::Row::Elsewhere(_) => "elsewhere".to_string(),
-                super::Row::QuietProjects { count, .. } => format!("quiet:{count}"),
-            })
-            .collect()
     }
 }
 
@@ -404,16 +223,21 @@ mod tests {
     use std::path::PathBuf;
 
     use super::fixtures::{
-        agent, docker, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
-        subagent_in,
+        agent, came_from, docker, linked_worktree, main_worktree, now, project, quiet, running_as,
+        scratch_folder, shown, snapshot, subagent_in, upstream,
     };
     use super::*;
     use crate::dashboard::cleaning::tests::{cleaning, deleted};
     use crate::map::test_support::measured;
     use crate::map::{AgentStatus, Harness, LARGE_FOLDER_BYTES};
 
+    /// The rows `map` lists as `arrangement` arranges it.
+    fn listed(map: &Snapshot, arrangement: &Arrangement) -> Vec<String> {
+        shown(&Listing::new(map, arrangement, &cleaning(), now()).rows)
+    }
+
     #[test]
-    fn the_activity_sort_groups_two_or_more_worktrees_above_the_quiet_row_and_none_below_it() {
+    fn a_group_stands_wholly_above_the_quiet_row_while_any_card_in_it_is_in_focus() {
         let (app, site, old) = ("/code/app/.git", "/code/site/.git", "/code/old/.git");
         let map = snapshot(
             vec![
@@ -428,68 +252,84 @@ mod tests {
         );
         let mut arrangement = Arrangement::default();
         arrangement.toggle_quiet(Some(&map), &cleaning(), now());
-        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
         assert_eq!(
-            shown(&listing.rows),
+            listed(&map, &arrangement),
             [
                 "app: app, app-fix",
-                "site",
-                "elsewhere",
-                "quiet:3",
-                "old",
-                "old-wip",
-                "site-wip"
+                "site: site, site-wip",
+                "Other: elsewhere",
+                "quiet:2",
+                "old: old, old-wip",
             ],
-            "site has one card on each side of the row, and old's two stand alone below it"
+            "site's quiet worktree stands in its group, and old's two in theirs below the row"
         );
     }
 
     #[test]
-    fn under_a_filter_the_activity_sort_groups_every_worktree_it_admits() {
+    fn a_typed_filter_lists_every_project_it_admits_in_its_group_in_focus_or_not() {
         let app = "/code/app/.git";
         let map = snapshot(
             vec![
                 main_worktree(app, "main", quiet("app")),
                 linked_worktree(app, "fix", project("app-fix", 1)),
                 project("site", 1),
+                linked_worktree(app, "old", quiet("app-old")),
             ],
-            vec![],
+            vec![
+                agent("/tmp/app-scratch", AgentStatus::Busy),
+                agent("/tmp/other", AgentStatus::Busy),
+            ],
         );
         let mut arrangement = Arrangement::default();
-        arrangement.set_filter_text("app".to_string(), Some(&map), &cleaning(), now());
+        arrangement.set_filter_text("APP".to_string(), Some(&map), &cleaning(), now());
         let listing = Listing::new(&map, &arrangement, &cleaning(), now());
-        assert_eq!(shown(&listing.rows), ["app: app, app-fix"]);
+        assert_eq!(
+            shown(&listing.rows),
+            ["app: app, app-fix, app-old", "Other: elsewhere"]
+        );
+        let Row::Group(other) = &listing.rows[1] else {
+            panic!("Other's group");
+        };
+        let [Node::Elsewhere(agents)] = other.children.as_slice() else {
+            panic!("the agents elsewhere alone in Other");
+        };
+        assert_eq!(
+            agents.sessions.len(),
+            1,
+            "only the one whose folder matches"
+        );
     }
 
     #[test]
-    fn the_list_shows_the_focused_projects_then_the_agents_elsewhere_then_the_quiet_row() {
+    fn the_agents_elsewhere_stand_first_in_other_with_the_projects_nothing_else_groups() {
         let map = snapshot(
             vec![project("recent", 1), quiet("old"), project("older", 60)],
             vec![agent("/tmp/scratch", AgentStatus::Busy)],
         );
-        let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
         assert_eq!(
-            shown(&listing.rows),
-            ["recent", "older", "elsewhere", "quiet:1"]
+            listed(&map, &Arrangement::default()),
+            ["Other: elsewhere, recent, older, old"],
+            "one card in focus brings Other's quiet one with it"
         );
     }
 
     #[test]
     fn the_scratch_of_a_session_that_ended_waits_behind_the_quiet_row_in_the_activity_sort_alone() {
-        use super::fixtures::{running_as, scratch_folder};
         let sized = |gigabytes: u64, project: Project| Project {
             own_files: measured(gigabytes * LARGE_FOLDER_BYTES),
             ..project
         };
+        let ended = scratch_folder("d5fa0639", "sim-target", project("", 1));
+        let running = running_as(
+            "Foundry",
+            scratch_folder("e26ca359", "r567", project("", 1)),
+        );
         let map = snapshot(
             vec![
-                sized(12, scratch_folder("d5fa0639", "sim-target", project("", 1))),
+                sized(12, came_from(upstream("github.com/me/sim"), &[], ended)),
                 sized(
                     2,
-                    running_as(
-                        "Foundry",
-                        scratch_folder("e26ca359", "r567", project("", 1)),
-                    ),
+                    came_from(upstream("github.com/me/foundry"), &[], running),
                 ),
                 sized(3, quiet("forgotten")),
             ],
@@ -499,28 +339,36 @@ mod tests {
             let mut arrangement = Arrangement::default();
             arrangement.set_sort(sort, &map, &cleaning(), now());
             arrangement.toggle_quiet(Some(&map), &cleaning(), now());
-            shown(&Listing::new(&map, &arrangement, &cleaning(), now()).rows)
+            listed(&map, &arrangement)
         };
         assert_eq!(
             listed(SortOrder::Activity),
-            ["Foundry: r567", "quiet:2", "sim-target", "forgotten"],
+            [
+                "foundry: r567",
+                "quiet:2",
+                "sim: sim-target",
+                "Other: forgotten"
+            ],
             "its activity a minute ago, and its size, are disk news"
         );
         assert_eq!(
             listed(SortOrder::Disk),
-            ["sim-target", "forgotten", "r567"],
-            "in focus where the sort is for disk"
+            ["sim: sim-target", "Other: forgotten", "foundry: r567"],
+            "in focus where the sort is for disk, the largest group first"
         );
     }
 
     #[test]
-    fn a_scratch_folder_with_nothing_to_show_has_no_row_and_its_sessions_line_counts_it_still() {
-        use super::fixtures::{running_as, scratch_folder};
+    fn a_scratch_folder_with_nothing_to_show_has_no_row_and_its_groups_line_counts_it_still() {
         let foundry = |folder, own_files| Project {
             own_files: measured(own_files),
-            ..running_as(
-                "Foundry",
-                scratch_folder("e26ca359", folder, project("", 1)),
+            ..came_from(
+                upstream("github.com/vt/foundry"),
+                &[],
+                running_as(
+                    "Foundry",
+                    scratch_folder("e26ca359", folder, project("", 1)),
+                ),
             )
         };
         let map = snapshot(
@@ -532,18 +380,20 @@ mod tests {
             vec![],
         );
         let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
-        assert_eq!(shown(&listing.rows), ["Foundry: r567guards", "notes"]);
+        assert_eq!(
+            shown(&listing.rows),
+            ["foundry: r567guards", "Other: notes"]
+        );
         let Row::Group(group) = &listing.rows[0] else {
-            panic!("the session's line");
+            panic!("foundry's group");
         };
         assert_eq!(group.members.len(), 2, "both folders add to its total");
 
         let mut filtered = Arrangement::default();
         filtered.set_filter_text("r567".to_string(), Some(&map), &cleaning(), now());
-        let listing = Listing::new(&map, &filtered, &cleaning(), now());
         assert_eq!(
-            shown(&listing.rows),
-            ["Foundry: r567guards"],
+            listed(&map, &filtered),
+            ["foundry: r567guards"],
             "a filter finds no row the list does not have"
         );
 
@@ -554,53 +404,43 @@ mod tests {
         let listing = Listing::new(&cleaned, &Arrangement::default(), &deleted(), now());
         assert_eq!(
             shown(&listing.rows),
-            ["Foundry: r567fixture, r567guards", "notes"],
+            ["foundry: r567fixture, r567guards", "Other: notes"],
             "a clean's bar shows on its row until the map measures the folder again"
         );
     }
 
     #[test]
-    fn the_quiet_row_opens_to_list_the_quiet_projects_below_it() {
-        let map = snapshot(vec![quiet("b"), project("recent", 1), quiet("a")], vec![]);
-        let mut arrangement = Arrangement::default();
-        arrangement.toggle_quiet(Some(&map), &cleaning(), now());
-        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
-        assert_eq!(shown(&listing.rows), ["recent", "quiet:2", "a", "b"]);
-    }
-
-    #[test]
-    fn a_typed_filter_lists_every_project_it_admits_in_focus_or_not() {
+    fn the_quiet_row_opens_to_list_the_quiet_groups_below_it() {
+        let grouped = |remote: &str, project| came_from(upstream(remote), &[], project);
         let map = snapshot(
-            vec![project("app", 1), quiet("app-old"), project("site", 1)],
             vec![
-                agent("/tmp/app-scratch", AgentStatus::Busy),
-                agent("/tmp/other", AgentStatus::Busy),
+                grouped("github.com/me/b", quiet("b")),
+                grouped("github.com/me/recent", project("recent", 1)),
+                grouped("github.com/me/a", quiet("a")),
             ],
+            vec![],
         );
         let mut arrangement = Arrangement::default();
-        arrangement.set_filter_text("APP".to_string(), Some(&map), &cleaning(), now());
-        let listing = Listing::new(&map, &arrangement, &cleaning(), now());
-        assert_eq!(shown(&listing.rows), ["app", "app-old", "elsewhere"]);
-        let Row::Elsewhere(agents) = &listing.rows[2] else {
-            panic!("the agents elsewhere come last");
-        };
+        assert_eq!(listed(&map, &arrangement), ["recent: recent", "quiet:2"]);
+        arrangement.toggle_quiet(Some(&map), &cleaning(), now());
         assert_eq!(
-            agents.sessions.len(),
-            1,
-            "only the agent whose folder matches"
+            listed(&map, &arrangement),
+            ["recent: recent", "quiet:2", "a: a", "b: b"]
         );
     }
 
     #[test]
-    fn a_subagent_at_work_in_no_project_makes_the_elsewhere_row_and_a_filter_finds_its_folder() {
+    fn a_subagent_at_work_in_no_project_stands_in_other_and_a_filter_finds_its_folder() {
         let mut builder = subagent_in("/tmp/scratch");
         builder.subagent.acted_in = vec![PathBuf::from("/tmp/build")];
         let map = Snapshot {
             unplaced_subagents: vec![builder, subagent_in("/tmp/other")],
             ..snapshot(vec![project("app", 1)], vec![])
         };
-        let listing = Listing::new(&map, &Arrangement::default(), &cleaning(), now());
-        assert_eq!(shown(&listing.rows), ["app", "elsewhere"]);
+        assert_eq!(
+            listed(&map, &Arrangement::default()),
+            ["Other: elsewhere, app"]
+        );
 
         let filtered = |text: &str| {
             let mut filtered = Arrangement::default();
@@ -608,14 +448,20 @@ mod tests {
             filtered
         };
         let listing = Listing::new(&map, &filtered("build"), &cleaning(), now());
-        let [Row::Elsewhere(working)] = listing.rows.as_slice() else {
+        let [Row::Group(other)] = listing.rows.as_slice() else {
+            panic!("only Other");
+        };
+        let [Node::Elsewhere(working)] = other.children.as_slice() else {
             panic!("only the agents elsewhere match");
         };
         let subagents = working.subagents.iter();
         let folders: Vec<&Path> = subagents.map(|one| one.subagent.works_in()).collect();
         assert_eq!(folders, [Path::new("/tmp/build")], "the folder it acted in");
-        let listing = Listing::new(&map, &filtered("scratch"), &cleaning(), now());
-        assert_eq!(shown(&listing.rows), [""; 0], "not the one it runs in");
+        assert_eq!(
+            listed(&map, &filtered("scratch")),
+            [""; 0],
+            "not the one it runs in"
+        );
     }
 
     /// The rows `map` lists in `sort`, the quiet row open.
@@ -626,31 +472,38 @@ mod tests {
         shown(&Listing::new(map, &arrangement, &cleaning(), now()).rows)
     }
 
+    /// `project`, cloned from an upstream named after it, so it stands in a group of its own.
+    fn alone(project: Project) -> Project {
+        let remote = format!("github.com/me/{}", project.name);
+        came_from(upstream(&remote), &[], project)
+    }
+
     #[test]
-    fn dockers_card_stands_among_the_cards_where_each_sort_puts_it() {
+    fn dockers_group_stands_among_the_groups_where_each_sort_puts_it() {
         let map = Snapshot {
             docker: Some(docker(&[("pg596", 12)], 10 * LARGE_FOLDER_BYTES)),
             ..snapshot(
                 vec![
-                    Project {
+                    alone(Project {
                         own_files: measured(20 * LARGE_FOLDER_BYTES),
                         ..project("api", 1)
-                    },
-                    Project {
+                    }),
+                    alone(Project {
                         own_files: measured(LARGE_FOLDER_BYTES),
                         ..project("site", 30)
-                    },
+                    }),
                 ],
                 vec![],
             )
         };
+        let listed = ["api: api", "docker", "site: site"];
         assert_eq!(
             listed_in(&map, SortOrder::Activity),
-            ["api", "docker", "site"],
+            listed,
             "its newest container, made 12 minutes ago, between them"
         );
-        assert_eq!(listed_in(&map, SortOrder::Name), ["api", "docker", "site"]);
-        assert_eq!(listed_in(&map, SortOrder::Disk), ["api", "docker", "site"]);
+        assert_eq!(listed_in(&map, SortOrder::Name), listed);
+        assert_eq!(listed_in(&map, SortOrder::Disk), listed);
     }
 
     #[test]
@@ -658,20 +511,20 @@ mod tests {
     {
         let map = Snapshot {
             docker: Some(docker(&[], 10 * LARGE_FOLDER_BYTES)),
-            ..snapshot(vec![project("api", 1)], vec![])
+            ..snapshot(vec![alone(project("api", 1))], vec![])
         };
         assert_eq!(
             listed_in(&map, SortOrder::Activity),
-            ["api", "quiet:1", "docker"]
+            ["api: api", "quiet:1", "docker"]
         );
-        assert_eq!(listed_in(&map, SortOrder::Disk), ["docker", "api"]);
+        assert_eq!(listed_in(&map, SortOrder::Disk), ["docker", "api: api"]);
         let small = Snapshot {
             docker: Some(docker(&[], LARGE_FOLDER_BYTES - 1)),
             ..map.clone()
         };
         assert_eq!(
             listed_in(&small, SortOrder::Disk),
-            ["api", "quiet:1", "docker"]
+            ["api: api", "quiet:1", "docker"]
         );
         let away = Snapshot {
             docker: None,
@@ -679,16 +532,16 @@ mod tests {
         };
         assert_eq!(
             listed_in(&away, SortOrder::Activity),
-            ["api"],
+            ["api: api"],
             "Docker not here"
         );
     }
 
     #[test]
-    fn a_typed_filter_lists_dockers_card_by_its_name_or_a_containers_name_or_image() {
+    fn a_typed_filter_lists_dockers_group_by_its_name_or_a_containers_name_or_image() {
         let map = Snapshot {
             docker: Some(docker(&[("pg596", 12)], 0)),
-            ..snapshot(vec![project("api", 1)], vec![])
+            ..snapshot(vec![alone(project("api", 1))], vec![])
         };
         let filtered = |text: &str| {
             let mut arrangement = Arrangement::default();
@@ -698,7 +551,7 @@ mod tests {
         assert_eq!(filtered("dock"), ["docker"]);
         assert_eq!(filtered("pg59"), ["docker"]);
         assert_eq!(filtered("postgres"), ["docker"], "its image");
-        assert_eq!(filtered("api"), ["api"]);
+        assert_eq!(filtered("api"), ["api: api"]);
     }
 
     #[test]
@@ -708,17 +561,15 @@ mod tests {
             harness: Harness::Codex,
             ..agent("/tmp/review", status)
         };
-        let rows = |map: &Snapshot, arrangement: &Arrangement| {
-            Listing::new(map, arrangement, &cleaning(), now())
-                .rows
-                .len()
-        };
         let finished = snapshot(vec![], vec![job(AgentStatus::Idle)]);
-        assert_eq!(rows(&finished, &Arrangement::default()), 0);
+        assert_eq!(listed(&finished, &Arrangement::default()), [""; 0]);
         let mut filtered = Arrangement::default();
         filtered.set_filter_text("review".to_string(), Some(&finished), &cleaning(), now());
-        assert_eq!(rows(&finished, &filtered), 0, "nor under a filter");
+        assert_eq!(listed(&finished, &filtered), [""; 0], "nor under a filter");
         let running = snapshot(vec![], vec![job(AgentStatus::Busy)]);
-        assert_eq!(rows(&running, &Arrangement::default()), 1);
+        assert_eq!(
+            listed(&running, &Arrangement::default()),
+            ["Other: elsewhere"]
+        );
     }
 }

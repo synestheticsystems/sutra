@@ -28,7 +28,8 @@ pub use card::{
 pub use dialog::Dialog;
 pub use footer::Footer;
 pub use list::{
-    DockerCard, ElsewhereLine, GroupFold, GroupLine, List, ListRow, MoreLozenges, Parent,
+    DockerCard, ElsewhereLine, GroupKind, Line, LineFold, LineKey, List, ListRow, MoreLozenges,
+    Place,
 };
 pub use menu::{MenuAction, MenuEntry};
 pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings};
@@ -61,17 +62,15 @@ pub struct WindowContents {
     pub settings: Settings,
 }
 
-/// The orders the project list can take.
+/// The orders the project list can take. Each lays the list out in groups, one per upstream the
+/// projects came from, and orders the groups, and the rows under each line, by what it weighs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
 pub enum SortOrder {
-    /// Newest activity first, in five-minute slices of the clock, each slice in name order. Above
-    /// the quiet row, a git repository's worktrees, two or more, and a Claude Code session's
-    /// scratch folders, however few, stand together under a line naming their parent, a
-    /// repository's main worktree first, and the group takes the place its newest card would.
+    /// Newest activity first, in five-minute slices of the clock, each slice in name order.
     #[default]
     Activity,
-    /// By folder name, ignoring case.
+    /// By name, ignoring case.
     Name,
-    /// Largest folders first.
+    /// Largest first: the groups by all they take, the folders in them by theirs.
     Disk,
 }

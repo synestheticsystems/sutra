@@ -5,7 +5,7 @@ import SutraCore
 /// The core a recording's window reads in place of the live one. It plays the scenario's invented
 /// work as the live core would show it, so the window's own views draw a busy machine that belongs
 /// to no one. It changes the list as the live core would for what a recording demonstrates:
-/// folding a repository, the sort, and the quiet projects' row. The rest the user asks of it, it
+/// folding a line, the sort, and the quiet projects' row. The rest the user asks of it, it
 /// leaves undone.
 ///
 /// It waits at the start of the script until `play`, and its clock runs from there, so every take
@@ -62,8 +62,8 @@ final class ScriptedCore: DashboardProtocol {
     func perform(action: Action) {
         let arranged = state.withLock { state in
             switch action {
-            case .toggleFold(let parent):
-                state.arrangement.toggleFold(of: parent)
+            case .toggleFold(let line):
+                state.arrangement.toggleFold(of: line)
             case .setSort(let order):
                 state.arrangement.sort = order
             case .toggleQuietProjects:
@@ -72,7 +72,7 @@ final class ScriptedCore: DashboardProtocol {
             // clean, mute, stop or answer, and no folder to grant or watch, and the filter field
             // is left out of the take. No card moves while a take plays, so the pointer has
             // nothing to hold still.
-            case .clean, .cleanScratch, .cleanIdle, .keepFree, .showFilter, .filterChanged,
+            case .clean, .cleanBuildFolders, .cleanIdle, .keepFree, .showFilter, .filterChanged,
                  .hideFilter, .pointerEnteredList, .pointerLeftList, .toggleGlobalMute,
                  .toggleGlobalNotifications, .toggleUnitMute, .toggleUnitNotifications,
                  .terminateEnvironment, .answer, .folderGranted, .watchPrivateFolder:

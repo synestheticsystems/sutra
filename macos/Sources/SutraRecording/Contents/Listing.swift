@@ -1,109 +1,71 @@
 import Foundation
 import SutraCore
 
-/// How the user has arranged the list during a take: its sort, the groups folded shut, and whether
-/// the quiet projects show. A take opens as the app's first launch does: newest activity first,
-/// every repository's group open, the quiet projects behind their row. The invented work keeps no
-/// scratch, so no group starts folded.
+/// How the user has arranged the list during a take: its sort, the lines opened, and whether the
+/// quiet projects show. Every line starts folded, as the app's do, and a take opens with Cedar
+/// Web's line open, as a user who opened it to watch its worktrees left it: newest activity first,
+/// the quiet projects behind their row.
 struct Arrangement: Equatable {
     var sort = SortOrder.activity
-    /// The parents whose groups are folded shut.
-    var folded: Set<Parent> = []
+    /// The lines opened.
+    var opened: Set<LineKey> = [Scenario.cedarWebLine]
     var quietShown = false
 
-    /// Fold the group of `parent` shut, or open it again.
-    mutating func toggleFold(of parent: Parent) {
-        if folded.remove(parent) == nil {
-            folded.insert(parent)
+    /// Fold the line of `line` shut, or open it.
+    mutating func toggleFold(of line: LineKey) {
+        if opened.remove(line) == nil {
+            opened.insert(line)
         }
     }
 
-    /// The list's rows at `moment`, as the live core lays them out: the projects in focus in the
-    /// sort, then the row standing for the quiet projects, with them below it while it is open.
+    /// The list's rows at `moment`, as the live core lays them out: the groups in focus in the
+    /// sort, each a line and while it is open its cards, then the row standing for the quiet
+    /// groups, with them below it while it is open.
     func rows(at moment: TimeInterval) -> [ListRow] {
-        let focused = Scenario.projects.filter { $0.inFocus(in: sort, at: moment) }
-        let quiet = Scenario.projects.filter { !$0.inFocus(in: sort, at: moment) }
-        var rows = layOut(focused, at: moment)
+        let groups = Group.of(Scenario.projects)
+        let focused = groups.filter { $0.inFocus(in: sort, at: moment) }
+        let quiet = groups.filter { !$0.inFocus(in: sort, at: moment) }
+        var rows = arranged(focused, at: moment).flatMap { rowsOf($0, at: moment) }
         if !quiet.isEmpty {
+            let count = quiet.reduce(0) { $0 + $1.projects.count }
             rows.append(.quietProjects(
-                count: UInt32(quiet.count), open: quietShown, label: "\(quiet.count) quiet",
+                count: UInt32(count), open: quietShown, label: "\(count) quiet",
                 tooltip: Project.whatMakesOneQuiet(in: sort)
             ))
             if quietShown {
-                rows += arranged(quiet, at: moment).map { project in
-                    .card(card: project.card(naming: .alone, at: moment))
-                }
+                rows += arranged(quiet, at: moment).flatMap { rowsOf($0, at: moment) }
             }
         }
         return rows
     }
 
-    /// `projects` as the sort lays them out above the quiet row. The Activity sort gathers the
-    /// worktrees of a repository with two or more of them under its line, which takes the place
-    /// its newest card would; the other sorts list every card alone.
-    private func layOut(_ projects: [Project], at moment: TimeInterval) -> [ListRow] {
-        guard sort == .activity else {
-            return arranged(projects, at: moment).map { project in
-                .card(card: project.card(naming: .alone, at: moment))
-            }
-        }
-        var ranked: [(rank: ActivityRank, row: ListRow)] = []
-        func alone(_ project: Project) {
-            let card = project.card(naming: .alone, at: moment)
-            ranked.append((project.activityRank(at: moment), .card(card: card)))
-        }
-        var repositories: [String: Repository] = [:]
-        for project in projects {
-            if let worktree = project.worktree {
-                repositories[worktree.commonDir, default: Repository(worktree: worktree)]
-                    .cards.append(project)
-            } else {
-                alone(project)
-            }
-        }
-        for repository in repositories.values {
-            // A line over one card would only take room, so that card stands alone.
-            if let card = repository.onlyCard {
-                alone(card)
-            } else {
-                let line = row(of: repository, at: moment)
-                ranked.append((repository.activityRank(at: moment), line))
-            }
-        }
-        return ranked.sorted { $0.rank < $1.rank }.map(\.row)
-    }
-
-    /// The line of `repository`: open, its cards nested under it, the main worktree first;
-    /// folded shut, the robots of the agents in them, throbbing while one of them waits.
-    private func row(of repository: Repository, at moment: TimeInterval) -> ListRow {
-        let cards = repository.cards.sorted {
-            $0.nestedRank(at: moment) < $1.nestedRank(at: moment)
-        }
-        let commonDir = repository.worktree.commonDir
-        let parent = Parent.repository(commonDir: commonDir)
-        let fold: GroupFold = if folded.contains(parent) {
-            folded(cards, at: moment)
-        } else {
-            .open(cards: cards.map { $0.card(naming: .nested, at: moment) })
-        }
-        // Every worktree of the repository adds to the total, listed or not.
-        let worktrees = Scenario.projects.filter { $0.worktree?.commonDir == commonDir }
-        let folder = repository.worktree.repositoryFolder
-        let line = GroupLine(
-            parent: parent,
-            name: (folder as NSString).lastPathComponent,
-            tooltip: Words.tilde(folder),
-            scratch: nil,
-            total: Words.size(worktrees.reduce(0) { $0 + $1.bytes }),
-            menu: []
+    /// The rows of `group` at `moment`: its line, then, while it is open, its cards under it.
+    private func rowsOf(_ group: Group, at moment: TimeInterval) -> [ListRow] {
+        let key = group.key
+        let open = opened.contains(key)
+        let cards = group.cardsInOrder(sort, at: moment)
+        let line = Line(
+            key: key,
+            name: group.name,
+            tooltip: group.remote ?? "What no upstream groups",
+            total: Words.size(group.projects.reduce(0) { $0 + $1.bytes }),
+            menu: [],
+            fold: open ? .open : folded(cards, at: moment)
         )
-        return .group(line: line, fold: fold)
+        var rows: [ListRow] = [.line(line: line, place: Place(depth: 0, first: false))]
+        if open {
+            for (index, project) in cards.enumerated() {
+                let card = project.card(naming: group.naming, at: moment)
+                rows.append(.card(card: card, place: Place(depth: 1, first: index == 0)))
+            }
+        }
+        return rows
     }
 
-    /// What a repository's line folded shut shows of `cards` at `moment`: their robots, the
-    /// throb while one waits, and the first two of their servers, every unit of the invented work
-    /// being up, with the rest counted.
-    private func folded(_ cards: [Project], at moment: TimeInterval) -> GroupFold {
+    /// What a line folded shut shows of `cards` at `moment`: their robots, the throb while one
+    /// waits, and the first two of their servers, every unit of the invented work being up, with
+    /// the rest counted.
+    private func folded(_ cards: [Project], at moment: TimeInterval) -> LineFold {
         let units = cards.flatMap(\.units)
         let rest = units.dropFirst(2)
         return .folded(
@@ -118,70 +80,126 @@ struct Arrangement: Equatable {
         )
     }
 
-    /// `projects` in the sort, every card alone, as the quiet section lists them in every sort.
-    /// Projects the sort cannot tell apart keep the order of the live core's map.
-    private func arranged(_ projects: [Project], at moment: TimeInterval) -> [Project] {
-        let listed = Array(projects.enumerated())
-        let sorted = switch sort {
+    /// `groups` in the sort: by their newest work, by name with Other last, or by the disk they
+    /// take, groups that take alike keeping the Activity order.
+    private func arranged(_ groups: [Group], at moment: TimeInterval) -> [Group] {
+        let byActivity = groups.sorted {
+            ($0.newest(at: moment), $1.name.lowercased()) > ($1.newest(at: moment), $0.name.lowercased())
+        }
+        return switch sort {
         case .activity:
-            listed.sorted {
-                $0.element.activityRank(at: moment) < $1.element.activityRank(at: moment)
-            }
+            byActivity
         case .name:
-            listed.sorted {
-                ($0.element.name.lowercased(), $0.offset)
-                    < ($1.element.name.lowercased(), $1.offset)
+            groups.sorted {
+                ($0.remote == nil ? 1 : 0, $0.name.lowercased())
+                    < ($1.remote == nil ? 1 : 0, $1.name.lowercased())
             }
         case .disk:
-            listed.sorted {
+            Array(byActivity.enumerated()).sorted {
                 $0.element.bytes == $1.element.bytes
                     ? $0.offset < $1.offset
                     : $0.element.bytes > $1.element.bytes
-            }
+            }.map(\.element)
         }
-        return sorted.map(\.element)
     }
 }
 
-/// Where the Activity sort stands a card, or a repository's line: the newest five-minute slice of
-/// the clock first, each slice in the order of the names they go by, ignoring case, and two of one
-/// name by their folders, so that no two tie.
-private typealias ActivityRank = (newestFirst: Int, name: String, folder: String)
+/// The projects of one upstream, or of none, under one line, as the live core groups them.
+private struct Group {
+    /// The remote they were cloned from; `nil` for Other, which the folders in no repository stand
+    /// in.
+    let remote: String?
+    /// In the order the live core's map lists them, newest activity first.
+    let projects: [Project]
 
-/// A repository's worktrees above the quiet row, as the Activity sort gathers them.
-private struct Repository {
-    /// The worktree of the first card gathered, whose git folder all of them share.
-    let worktree: Worktree
-    var cards: [Project] = []
-
-    /// The card it gathered, while it gathered only one.
-    var onlyCard: Project? {
-        cards.count == 1 ? cards[0] : nil
+    /// The groups of `projects`, in the order their first projects come.
+    static func of(_ projects: [Project]) -> [Group] {
+        var remotes: [String?] = []
+        for project in projects where !remotes.contains(project.worktree?.remote) {
+            remotes.append(project.worktree?.remote)
+        }
+        return remotes.map { remote in
+            Group(remote: remote, projects: projects.filter { $0.worktree?.remote == remote })
+        }
     }
 
-    /// Its line goes by the repository's folder, and takes the place of its newest card.
-    func activityRank(at moment: TimeInterval) -> ActivityRank {
-        // A repository has its line only once it gathers two cards.
-        let newest = cards.map { $0.slice(at: moment) }.max()!
-        let folder = worktree.repositoryFolder
-        return (-newest, (folder as NSString).lastPathComponent.lowercased(), worktree.commonDir)
+    var key: LineKey {
+        .group(kind: remote.map { .upstream(remote: $0) } ?? .other)
+    }
+
+    /// Its upstream's own name, as the live core names a group's line.
+    var name: String {
+        remote.map { ($0 as NSString).lastPathComponent } ?? "Other"
+    }
+
+    var bytes: UInt64 {
+        projects.reduce(0) { $0 + $1.bytes }
+    }
+
+    /// The checkout the group's line stands for too: the one main worktree, when the group holds it
+    /// and its linked worktrees alone, which then hang from the group's line, the main worktree's
+    /// card first.
+    private var checkout: Project? {
+        let mains = projects.filter { $0.worktree?.linkedName == nil }
+        guard mains.count == 1, let main = mains.first, projects.count > 1,
+              projects.allSatisfy({ $0.worktree?.commonDir == main.worktree?.commonDir })
+        else { return nil }
+        return main
+    }
+
+    /// What its cards go by: under their repository's own line, their branches; else their
+    /// folders' names.
+    var naming: Naming {
+        checkout == nil ? .folder : .branch
+    }
+
+    /// Its cards in `sort` at `moment`, the checkout its line stands for first.
+    func cardsInOrder(_ sort: SutraCore.SortOrder, at moment: TimeInterval) -> [Project] {
+        let first = checkout.map { [$0] } ?? []
+        let rest = projects.filter { $0.path != checkout?.path }
+        let name = { (project: Project) in
+            (naming == .branch ? project.worktree?.branch : nil) ?? project.name
+        }
+        let sorted = switch sort {
+        case .activity:
+            rest.sorted {
+                ($0.slice(at: moment), name($1).lowercased())
+                    > ($1.slice(at: moment), name($0).lowercased())
+            }
+        case .name:
+            rest.sorted { name($0).lowercased() < name($1).lowercased() }
+        case .disk:
+            rest.sorted { $0.bytes > $1.bytes }
+        }
+        return first + sorted
+    }
+
+    /// Whether the live core keeps it in focus in `sort` at `moment`: any of its projects is.
+    func inFocus(in sort: SutraCore.SortOrder, at moment: TimeInterval) -> Bool {
+        projects.contains { $0.inFocus(in: sort, at: moment) }
+    }
+
+    /// The newest five-minute slice of its projects' work at `moment`.
+    func newest(at moment: TimeInterval) -> Int {
+        projects.map { $0.slice(at: moment) }.max() ?? .min
     }
 }
 
 extension Project {
-    /// What makes a project quiet in `sort`, with the focus's thresholds spelled out.
+    /// What makes a group quiet in `sort`, with the focus's thresholds spelled out, as the live
+    /// core writes it.
     fileprivate static func whatMakesOneQuiet(in sort: SutraCore.SortOrder) -> String {
         let days = Int(focusRecent / 86_400)
         return switch sort {
         case .activity:
-            "No agent session, no dev-runner environment, nothing listening on a port, no "
-                + "container running, and no activity in the last \(days) days. Scratch from "
-                + "Claude Code sessions that have ended waits here too, as does Docker's card "
-                + "while it shows no container."
+            "Groups with no agent session, no dev-runner environment, nothing listening on a port, "
+                + "no container running, and no activity in the last \(days) days. Scratch from "
+                + "Claude Code sessions that have ended waits here too, as does Docker while its "
+                + "card shows no container."
         case .name, .disk:
-            "No agent session, no dev-runner environment, nothing listening on a port, no "
-                + "container running, no activity in the last \(days) days, and less than "
-                + "\(Words.size(focusLargeBytes)) on disk"
+            "Groups with no agent session, no dev-runner environment, nothing listening on a port, "
+                + "no container running, no activity in the last \(days) days, and no folder of "
+                + "\(Words.size(focusLargeBytes)) or more"
         }
     }
 
@@ -204,16 +222,5 @@ extension Project {
     /// The five-minute slice of the clock holding its last activity at `moment`.
     fileprivate func slice(at moment: TimeInterval) -> Int {
         Int((Scenario.opening.timeIntervalSince1970 + lastActivity(at: moment)) / 300)
-    }
-
-    fileprivate func activityRank(at moment: TimeInterval) -> ActivityRank {
-        (-slice(at: moment), name.lowercased(), path)
-    }
-
-    /// Where it stands under its repository's line: the main worktree first, then by slice, each
-    /// slice in the order of the branches the cards go by there.
-    fileprivate func nestedRank(at moment: TimeInterval) -> (Int, Int, String, String) {
-        (worktree?.linkedName == nil ? 0 : 1, -slice(at: moment),
-         (worktree?.branch ?? name).lowercased(), path)
     }
 }

@@ -29,7 +29,7 @@ struct CardSurface: View {
 }
 
 /// The throb of something an agent in it waits on: an amber edge and a faint amber wash, swelling
-/// and fading together. A card throbs over its surface; a folded group's line, which has no
+/// and fading together. A card throbs over its surface; a folded line, which has no
 /// surface of its own, throbs alone.
 struct Throb: View {
     let cornerRadius: CGFloat

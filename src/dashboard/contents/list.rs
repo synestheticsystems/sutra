@@ -1,22 +1,26 @@
 //! The list, or what stands in its place: what the store edition needs before it can read
-//! anything, the wait for the first map, or why nothing is listed. Otherwise the rows: a card per
-//! project, or in the Activity sort the group of a parent's cards, under a line with its name and
-//! disk, and Docker's card among them, then the agents working outside every project, and the row
-//! standing for the quiet projects.
+//! anything, the wait for the first map, or why nothing is listed. Otherwise the rows (see `rows`):
+//! each group's line, which names the upstream its cards came from, then what hangs from it in a
+//! tree of provenance, each checkout with copies under a line of its own (see `line`); Docker's
+//! group, its line over its card (see `docker`); and the row standing for the quiet groups.
 
 mod docker;
 mod elsewhere;
-mod group;
+mod line;
+mod rows;
 
 pub use docker::DockerCard;
 pub use elsewhere::ElsewhereLine;
-pub use group::{GroupFold, GroupLine, MoreLozenges, Parent};
+pub use line::{GroupKind, Line, LineFold, LineKey, MoreLozenges};
+pub use rows::{ListRow, Place};
+
+pub(in crate::dashboard) use line::offered_cleans;
 
 use std::path::PathBuf;
 
-use super::card::{self, CardContext, Naming, agents};
-use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing, Row};
-use crate::dashboard::{Card, SortOrder, format};
+use super::card::CardContext;
+use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing};
+use crate::dashboard::{SortOrder, format};
 use crate::map::LARGE_FOLDER_BYTES;
 use crate::map::grant::GrantError;
 
@@ -42,54 +46,10 @@ pub enum List {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
-pub enum ListRow {
-    Card {
-        // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
-        card: Box<Card>,
-    },
-    /// The cards that share a parent, in the Activity sort, where two or more of a repository's, or
-    /// any of a session's, are listed together: a line naming the parent, with the disk its cards
-    /// take, then the cards, nested under it, unless the line holds them folded. The line names
-    /// what the cards share, so each goes by what sets it apart: a worktree by its branch, or on no
-    /// branch by its folder, and a scratch folder by its own name. A click on the line folds the
-    /// group shut, and another opens it (`Action::ToggleFold`).
-    Group {
-        line: GroupLine,
-        // Boxed, as a line and what it holds dwarf the other rows; the window receives it as a
-        // plain fold.
-        fold: Box<GroupFold>,
-    },
-    /// Docker, on a card of its own, which the sort places among the projects' cards: the
-    /// containers running for no project, and the disk Docker takes. The window knows it as the
-    /// one Docker card there is.
-    Docker {
-        // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
-        card: Box<DockerCard>,
-    },
-    /// The agents working outside every project, under `heading`: a line for each session, in the
-    /// map's order, then one for each other folder subagents work in, in the order of the first
-    /// subagent there. No folder has two lines of subagents, and none moves when a status changes.
-    Elsewhere {
-        heading: String,
-        lines: Vec<ElsewhereLine>,
-        /// One of them waits on the user, so the row throbs as a card does.
-        waiting: bool,
-    },
-    /// The row standing for the quiet projects: how many, and whether they are listed below it.
-    /// A click opens or closes it (`Action::ToggleQuietProjects`).
-    QuietProjects {
-        count: u32,
-        open: bool,
-        label: String,
-        tooltip: String,
-    },
-}
-
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
 /// `lost_grant` why the one granted on an earlier launch could not be reopened. `folds` says which
-/// groups are folded shut.
+/// lines are folded shut.
 pub(in crate::dashboard) fn list(
     listing: Option<&Listing>,
     filter: Option<&str>,
@@ -115,32 +75,8 @@ pub(in crate::dashboard) fn list(
             rows: listing
                 .rows
                 .iter()
-                .map(|row| list_row(row, listing, folds, cards))
+                .flat_map(|row| rows::of(row, listing, folds, cards))
                 .collect(),
-        },
-    }
-}
-
-fn list_row(row: &Row, listing: &Listing, folds: &Folds, cards: &CardContext) -> ListRow {
-    let map = listing.snapshot;
-    match row {
-        Row::Project(project) => ListRow::Card {
-            card: Box::new(card::card(project, Naming::Alone, map, cards)),
-        },
-        Row::Group(group) => group::row(group, map, folds, cards),
-        Row::Docker(docker) => ListRow::Docker {
-            card: Box::new(docker::card(docker, cards)),
-        },
-        Row::Elsewhere(working) => ListRow::Elsewhere {
-            heading: "Elsewhere".to_string(),
-            lines: elsewhere::lines(working, cards),
-            waiting: agents::any_waiting(working.sessions.iter().copied()),
-        },
-        Row::QuietProjects { count, shown } => ListRow::QuietProjects {
-            count: format::count(*count),
-            open: *shown,
-            label: how_many(*count),
-            tooltip: what_makes_one_quiet(listing.sort),
         },
     }
 }
@@ -175,20 +111,21 @@ fn how_many(count: usize) -> String {
     format!("{count} quiet")
 }
 
-/// What makes a project quiet in `sort`, with the focus thresholds spelled out so the reader can
-/// tell why a project is behind the row (see `listing::focus`).
+/// What makes a group quiet in `sort`, with the focus thresholds spelled out so the reader can
+/// tell why a group is behind the row (see `listing::focus`).
 fn what_makes_one_quiet(sort: SortOrder) -> String {
     let days = FOCUS_RECENT.as_secs() / 86_400;
     match sort {
         SortOrder::Activity => format!(
-            "No agent session, no dev-runner environment, nothing listening on a port, no \
-             container running, and no activity in the last {days} days. Scratch from Claude \
-             Code sessions that have ended waits here too, as does Docker's card while it shows \
-             no container."
+            "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
+             no container running, and no activity in the last {days} days. Scratch from Claude \
+             Code sessions that have ended waits here too, as does Docker while its card shows no \
+             container."
         ),
         SortOrder::Name | SortOrder::Disk => format!(
-            "No agent session, no dev-runner environment, nothing listening on a port, no \
-             container running, no activity in the last {days} days, and less than {} on disk",
+            "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
+             no container running, no activity in the last {days} days, and no folder of {} or \
+             more",
             format::bytes(LARGE_FOLDER_BYTES),
         ),
     }
@@ -203,17 +140,16 @@ mod tests {
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::Arrangement;
     use crate::dashboard::listing::fixtures::{
-        agent, linked_worktree, main_worktree, now, project, quiet, running_as, scratch_folder,
-        snapshot, subagent_in,
+        agent, came_from, linked_worktree, main_worktree, now, project, quiet, snapshot,
+        subagent_in, upstream,
     };
-    use crate::map::test_support::measured;
-    use crate::map::{AgentStatus, Project, Snapshot};
+    use crate::map::{AgentStatus, GroupKey, Snapshot};
     use crate::notifications::Notifier;
 
     const HOME: &str = "/Users/dev";
 
-    /// What `list` gives for `map` as the user arranged it, under the root `/code`, the groups of
-    /// the repositories in `folds` folded shut.
+    /// What `list` gives for `map` as the user arranged it, under the root `/code`, its lines
+    /// folded or open as `folds` says.
     fn listed_with(map: &Snapshot, arrangement: &Arrangement, folds: &Folds) -> List {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
         let cards = CardContext {
@@ -235,41 +171,57 @@ mod tests {
         )
     }
 
-    /// What `list` gives for `map` as the user arranged it, under the root `/code`, no group
-    /// folded.
+    /// What `list` gives for `map` as the user arranged it, under the root `/code`, every line
+    /// folded as it starts.
     fn listed(map: &Snapshot, arrangement: &Arrangement) -> List {
         listed_with(map, arrangement, &Folds::default())
     }
 
     #[test]
-    fn the_rows_are_the_cards_the_agents_elsewhere_with_their_folders_and_the_quiet_row() {
+    fn the_rows_are_each_open_groups_line_then_its_rows_and_last_the_quiet_row() {
         let map = Snapshot {
             unplaced_subagents: vec![subagent_in("/Users/dev/build")],
             ..snapshot(
-                vec![project("recent", 1), quiet("old")],
+                vec![
+                    project("recent", 1),
+                    came_from(upstream("github.com/me/old"), &[], quiet("old")),
+                ],
                 vec![
                     agent("/tmp/idle", AgentStatus::Idle),
                     agent("/Users/dev/scratch", AgentStatus::Waiting),
                 ],
             )
         };
-        let List::Rows { rows } = listed(&map, &Arrangement::default()) else {
+        let mut folds = Folds::default();
+        folds.toggle(&LineKey::group(&GroupKey::Other), &map);
+        let List::Rows { rows } = listed_with(&map, &Arrangement::default(), &folds) else {
             panic!("a map with projects lists them");
         };
         let [
-            ListRow::Card { card },
+            ListRow::Line { line, .. },
             ListRow::Elsewhere {
                 heading,
                 lines,
                 waiting,
+                place,
             },
+            ListRow::Card { card, .. },
             ListRow::QuietProjects {
                 count, open, label, ..
             },
         ] = rows.as_slice()
         else {
-            panic!("a card, the agents elsewhere, the quiet row: {rows:?}");
+            panic!("Other's line, the agents elsewhere, a card, the quiet row: {rows:?}");
         };
+        assert_eq!(line.name, "Other");
+        assert_eq!(
+            *place,
+            Place {
+                depth: 1,
+                first: true
+            },
+            "first under Other's line"
+        );
         assert_eq!(card.name, "recent");
         assert_eq!(heading, "Elsewhere");
         let looks: Vec<(Option<AgentLook>, &str)> = lines
@@ -293,48 +245,71 @@ mod tests {
     }
 
     #[test]
-    fn a_group_folded_shows_its_line_alone_and_the_others_their_cards() {
+    fn a_folded_line_stands_alone_and_an_open_ones_rows_follow_it() {
         let (app, site) = ("/code/app/.git", "/code/site/.git");
-        let foundry = |folder| {
-            let scratch = scratch_folder("e26ca359", folder, project("", 1));
-            Project {
-                own_files: measured(LARGE_FOLDER_BYTES),
-                ..running_as("Foundry", scratch)
-            }
-        };
         let map = snapshot(
             vec![
                 main_worktree(app, "main", project("app", 1)),
                 linked_worktree(app, "fix", project("app-fix", 1)),
                 main_worktree(site, "main", project("site", 1)),
                 linked_worktree(site, "fix", project("site-fix", 1)),
-                foundry("r567"),
-                foundry("r593"),
             ],
             vec![],
         );
         let mut folds = Folds::default();
-        let app = Parent::Repository {
-            common_dir: app.to_string(),
-        };
+        let app = LineKey::group(&GroupKey::LocalRepository(PathBuf::from("/code/app")));
         folds.toggle(&app, &map);
         let List::Rows { rows } = listed_with(&map, &Arrangement::default(), &folds) else {
             panic!("a map with projects lists them");
         };
-        let folded: Vec<(&str, bool)> = rows
+        let shown: Vec<String> = rows
             .iter()
             .map(|row| match row {
-                ListRow::Group { line, fold } => (
-                    line.name.as_str(),
-                    matches!(**fold, GroupFold::Folded { .. }),
-                ),
-                row => panic!("only the three groups: {row:?}"),
+                ListRow::Line { line, .. } => match line.fold {
+                    LineFold::Open => format!("{} open", line.name),
+                    LineFold::Folded { .. } => format!("{} folded", line.name),
+                },
+                ListRow::Card { card, place } => format!("{} at {}", card.name, place.depth),
+                row => panic!("only lines and cards: {row:?}"),
             })
             .collect();
         assert_eq!(
-            folded,
-            [("app", true), ("Foundry", true), ("site", false)],
-            "app by the user, and the session's scratch as it starts"
+            shown,
+            ["app open", "main at 1", "fix at 1", "site folded"],
+            "app opened by the user, its cards by their branches, and site as it starts"
+        );
+    }
+
+    #[test]
+    fn dockers_group_is_its_line_then_while_it_is_open_its_card_alone_beneath_it() {
+        use crate::dashboard::listing::fixtures::docker;
+        let map = Snapshot {
+            docker: Some(docker(&[("pg596", 12)], 0)),
+            ..snapshot(vec![], vec![])
+        };
+        let rows = |folds: &Folds| match listed_with(&map, &Arrangement::default(), folds) {
+            List::Rows { rows } => rows,
+            other => panic!("rows: {other:?}"),
+        };
+        let folded = rows(&Folds::default());
+        let [ListRow::Line { line, place }] = &folded[..] else {
+            panic!("Docker's line alone: {folded:?}");
+        };
+        assert_eq!((line.key.clone(), place.depth), (LineKey::DOCKER, 0));
+
+        let mut folds = Folds::default();
+        assert!(folds.toggle(&LineKey::DOCKER, &map), "Docker is here");
+        let open = rows(&folds);
+        let [ListRow::Line { .. }, ListRow::Docker { card, place }] = &open[..] else {
+            panic!("Docker's line, then its card: {open:?}");
+        };
+        assert_eq!(card.name, "Docker");
+        assert_eq!(
+            *place,
+            Place {
+                depth: 1,
+                first: true
+            }
         );
     }
 
@@ -401,25 +376,26 @@ mod tests {
     }
 
     #[test]
-    fn the_quiet_row_counts_its_projects_and_says_what_makes_one_quiet_in_its_sort() {
+    fn the_quiet_row_counts_its_projects_and_says_what_makes_a_group_quiet_in_its_sort() {
         assert_eq!(how_many(764), "764 quiet");
         assert_eq!(
             what_makes_one_quiet(SortOrder::Activity),
-            "No agent session, no dev-runner environment, nothing listening on a port, no \
-             container running, and no activity in the last 7 days. Scratch from Claude Code \
-             sessions that have ended waits here too, as does Docker's card while it shows no \
+            "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
+             no container running, and no activity in the last 7 days. Scratch from Claude Code \
+             sessions that have ended waits here too, as does Docker while its card shows no \
              container."
         );
-        let by_size = "No agent session, no dev-runner environment, nothing listening on a port, \
-                       no container running, no activity in the last 7 days, and less than 1.1 \
-                       GB on disk";
+        let by_size = "Groups with no agent session, no dev-runner environment, nothing listening \
+                       on a port, no container running, no activity in the last 7 days, and no \
+                       folder of 1.1 GB or more";
         assert_eq!(what_makes_one_quiet(SortOrder::Name), by_size);
         assert_eq!(what_makes_one_quiet(SortOrder::Disk), by_size);
     }
 
     #[test]
     fn the_quiet_row_says_what_makes_one_quiet_in_the_sort_the_list_is_in() {
-        let map = snapshot(vec![project("recent", 1), quiet("old")], vec![]);
+        let old = came_from(upstream("github.com/me/old"), &[], quiet("old"));
+        let map = snapshot(vec![project("recent", 1), old], vec![]);
         let tooltip = |sort| {
             let mut arrangement = Arrangement::default();
             arrangement.set_sort(sort, &map, &cleaning(), now());

@@ -1,8 +1,9 @@
 //! Which of a session's scratch folders have a row on the list. The map holds a scratch folder as
-//! soon as it holds a build folder, however small, so that cleaning can reach it and its session's
-//! line can count it; but below a gigabyte, the size at which the tray names a build folder, its
-//! card would show nothing but a name, an age and a number. So a scratch folder has a row only
-//! while it has something to show, and its session's line still counts it in its total.
+//! soon as it holds a build folder, however small, so that cleaning can reach it and the lines it
+//! stands under can count it; but below a gigabyte, the size at which the tray names a build
+//! folder, its card would show nothing but a name, an age and a number. So a scratch folder has a
+//! row only while it has something to show, and the lines over it still count it in their totals
+//! and offer its build folders to clean.
 
 use super::focus::disk_bytes;
 use crate::dashboard::cleaning::Cleaning;

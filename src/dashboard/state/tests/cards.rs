@@ -1,5 +1,6 @@
-//! What the user does to a card: a clean named by its folder, a clean that asks first, and the
-//! environment terminated only while the map still shows it alive.
+//! What the user does to a card or a line: a clean named by its folder, the clean of what a line
+//! holds, a clean that asks first, and the environment terminated only while the map still
+//! shows it alive.
 
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command};
@@ -8,6 +9,7 @@ use super::*;
 use crate::dashboard::cleaning::tests::prepared_at;
 use crate::map::clean::Sharing;
 use crate::map::test_support::{cargo_target, environment_at, measured, snapshot_of};
+use crate::map::{FolderAccess, GroupKey, Provenance};
 
 /// Choose Clean on the build folder at `folder`, as a card names it.
 fn clean(state: &mut State, folder: &Path) {
@@ -28,7 +30,7 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
     state.show(Arc::new(snapshot_of(vec![app])), now());
 
     clean(&mut state, &fixture.path("gone/target"));
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     assert_eq!(
         card_at(&contents, &fixture.path("app")).tray,
         None,
@@ -36,7 +38,7 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
     );
 
     clean(&mut state, &target);
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     let tray = card_at(&contents, &fixture.path("app")).tray.clone();
     assert_eq!(
         tray.and_then(|tray| tray.disk?.progress),
@@ -46,35 +48,42 @@ fn a_clean_chosen_on_a_card_names_its_folder_and_one_gone_from_the_map_does_noth
 }
 
 #[test]
-fn cleaning_build_folders_from_a_sessions_line_starts_each_one_of_its_scratch_a_card_would_offer() {
-    let fixture = TempDir::new("state-clean-scratch");
+fn cleaning_build_folders_from_a_line_starts_each_one_it_holds_that_a_card_would_offer() {
+    let fixture = TempDir::new("state-clean-line");
     let (mut state, _inbox) = dashboard(&fixture);
-    // A scratch folder of the session `session_id` holding a build folder of `bytes`.
-    let scratch = |session_id: &str, folder: &str, bytes: u64| {
-        let session_folder = fixture.path(&format!("claude-501/-code-app/{session_id}"));
-        let path = session_folder.join("scratchpad").join(folder);
+    // A clone of `remote` at `name` holding a build folder of `bytes`, readable or not.
+    let clone = |remote: &str, name: &str, bytes: u64, access| {
+        let path = fixture.path(name);
         let target = cargo_target(path.join("target"), measured(bytes));
         Project {
-            scratch: Some(crate::map::ScratchSpace {
-                session_folder,
-                session_id: session_id.to_string(),
-                started_in: "app".to_string(),
-                started_in_folder: None,
-                session: None,
-                session_name: None,
-            }),
+            provenance: Provenance {
+                group: GroupKey::Upstream(remote.to_string()),
+                made_from: Vec::new(),
+            },
+            access,
             ..active_at(path, vec![target])
         }
     };
+    let readable = FolderAccess::Readable;
     let map = snapshot_of(vec![
-        scratch("e26ca359", "r567", 5_000_000),
-        scratch("e26ca359", "tiny", 10),
-        scratch("0b1d4f00", "other", 5_000_000),
+        clone("github.com/me/app", "app", 5_000_000, readable),
+        clone("github.com/me/app", "app-tiny", 10, readable),
+        clone(
+            "github.com/me/app",
+            "app-sealed",
+            5_000_000,
+            FolderAccess::Denied,
+        ),
+        clone("github.com/me/other", "other", 5_000_000, readable),
     ]);
     state.show(Arc::new(map.clone()), now());
 
-    let session_folder = format::path_text(&fixture.path("claude-501/-code-app/e26ca359"));
-    state.perform(Action::CleanScratch { session_folder }, now());
+    let line = LineKey::Group {
+        kind: crate::dashboard::GroupKind::Upstream {
+            remote: "github.com/me/app".to_string(),
+        },
+    };
+    state.perform(Action::CleanBuildFolders { line }, now());
 
     let cleaning: Vec<bool> = map
         .projects
@@ -83,8 +92,9 @@ fn cleaning_build_folders_from_a_sessions_line_starts_each_one_of_its_scratch_a_
         .collect();
     assert_eq!(
         cleaning,
-        [true, false, false],
-        "neither one too small to be worth it, nor another session's"
+        [true, false, false, false],
+        "not one too small to be worth it, nor one in a folder that cannot be read, nor another \
+         group's"
     );
 }
 
@@ -106,7 +116,7 @@ fn a_clean_chosen_on_a_folder_whose_name_is_not_text_starts_on_it_and_not_on_one
     state.show(Arc::new(map), now());
 
     clean(&mut state, &odd.join("target"));
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     let progress = |project: &Path| {
         let tray = card_at(&contents, project).tray.as_ref();
         tray.and_then(|tray| tray.disk.as_ref()?.progress)
@@ -156,7 +166,7 @@ fn a_clean_reaching_other_projects_asks_once_and_the_answer_decides_it() {
         question.destructive,
         "its yes deletes other projects' builds"
     );
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     let progress = card_at(&contents, &project)
         .tray
         .as_ref()
@@ -168,7 +178,7 @@ fn a_clean_reaching_other_projects_asks_once_and_the_answer_decides_it() {
     );
 
     answer(&mut state, &question, false);
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     assert_eq!(contents.dialog, None);
     assert_eq!(
         card_at(&contents, &project).tray,

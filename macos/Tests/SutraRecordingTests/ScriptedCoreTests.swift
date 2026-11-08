@@ -24,55 +24,50 @@ struct ScriptedCoreTests {
 
     private let window = CountingWindow()
     private let core: ScriptedCore
-    private let cedarWeb = "/Demo/Projects/cedar-web/.git"
-
     init() {
         core = ScriptedCore(window: window)
     }
 
-    @Test func aTakeOpensOnTheActivitySortWithEachRepositorysWorktreesUnderItsLine() {
+    @Test func aTakeOpensOnTheActivitySortWithCedarWebsLineOpenOverItsWorktrees() {
         #expect(shown(core.contents()) == takeOpening)
         #expect(core.contents().toolbar.sort?.current == .activity)
     }
 
-    @Test func foldingARepositoryPutsItsAgentsOnItsLineAndUnfoldingBringsItsCardsBack() {
-        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
-        let folded = ["cedar-web: folded", "harbor-api", "lantern-docs", "quiet:3"]
+    @Test func foldingCedarWebsLinePutsItsAgentsOnItAndOpeningItBringsItsCardsBack() {
+        core.perform(action: .toggleFold(line: Scenario.cedarWebLine))
+        let folded = ["cedar-web: folded", "harbor-api: folded", "lantern-docs: folded", "quiet:3"]
         #expect(shown(core.contents()) == folded)
         guard case .rows(let rows) = core.contents().list,
-              case .group(
-                  _, .folded(let sessions, let subagents, let waiting, let lozenges, let more)
-              ) = rows[0]
+              case .line(let line, _) = rows[0],
+              case .folded(let sessions, let subagents, let waiting, let lozenges, let more)
+                = line.fold
         else {
-            Issue.record("the repository's line comes first, folded")
+            Issue.record("Cedar Web's line comes first, folded")
             return
         }
         #expect(sessions.count == 3 && subagents.count == 2 && !waiting)
         // The site its main worktree serves stays in sight on the line.
         #expect(lozenges.map(\.name) == ["web"] && more == nil)
-        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
+        core.perform(action: .toggleFold(line: Scenario.cedarWebLine))
         #expect(shown(core.contents()) == takeOpening)
         #expect(window.changes == 2)
     }
 
-    @Test func theNameAndDiskSortsListEveryWorktreeAloneInTheirOrder() {
+    @Test func theNameAndDiskSortsOrderTheGroupsAndTheCardsUnderEachLineTheirWay() {
         core.perform(action: .setSort(order: .name))
-        #expect(shown(core.contents()) == [
-            "cedar-web", "cedar-web-layout", "cedar-web-search", "harbor-api", "lantern-docs",
-            "quiet:3",
-        ])
+        #expect(shown(core.contents()) == takeOpening, "already in name order, main first")
         core.perform(action: .setSort(order: .disk))
         #expect(shown(core.contents()) == [
-            "harbor-api", "cedar-web", "cedar-web-search", "cedar-web-layout", "lantern-docs",
-            "quiet:3",
+            "harbor-api: folded", "cedar-web: open", "main", "feature/search", "fix/layout",
+            "lantern-docs: folded", "quiet:3",
         ])
         #expect(core.contents().toolbar.sort?.current == .disk)
         #expect(window.changes == 2)
     }
 
-    @Test func theQuietRowOpensToListTheQuietProjectsBelowItAndCloses() {
+    @Test func theQuietRowOpensToListTheQuietGroupsBelowItAndCloses() {
         core.perform(action: .toggleQuietProjects)
-        let quiet = ["atlas-notes", "orchard-kit", "pine-scripts"]
+        let quiet = ["atlas-notes: folded", "orchard-kit: folded", "Other: folded"]
         #expect(shown(core.contents()) == takeOpening + quiet)
         core.perform(action: .toggleQuietProjects)
         #expect(shown(core.contents()) == takeOpening)
@@ -97,7 +92,7 @@ struct ScriptedCoreTests {
     }
 
     @Test func rewindingReturnsTheListToHowATakeOpensIt() {
-        core.perform(action: .toggleFold(parent: .repository(commonDir: cedarWeb)))
+        core.perform(action: .toggleFold(line: Scenario.cedarWebLine))
         core.perform(action: .setSort(order: .name))
         core.perform(action: .toggleQuietProjects)
         core.rewind()

@@ -17,7 +17,7 @@ struct AgentBadges: View {
     }
 }
 
-/// The agents on a card's tray, or on a folded group's line: the sessions, whose faces move,
+/// The agents on a card's tray, or on a folded line: the sessions, whose faces move,
 /// then past a divider the subagents, whose faces hold still. Each row is drawn only while it
 /// holds a robot: an empty one would still take the stack's spacing, and stand its tray's robots
 /// off the column every other tray's stand in.

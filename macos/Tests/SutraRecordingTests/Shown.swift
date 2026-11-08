@@ -1,23 +1,23 @@
 import SutraCore
 
-/// How the list reads as a take opens, as `shown` writes it.
+/// How the list reads as a take opens, as `shown` writes it: Cedar Web's line open over its three
+/// worktrees, its main one first, the other lines folded, and the quiet row.
 let takeOpening = [
-    "cedar-web: main, feature/search, fix/layout", "harbor-api", "lantern-docs", "quiet:3",
+    "cedar-web: open", "main", "feature/search", "fix/layout", "harbor-api: folded",
+    "lantern-docs: folded", "quiet:3",
 ]
 
-/// What the list in `contents` shows, a few words a row, as the core's own tests write it: a
-/// card's name, a group's line as `name: card, card` or `name: folded`, Docker's card as `docker`,
-/// and the quiet row as `quiet:<count>`.
+/// What the list in `contents` shows, a few words a row: a line as `name: open` or
+/// `name: folded`, a card by its name, Docker's card as `docker`, and the quiet row as
+/// `quiet:<count>`.
 func shown(_ contents: WindowContents) -> [String] {
     guard case .rows(let rows) = contents.list else { return [] }
     return rows.map { row in
         switch row {
-        case .card(let card):
+        case .line(let line, _):
+            "\(line.name): " + (line.fold == .open ? "open" : "folded")
+        case .card(let card, _):
             card.name
-        case .group(let line, .open(let cards)):
-            "\(line.name): \(cards.map(\.name).joined(separator: ", "))"
-        case .group(let line, .folded):
-            "\(line.name): folded"
         case .docker:
             "docker"
         case .elsewhere:
@@ -31,11 +31,10 @@ func shown(_ contents: WindowContents) -> [String] {
 /// The card in `contents` whose folder is `path`, wherever the list holds it.
 func card(at path: String, in contents: WindowContents) -> Card? {
     guard case .rows(let rows) = contents.list else { return nil }
-    let cards = rows.flatMap { row -> [Card] in
+    let cards = rows.compactMap { row -> Card? in
         switch row {
-        case .card(let card): [card]
-        case .group(_, .open(let cards)): cards
-        case .group, .docker, .elsewhere, .quietProjects: []
+        case .card(let card, _): card
+        case .line, .docker, .elsewhere, .quietProjects: nil
         }
     }
     return cards.first { $0.path == path }

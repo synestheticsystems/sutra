@@ -17,9 +17,9 @@ struct ListViewTests {
         func stop() {}
     }
 
-    /// The window the list spun in: the Activity sort scrolled into the middle of a repository's
-    /// open group of forty worktrees with long branch names, a few detached and so named by their
-    /// folder beside a chip, between other rows.
+    /// The window the list spun in: the Activity sort scrolled into the middle of a checkout's open
+    /// line of forty worktrees with long branch names, a few detached and so named by their folder
+    /// beside a chip, under its group's open line, between other rows.
     @Test func aListScrolledIntoALongOpenGroupStopsLayingItselfOutOnceLeftAlone() throws {
         let dashboard = DashboardModel(core: FixedCore(Self.contents), native: NativeStandIn())
         let passes = LayoutPasses()
@@ -86,26 +86,21 @@ struct ListViewTests {
         banner: nil,
         stopped: nil,
         list: .rows(rows: [
-            .card(card: card("/Users/me/code/sutra", name: "sutra", chip: main)),
-            .group(
-                line: GroupLine(
-                    parent: .repository(commonDir: "/Users/me/code/ankurah/.git"), name: "ankurah",
-                    tooltip: "", scratch: nil, total: "212 GB", menu: []
-                ),
-                fold: .open(cards: (0..<40).map { worktree($0) })
-            ),
-            .group(
-                line: GroupLine(
-                    parent: .session(folder: "/tmp/claude/5f1c"), name: "Sutra launch plan",
-                    tooltip: "", scratch: ScratchMark(tooltip: "", sessionRuns: true),
-                    total: "14 GB", menu: []
-                ),
-                fold: .open(cards: ["busyloop", "render"].map { folder in
-                    card("/tmp/claude/5f1c/scratchpad/\(folder)", name: folder)
-                })
-            ),
-        ] + (0..<20).map { index in
-            .card(card: card("/Users/me/code/app-\(index)", name: "app-\(index)", chip: main))
+            .line(line: folded(upstream("sutra"), "sutra"), place: top),
+            .line(line: open(upstream("ankurah"), "ankurah"), place: top),
+            .line(line: open(.checkout(folder: "/Users/me/code/ankurah"), "ankurah"),
+                  place: Place(depth: 1, first: true)),
+        ] + (0..<40).map { index in
+            .card(card: worktree(index), place: Place(depth: 2, first: index == 0))
+        } + [
+            .line(line: open(.group(kind: .other), "Other"), place: top),
+        ] + ["busyloop", "render"].enumerated().map { index, folder in
+            .card(
+                card: card("/tmp/claude/5f1c/scratchpad/\(folder)", name: folder),
+                place: Place(depth: 1, first: index == 0)
+            )
+        } + (0..<20).map { index in
+            .line(line: folded(upstream("app-\(index)"), "app-\(index)"), place: top)
         } + [
             .quietProjects(count: 390, open: false, label: "390 quiet", tooltip: ""),
         ]),
@@ -114,8 +109,29 @@ struct ListViewTests {
         settings: SutraCore.Settings(keepFree: nil, keepFreeChoices: [], privateFolders: [])
     )
 
-    /// The `index`th worktree of the open group: on a long branch, or every ninth detached and so
-    /// named by its folder beside its chip, with a robot on every third.
+    /// The place of a group's line, atop the tree.
+    private static let top = Place(depth: 0, first: false)
+
+    /// The key of the group of the clones of `name`'s upstream.
+    private static func upstream(_ name: String) -> LineKey {
+        .group(kind: .upstream(remote: "github.com/me/\(name)"))
+    }
+
+    /// The open line of `key`, going by `name`.
+    private static func open(_ key: LineKey, _ name: String) -> Line {
+        Line(key: key, name: name, tooltip: "", total: "212 GB", menu: [], fold: .open)
+    }
+
+    /// The line of `key`, going by `name`, folded shut over a robot at work.
+    private static func folded(_ key: LineKey, _ name: String) -> Line {
+        let fold = LineFold.folded(
+            sessions: [robot], subagents: [], waiting: false, lozenges: [], moreLozenges: nil
+        )
+        return Line(key: key, name: name, tooltip: "", total: "212 GB", menu: [], fold: fold)
+    }
+
+    /// The `index`th worktree of the open checkout's line: on a long branch, or every ninth
+    /// detached and so named by its folder beside its chip, with a robot on every third.
     private static func worktree(_ index: Int) -> Card {
         let branch = ["feat/digest-trees-stored-fix\(index)-pg-sqlite",
                       "fix/postgres-connection-pool-exhaustion-\(index)",

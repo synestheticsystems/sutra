@@ -1,21 +1,22 @@
-//! The orders the project list can take, as the toolbar names them, and where each puts Docker's
-//! card among the projects': by when its newest container was made, by its name, and by the disk
-//! Docker takes.
+//! The orders the list can take, as the toolbar names them. Every sort lays the list out in groups
+//! (see `group`), and orders both the groups and the rows beside each other under each line: by
+//! their newest work, by name, or by the disk they take. Docker's group stands among the others
+//! by when the newest container on its card was made, by its name, and by the disk Docker takes.
 
 use std::cmp::Reverse;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::focus::{disk_bytes, docker_bytes};
-use super::{DOCKER, SectionRow, group};
+use super::{DOCKER, Elsewhere, Group, Node, SectionRow};
 use crate::dashboard::SortOrder;
-use crate::map::{Docker, Project, Snapshot};
+use crate::map::{Docker, GroupKey, Project};
 
-/// How finely the Activity sort tells activity apart. Projects whose last activity falls in the
-/// same five minutes of the clock rank alike and stand in name order, so that agents at work in
-/// several projects at once do not shuffle the cards each time one of them writes. The slices are
-/// fixed to the clock, not counted back from now, so a card moves up only when its activity enters
-/// a newer slice, never because time passes.
+/// How finely the Activity sort tells activity apart. Rows whose last activity falls in the same
+/// five minutes of the clock rank alike and stand in name order, so that agents at work in several
+/// projects at once do not shuffle the cards each time one of them writes. The slices are fixed to
+/// the clock, not counted back from now, so a row moves up only when its activity enters a newer
+/// slice, never because time passes.
 const ACTIVITY_SLICE: Duration = Duration::from_secs(5 * 60);
 
 impl SortOrder {
@@ -38,133 +39,173 @@ impl SortOrder {
         }
     }
 
-    /// `projects`, the cards above the quiet row or every card a typed filter admits, as this sort
-    /// lays them out: the Activity sort gathers the cards of a parent into its group (see `group`),
-    /// and the others list every card alone. `map` gives each group every project of its parent.
+    /// `groups` in this order: by their newest work, the newest slice first and each slice by name;
+    /// by name, with Other, which names no upstream, last; or the most disk first, groups that take
+    /// alike keeping the Activity order. Two of one name stand by their keys, so no two tie.
+    pub(super) fn order_groups(self, groups: &mut [Group]) {
+        let by_activity = |group: &Group| (activity_rank(group), group.key.clone());
+        match self {
+            SortOrder::Activity => groups.sort_by_cached_key(by_activity),
+            SortOrder::Name => {
+                groups.sort_by_cached_key(|group| (name_rank(group), group.key.clone()))
+            }
+            SortOrder::Disk => {
+                groups.sort_by_cached_key(by_activity);
+                groups.sort_by_cached_key(|group| Reverse(bytes_of(&group.members)));
+            }
+        }
+    }
+
+    /// One section's rows: `groups`, as `order_groups` ordered them, with Docker's group, while
+    /// `docker` is here, after every group this order ranks before it or alike.
     pub(super) fn lay_out<'a>(
         self,
-        projects: Vec<&'a Project>,
-        map: &'a Snapshot,
+        groups: Vec<Group<'a>>,
+        docker: Option<&'a Docker>,
     ) -> Vec<SectionRow<'a>> {
-        match self {
-            SortOrder::Activity => group::gather(projects, map),
-            SortOrder::Name | SortOrder::Disk => {
-                let arranged = self.arrange(projects).into_iter();
-                arranged.map(SectionRow::Project).collect()
-            }
-        }
-    }
-
-    /// `rows`, laid out in this order, with Docker's card where this order puts it: after every row
-    /// that ranks before it or alike.
-    pub(super) fn place_docker<'a>(self, rows: &mut Vec<SectionRow<'a>>, docker: &'a Docker) {
-        let card = SectionRow::Docker(docker);
-        let at = match self {
+        let at = docker.map(|docker| match self {
             SortOrder::Activity => {
-                let rank = card.activity_rank();
-                rows.partition_point(|row| row.activity_rank() <= rank)
+                let rank = docker_activity_rank(docker);
+                groups.partition_point(|group| activity_rank(group) <= rank)
             }
-            SortOrder::Name => rows.partition_point(|row| row.name_key() <= card.name_key()),
+            SortOrder::Name => {
+                groups.partition_point(|group| name_rank(group) <= docker_name_rank())
+            }
             SortOrder::Disk => {
-                let bytes = card.disk_bytes();
-                rows.partition_point(|row| row.disk_bytes() >= bytes)
+                let bytes = docker_bytes(docker);
+                groups.partition_point(|group| bytes_of(&group.members) >= bytes)
             }
-        };
-        rows.insert(at, card);
+        });
+        let mut rows: Vec<SectionRow> = groups.into_iter().map(SectionRow::Group).collect();
+        if let (Some(at), Some(docker)) = (at, docker) {
+            rows.insert(at, SectionRow::Docker(docker));
+        }
+        rows
     }
 
-    /// `projects` in this order, every card alone, as the quiet section lists them in every sort.
-    /// They arrive newest activity first, and the Disk sort is stable, so projects of the same size
-    /// keep that order; it weighs `focus::disk_bytes`.
-    pub(super) fn arrange<'a>(
-        self,
-        projects: impl IntoIterator<Item = &'a Project>,
-    ) -> Vec<&'a Project> {
-        let mut arranged: Vec<&Project> = projects.into_iter().collect();
+    /// `rows`, the rows of one line beside each other, in this order: by their newest work, the
+    /// newest slice first and each slice in the order of the names they go by, ignoring case; by
+    /// those names; or the most disk first. They arrive in the map's order, newest activity first,
+    /// and the Disk sort is stable, so rows that take alike keep it. The agents working elsewhere
+    /// come first in every order, as what they show is all at work.
+    pub(super) fn order_rows(self, rows: &mut [Node]) {
         match self {
-            SortOrder::Activity => arranged.sort_by_cached_key(|project| {
-                activity_rank(activity_slice(project), &project.name, &project.path)
+            SortOrder::Activity => rows.sort_by_cached_key(|row| {
+                let (name, path) = name_of(row);
+                let path = path.map(Path::to_path_buf);
+                (rank(row), Reverse(slice_of(row)), name.to_lowercase(), path)
             }),
-            SortOrder::Name => arranged.sort_by_cached_key(|project| project.name.to_lowercase()),
-            SortOrder::Disk => arranged.sort_by_key(|project| Reverse(disk_bytes(project))),
+            SortOrder::Name => rows.sort_by_cached_key(|row| {
+                let (name, path) = name_of(row);
+                (rank(row), name.to_lowercase(), path.map(Path::to_path_buf))
+            }),
+            SortOrder::Disk => rows.sort_by_cached_key(|row| (rank(row), Reverse(bytes(row)))),
         }
-        arranged
     }
 }
 
-/// The slice of the clock (see `ACTIVITY_SLICE`) holding `project`'s last activity; `None`, which
-/// the Activity sort puts last, for a project with no activity known.
-pub(super) fn activity_slice(project: &Project) -> Option<u64> {
-    slice_of(project.last_activity?)
+/// Where the Activity sort stands `group`: by the slice of its newest work, the newest first, then
+/// by its name, ignoring case.
+fn activity_rank(group: &Group) -> (Reverse<Option<u64>>, String) {
+    (
+        Reverse(newest_slice(&group.children)),
+        group.name.to_lowercase(),
+    )
+}
+
+/// Where the Activity sort stands Docker's group: by the slice in which the newest container on
+/// its card was made, as a group by its newest work.
+fn docker_activity_rank(docker: &Docker) -> (Reverse<Option<u64>>, String) {
+    let made = docker.containers.iter().map(|container| container.created);
+    (Reverse(slice(made.max())), DOCKER.to_lowercase())
+}
+
+/// Where the Name sort stands `group`: by its name, ignoring case, with Other last.
+fn name_rank(group: &Group) -> (bool, String) {
+    let other = *group.key == GroupKey::Other;
+    (other, group.name.to_lowercase())
+}
+
+/// Where the Name sort stands Docker's group: by its name, as any group but Other.
+fn docker_name_rank() -> (bool, String) {
+    (false, DOCKER.to_lowercase())
+}
+
+/// Where a row stands before any order weighs it: the agents working elsewhere first.
+fn rank(row: &Node) -> u8 {
+    u8::from(!matches!(row, Node::Elsewhere(_)))
+}
+
+/// The name a row goes by, and the folder it is known by, which tells apart two of one name.
+fn name_of<'a>(row: &'a Node) -> (&'a str, Option<&'a Path>) {
+    match row {
+        Node::Card { project, naming } => (naming.shown(project), Some(project.path.as_path())),
+        Node::Checkout(checkout) => (&checkout.name, Some(checkout.project.path.as_path())),
+        Node::Elsewhere(_) => ("", None),
+    }
+}
+
+/// The slice of the clock (see `ACTIVITY_SLICE`) holding the newest work in `row`; `None`, which
+/// the Activity sort puts last, for a row with no work known.
+fn slice_of(row: &Node) -> Option<u64> {
+    match row {
+        Node::Card { project, .. } => activity_slice(project),
+        Node::Checkout(checkout) => newest_slice(&checkout.children),
+        Node::Elsewhere(elsewhere) => slice(newest_work_elsewhere(elsewhere)),
+    }
+}
+
+/// The newest slice of `rows`' work.
+fn newest_slice(rows: &[Node]) -> Option<u64> {
+    rows.iter().filter_map(slice_of).max()
+}
+
+/// The newest work of the agents working elsewhere.
+fn newest_work_elsewhere(elsewhere: &Elsewhere) -> Option<SystemTime> {
+    let sessions = elsewhere
+        .sessions
+        .iter()
+        .map(|session| session.last_activity);
+    let subagents = elsewhere.subagents.iter();
+    let subagents = subagents.map(|working| working.subagent.last_write);
+    sessions.chain(subagents).flatten().max()
+}
+
+/// What a row takes on disk, as the Disk sort weighs it: a card its folder, a checkout's line all
+/// it holds on the map, listed or not.
+fn bytes(row: &Node) -> u64 {
+    match row {
+        Node::Card { project, .. } => disk_bytes(project),
+        Node::Checkout(checkout) => bytes_of(&checkout.members),
+        Node::Elsewhere(_) => 0,
+    }
+}
+
+/// What `projects` take on disk between them, as `focus::disk_bytes` weighs each.
+fn bytes_of(projects: &[&Project]) -> u64 {
+    projects.iter().map(|project| disk_bytes(project)).sum()
+}
+
+/// The slice of the clock holding `project`'s last activity.
+fn activity_slice(project: &Project) -> Option<u64> {
+    slice(project.last_activity)
 }
 
 /// The slice of the clock holding `at`.
-fn slice_of(at: SystemTime) -> Option<u64> {
-    let since_epoch = at.duration_since(UNIX_EPOCH).ok()?;
+fn slice(at: Option<SystemTime>) -> Option<u64> {
+    let since_epoch = at?.duration_since(UNIX_EPOCH).ok()?;
     Some(since_epoch.as_secs() / ACTIVITY_SLICE.as_secs())
-}
-
-impl<'a> SectionRow<'a> {
-    /// Where the Activity sort stands the row (see `activity_rank`): a card by its own activity, a
-    /// group by its newest card's, and Docker's card by when the newest container on it was made.
-    pub(super) fn activity_rank(&self) -> (Reverse<Option<u64>>, String, &'a Path) {
-        match self {
-            SectionRow::Project(project) => {
-                activity_rank(activity_slice(project), &project.name, &project.path)
-            }
-            SectionRow::Group(group) => {
-                let newest = group.cards.iter().map(|card| activity_slice(card)).max();
-                activity_rank(newest.flatten(), &group.name, group.parent.folder())
-            }
-            SectionRow::Docker(docker) => {
-                let newest = docker
-                    .containers
-                    .iter()
-                    .map(|container| container.created)
-                    .max();
-                activity_rank(newest.and_then(slice_of), DOCKER, &docker.socket)
-            }
-        }
-    }
-
-    /// Where the Name sort stands the row: by the name it goes by, ignoring case.
-    fn name_key(&self) -> String {
-        match self {
-            SectionRow::Project(project) => project.name.to_lowercase(),
-            SectionRow::Group(group) => group.name.to_lowercase(),
-            SectionRow::Docker(_) => DOCKER.to_lowercase(),
-        }
-    }
-
-    /// What the Disk sort weighs the row by: a card's folder, a group's cards between them, and
-    /// Docker's disk use.
-    fn disk_bytes(&self) -> u64 {
-        match self {
-            SectionRow::Project(project) => disk_bytes(project),
-            SectionRow::Group(group) => group.cards.iter().map(|card| disk_bytes(card)).sum(),
-            SectionRow::Docker(docker) => docker_bytes(docker),
-        }
-    }
-}
-
-/// Where the Activity sort stands a card, or a group, that goes by `name`, its newest activity in
-/// `slice`: the newest slice first, each slice in name order, ignoring case, and two of one name
-/// by `path`, the card's folder or the folder its group's parent is known by, so that no two tie.
-pub(super) fn activity_rank<'p>(
-    slice: Option<u64>,
-    name: &str,
-    path: &'p Path,
-) -> (Reverse<Option<u64>>, String, &'p Path) {
-    (Reverse(slice), name.to_lowercase(), path)
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::super::Row;
-    use super::super::fixtures::{self, linked_worktree, main_worktree, shown, snapshot};
+    use super::super::Naming;
+    use super::super::fixtures::{self, came_from, shown, snapshot, upstream};
     use super::*;
+    use crate::dashboard::cleaning::tests::cleaning;
+    use crate::dashboard::listing::{Arrangement, Listing};
     use crate::map::Measurement;
     use crate::map::test_support::{at, cargo_target, measured, project_at};
 
@@ -187,19 +228,26 @@ mod tests {
         }
     }
 
-    fn names(arranged: Vec<&Project>) -> Vec<&str> {
-        arranged
-            .iter()
-            .map(|project| project.name.as_str())
-            .collect()
-    }
-
     /// A project last active `secs` after the epoch, or never.
     fn active(name: &str, secs: Option<u64>) -> Project {
         Project {
             last_activity: secs.map(at),
             ..project(name, &[], None)
         }
+    }
+
+    /// The names of `projects`, as cards beside each other going by their folders, in `sort`'s
+    /// order.
+    fn ordered(sort: SortOrder, projects: &[Project]) -> Vec<String> {
+        let mut rows: Vec<Node> = projects
+            .iter()
+            .map(|project| Node::Card {
+                project,
+                naming: Naming::Folder(project.name.clone()),
+            })
+            .collect();
+        sort.order_rows(&mut rows);
+        rows.iter().map(|row| name_of(row).0.to_string()).collect()
     }
 
     #[test]
@@ -213,20 +261,16 @@ mod tests {
             active("newer-a", Some(1_499)),
         ];
         assert_eq!(
-            names(SortOrder::Activity.arrange(&projects)),
+            ordered(SortOrder::Activity, &projects),
             ["newer-a", "newer-b", "older-a", "older-b", "never"]
         );
     }
 
     #[test]
-    fn a_card_moves_up_only_when_its_activity_enters_a_newer_slice() {
+    fn a_row_moves_up_only_when_its_activity_enters_a_newer_slice() {
         let order = |b_at| {
             let projects = [active("a", Some(1_250)), active("b", Some(b_at))];
-            let arranged = SortOrder::Activity.arrange(&projects);
-            arranged
-                .iter()
-                .map(|project| project.name.clone())
-                .collect::<Vec<_>>()
+            ordered(SortOrder::Activity, &projects)
         };
         assert_eq!(order(1_210), ["a", "b"]);
         assert_eq!(
@@ -238,42 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_activity_sort_nests_a_repositorys_worktrees_and_a_sessions_scratch_folders() {
-        let app = "/code/app/.git";
-        let foundry = |folder| {
-            let scratch = fixtures::scratch_folder("e26ca359", folder, fixtures::project("", 1));
-            fixtures::running_as("Foundry", scratch)
-        };
-        let map = snapshot(
-            vec![
-                main_worktree(app, "main", fixtures::project("app", 1)),
-                linked_worktree(app, "fix", fixtures::project("app-fix", 1)),
-                foundry("r567"),
-                foundry("r593"),
-            ],
-            vec![],
-        );
-        let laid_out = |sort: SortOrder| {
-            let rows = sort.lay_out(map.projects.iter().collect(), &map);
-            let rows: Vec<Row> = rows.into_iter().map(Row::from).collect();
-            shown(&rows)
-        };
-        assert_eq!(
-            laid_out(SortOrder::Activity),
-            ["app: app, app-fix", "Foundry: r567, r593"]
-        );
-        assert_eq!(
-            laid_out(SortOrder::Name),
-            ["app", "app-fix", "r567", "r593"],
-            "each scratch folder by its own name, as no line names its session"
-        );
-        assert_eq!(
-            laid_out(SortOrder::Disk),
-            ["app", "app-fix", "r567", "r593"]
-        );
-    }
-
-    #[test]
     fn name_ignores_case() {
         let projects = [
             project("beta", &[], None),
@@ -281,7 +289,7 @@ mod tests {
             project("gamma", &[], None),
         ];
         assert_eq!(
-            names(SortOrder::Name.arrange(&projects)),
+            ordered(SortOrder::Name, &projects),
             ["Alpha", "beta", "gamma"]
         );
     }
@@ -295,7 +303,7 @@ mod tests {
             project("large", &[Some(400), Some(200)], None),
         ];
         assert_eq!(
-            names(SortOrder::Disk.arrange(&projects)),
+            ordered(SortOrder::Disk, &projects),
             ["large", "small", "none", "unmeasured"]
         );
     }
@@ -307,8 +315,55 @@ mod tests {
             project("large-folder", &[Some(100)], Some(1_000)),
         ];
         assert_eq!(
-            names(SortOrder::Disk.arrange(&projects)),
+            ordered(SortOrder::Disk, &projects),
             ["large-folder", "large-target"]
+        );
+    }
+
+    #[test]
+    fn every_sort_groups_the_cards_and_orders_the_groups_by_what_it_weighs() {
+        let sized = |gigabytes: u64, project: Project| Project {
+            own_files: measured(gigabytes << 30),
+            ..project
+        };
+        let grouped = |remote: &str, project| came_from(upstream(remote), &[], project);
+        let map = snapshot(
+            vec![
+                sized(
+                    1,
+                    grouped("github.com/me/zeta", fixtures::project("zeta", 1)),
+                ),
+                sized(2, fixtures::project("loose", 1)),
+                sized(
+                    9,
+                    grouped("github.com/me/alpha", fixtures::project("alpha", 30)),
+                ),
+                sized(
+                    3,
+                    grouped("github.com/me/zeta", fixtures::project("zeta-2", 40)),
+                ),
+            ],
+            vec![],
+        );
+        let laid_out = |sort: SortOrder| {
+            let mut arrangement = Arrangement::default();
+            arrangement.set_sort(sort, &map, &cleaning(), fixtures::now());
+            shown(&Listing::new(&map, &arrangement, &cleaning(), fixtures::now()).rows)
+        };
+        assert_eq!(
+            laid_out(SortOrder::Activity),
+            ["Other: loose", "zeta: zeta, zeta-2", "alpha: alpha"],
+            "a minute ago, Other's name before zeta's, then thirty minutes ago"
+        );
+        assert_eq!(
+            laid_out(SortOrder::Name),
+            ["alpha: alpha", "zeta: zeta, zeta-2", "Other: loose"],
+            "Other last"
+        );
+        assert_eq!(
+            laid_out(SortOrder::Disk),
+            ["alpha: alpha", "zeta: zeta-2, zeta", "Other: loose"],
+            "9 GB, then 4 GB in all, the larger of zeta's first"
         );
     }
 }

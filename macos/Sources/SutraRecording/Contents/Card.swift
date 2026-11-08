@@ -1,12 +1,12 @@
 import Foundation
 import SutraCore
 
-/// What a card goes by, which its place on the list decides.
+/// What a card goes by, which its place on the list decides, as the live core decides it.
 enum Naming {
-    /// Standing alone: its folder's name, beside its branch on a chip.
-    case alone
-    /// Nested under the line that names its repository: its branch.
-    case nested
+    /// Under its repository's own line: its branch, which needs no chip.
+    case branch
+    /// Anywhere else: its folder's name, beside its branch on a chip.
+    case folder
 }
 
 extension Project {
@@ -17,14 +17,13 @@ extension Project {
         let activity = Scenario.opening + lastActivity(at: moment)
         let source = sessions.isEmpty ? "from git" : "from an agent session"
         let folder = "\(Words.tilde(path))\nLast activity \(Words.timestamp(activity)), \(source)"
-        // Nested under its repository's line, it goes by its branch, which needs no chip.
-        let nestedBranch = naming == .nested ? worktree?.branch : nil
+        let byBranch = naming == .branch ? worktree?.branch : nil
         return Card(
             path: path,
             location: Words.tilde(path),
-            name: nestedBranch ?? name,
-            nameTooltip: nestedBranch.map { "\($0)\n\(folder)" } ?? folder,
-            chip: nestedBranch == nil ? worktree.map(\.chip) : nil,
+            name: byBranch ?? name,
+            nameTooltip: byBranch.map { "\($0)\n\(folder)" } ?? folder,
+            chip: byBranch == nil ? worktree.map(\.chip) : nil,
             age: Words.age(of: activity, at: now),
             unreadable: nil,
             lozenges: units.map(\.lozenge),

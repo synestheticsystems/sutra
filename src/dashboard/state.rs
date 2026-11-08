@@ -26,7 +26,7 @@ use super::contents::{CardContext, banner, card, footer, heading, list, toolbar}
 use super::disk_space::{Volume, VolumeUnread};
 use super::listing::{Arrangement, Listing};
 use super::live::Event;
-use super::{Action, Parent, PrivateFolderSwitch, Settings, WindowContents, format};
+use super::{Action, LineKey, PrivateFolderSwitch, Settings, WindowContents, format};
 use crate::map::grant::{self, GrantError, Roots};
 use crate::map::{ArtifactDir, PrivateFolder, Project, Snapshot, clean};
 use crate::notifications::Notifier;
@@ -131,7 +131,7 @@ impl State {
     pub(super) fn perform(&mut self, action: Action, now: SystemTime) {
         match action {
             Action::Clean { folder } => self.clean(&folder),
-            Action::CleanScratch { session_folder } => self.clean_scratch(&session_folder),
+            Action::CleanBuildFolders { line } => self.clean_line(&line, now),
             Action::CleanIdle => self.clean_idle(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
             Action::SetSort { order } => {
@@ -153,7 +153,7 @@ impl State {
                 let map = self.snapshot.as_deref();
                 self.arrangement.toggle_quiet(map, &self.cleaning, now);
             }
-            Action::ToggleFold { parent } => self.toggle_fold(&parent),
+            Action::ToggleFold { line } => self.toggle_fold(&line),
             Action::PointerEnteredList => {
                 let map = self.snapshot.as_deref();
                 self.arrangement.pointer_entered(map, &self.cleaning, now);
@@ -314,19 +314,25 @@ impl State {
         self.notifier.process_snapshot(&snapshot);
         self.cleaning.settle(&snapshot);
         self.arrangement.observe(&snapshot, &self.cleaning, now);
-        if self.settings.folds.forget_gone(&snapshot) {
+        // What a line stands for comes and goes only with the projects on the map, which every
+        // snapshot shares until one joins or leaves.
+        let ancestry_changed = self
+            .snapshot
+            .as_ref()
+            .is_none_or(|shown| !Arc::ptr_eq(&shown.ancestry, &snapshot.ancestry));
+        if ancestry_changed && self.settings.folds.forget_gone(&snapshot) {
             self.save_settings();
         }
         self.snapshot = Some(snapshot);
     }
 
-    /// The user clicked the line of the group of `parent`: fold it shut or open it, and keep that
-    /// for the next run.
-    fn toggle_fold(&mut self, parent: &Parent) {
+    /// The user clicked the line of `line`: fold what it holds shut or open it, and keep that for
+    /// the next run.
+    fn toggle_fold(&mut self, line: &LineKey) {
         let Some(map) = &self.snapshot else {
             return;
         };
-        if self.settings.folds.toggle(parent, map) {
+        if self.settings.folds.toggle(line, map) {
             self.save_settings();
         }
     }
@@ -467,25 +473,18 @@ impl State {
             .start(project, dir, Arc::clone(&map), &self.home);
     }
 
-    /// The user chose Clean Build Folders on the line of the session whose folder reads
-    /// `session_folder`, as the line named it with `format::path_text`: clean each build folder of
-    /// the session's scratch folders that the line offered, as their cards would.
-    fn clean_scratch(&mut self, session_folder: &str) {
+    /// The user chose Clean Build Folders on the line of `line` at `now`: clean each build folder
+    /// in what the line holds that its menu offers now, as their cards would. A line the list no
+    /// longer shows cleans nothing.
+    fn clean_line(&mut self, line: &LineKey, now: SystemTime) {
         let Some(map) = self.snapshot.clone() else {
             return;
         };
-        let in_the_session = |project: &&Project| {
-            let space = project.scratch.as_ref();
-            space.is_some_and(|space| format::is_path_text(&space.session_folder, session_folder))
+        let listing = Listing::new(&map, &self.arrangement, &self.cleaning, now);
+        let Some(members) = listing.members_of(line) else {
+            return;
         };
-        let cleaning = &self.cleaning;
-        let clicked: Vec<(&Project, &ArtifactDir)> = map
-            .projects
-            .iter()
-            .filter(in_the_session)
-            .flat_map(|project| project.artifacts.iter().map(move |dir| (project, dir)))
-            .filter(|(_, dir)| card::offers_clean(dir, cleaning))
-            .collect();
+        let clicked: Vec<(&Project, &ArtifactDir)> = list::offered_cleans(members, &self.cleaning);
         self.cleaning
             .start_each(&clicked, Arc::clone(&map), &self.home);
     }

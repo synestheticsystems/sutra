@@ -48,7 +48,7 @@ fn the_contents_count_the_agents_waiting_for_the_title_and_the_dock() {
     };
     state.show(Arc::new(snapshot_of(vec![waiting])), now());
 
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     assert_eq!(contents.title, "Sutra \u{00b7} 1 waiting");
     assert_eq!(contents.dock_badge.as_deref(), Some("1"));
     assert_eq!(contents.stopped, None);
@@ -78,7 +78,7 @@ fn once_the_running_engine_stops_the_window_keeps_its_last_map_and_claims_no_new
 
     state.on_engine_stopped(running);
 
-    let contents = state.contents(now());
+    let contents = with_every_line_open(&mut state);
     assert_eq!(contents.title, "Sutra \u{00b7} stopped");
     assert_eq!(contents.dock_badge.as_deref(), Some("!"));
     assert_eq!(

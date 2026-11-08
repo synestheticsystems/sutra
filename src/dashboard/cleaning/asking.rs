@@ -110,7 +110,7 @@ impl Cleaning {
     }
 
     /// The user clicked Clean on each of `clicked`, a build folder and the project it is in: on a
-    /// card, its one, or on a session's line, every build folder in the session's scratch. Each
+    /// card, its one, or on a line, every build folder its menu offers in what it holds. Each
     /// card shows its clean at once, and what the cleans mean is worked out on one thread, as `map`
     /// shows them: `asking` then takes each from there, as it would the one of a card.
     pub(in crate::dashboard) fn start_each(

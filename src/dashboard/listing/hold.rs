@@ -1,14 +1,13 @@
 //! Holding the list still. While the pointer is over the list, or while the Disk sort waits for
-//! the first sizing to finish, the cards that stay listed keep their places, and the Activity
-//! sort's groups keep theirs, folded shut or open. Holding only pauses re-sorting: a card that
-//! arrives appears at once, in the place the sort gives it, within its group if it has one, and a
-//! card that leaves is gone at once, a group it leaves with one card giving way to that card.
+//! the first sizing to finish, the groups that stay listed keep their places, Docker's among them,
+//! and so do the rows under each line, folded shut or open. Holding only pauses re-sorting: a card
+//! that arrives appears at once, in the place the sort gives it under its line, and a card that
+//! leaves is gone at once.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::SectionRow;
-use super::group::Group;
+use super::{Checkout, Group, Node, SectionRow};
 use crate::map::Project;
 
 /// What holds the list still, and the order it holds.
@@ -28,9 +27,10 @@ pub(super) struct Hold {
     order: Option<Order>,
 }
 
-/// The cards of each section of the list, in the order on screen, a folded group's where its line
-/// stands. A group's cards stand together, so the order of the groups and the cards standing
-/// alone is the order of their cards.
+/// The cards of each section of the list, in the order on screen, those under a folded line where
+/// it stands, and Docker's by the socket Docker is read through. The cards under a line stand
+/// together, so the order of the groups, and of the rows under each line, is the order of their
+/// cards.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Order {
     /// The cards above the quiet row, or every card while a filter is typed.
@@ -101,10 +101,11 @@ impl Hold {
     }
 
     /// `sorted`, one section's rows as the sort lays them out, with the cards the held order lists
-    /// put back in that order: each card alone in its held place, each group in the place its first
-    /// held card gives it, then the cards within each group. Each card or group new to the section
-    /// keeps the place the sort gives it, and one gone from it leaves no gap. Unheld, `sorted` as
-    /// it is.
+    /// put back in that order: each group in the place its first held card gives it, and Docker's
+    /// in the place of its card, then under each line the rows beside each other, each in the place
+    /// of its first held card, the line's own card staying first. Each group or row new to the
+    /// section keeps the place the sort gives it, and one gone from it leaves no gap. Unheld,
+    /// `sorted` as it is.
     pub(super) fn arrange<'a>(
         &self,
         section: Section,
@@ -117,27 +118,58 @@ impl Hold {
             Section::Main => &order.main,
             Section::Quiet => &order.quiet,
         };
-        let place: HashMap<&Path, usize> = held
-            .iter()
-            .enumerate()
-            .map(|(place, path)| (path.as_path(), place))
-            .collect();
-        let card_place = |card: &&Project| place.get(card.path.as_path()).copied();
+        let places = Places(
+            held.iter()
+                .enumerate()
+                .map(|(place, path)| (path.as_path(), place))
+                .collect(),
+        );
         let row_place = |row: &SectionRow| match row {
-            SectionRow::Project(card) => card_place(card),
-            SectionRow::Group(group) => group.cards.iter().filter_map(card_place).min(),
-            SectionRow::Docker(docker) => place.get(docker.socket.as_path()).copied(),
+            SectionRow::Group(group) => places.first_of(&group.cards()),
+            SectionRow::Docker(docker) => places.0.get(docker.socket.as_path()).copied(),
         };
         keep_places(sorted, row_place)
             .into_iter()
             .map(|row| match row {
-                SectionRow::Group(group) => SectionRow::Group(Group {
-                    cards: keep_places(group.cards, card_place),
-                    ..group
-                }),
-                row @ (SectionRow::Project(_) | SectionRow::Docker(_)) => row,
+                SectionRow::Group(group) => {
+                    let own_card = usize::from(group.checkout.is_some());
+                    SectionRow::Group(Group {
+                        children: places.arrange_rows(group.children, own_card),
+                        ..group
+                    })
+                }
+                docker @ SectionRow::Docker(_) => docker,
             })
             .collect()
+    }
+}
+
+/// Where each card stood in the held order.
+struct Places<'p>(HashMap<&'p Path, usize>);
+
+impl Places<'_> {
+    /// The first held place among `cards`, `None` for cards new to the section.
+    fn first_of(&self, cards: &[&Project]) -> Option<usize> {
+        let held = cards
+            .iter()
+            .filter_map(|card| self.0.get(card.path.as_path()));
+        held.min().copied()
+    }
+
+    /// `rows`, the rows of one line, back in their held places, past the first `pinned`, a line's
+    /// own card, which stays first, and the rows under each of them in theirs.
+    fn arrange_rows<'a>(&self, rows: Vec<Node<'a>>, pinned: usize) -> Vec<Node<'a>> {
+        let mut rows = rows.into_iter();
+        let first: Vec<Node> = rows.by_ref().take(pinned).collect();
+        let rest = keep_places(rows.collect(), |row: &Node| self.first_of(&row.cards()));
+        let arranged = rest.into_iter().map(|row| match row {
+            Node::Checkout(checkout) => Node::Checkout(Checkout {
+                children: self.arrange_rows(checkout.children, 1),
+                ..checkout
+            }),
+            row => row,
+        });
+        first.into_iter().chain(arranged).collect()
     }
 }
 
@@ -171,9 +203,9 @@ fn keep_places<T>(sorted: Vec<T>, held_place: impl Fn(&T) -> Option<usize>) -> V
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::shown;
-    use super::super::{Parent, Row};
+    use super::super::{Naming, Row};
     use super::*;
-    use crate::map::RepoInfo;
+    use crate::map::GroupKey;
     use crate::map::test_support::project_at;
 
     fn project(name: &str) -> Project {
@@ -198,120 +230,118 @@ mod tests {
         hold
     }
 
-    /// The main section's `sorted` rows as `hold` arranges them, as the rows show them.
-    fn arranged_rows(hold: &Hold, sorted: Vec<SectionRow>) -> Vec<String> {
+    /// The main section's `sorted` groups as `hold` arranges them, as the rows show them.
+    fn arranged(hold: &Hold, sorted: Vec<Group>) -> Vec<String> {
+        let sorted = sorted.into_iter().map(SectionRow::Group).collect();
         let arranged = hold.arrange(Section::Main, sorted).into_iter();
         shown(&arranged.map(Row::from).collect::<Vec<_>>())
     }
 
-    /// The main section's `sorted` cards, each alone, as `hold` arranges them.
-    fn arranged(hold: &Hold, sorted: Vec<&Project>) -> Vec<String> {
-        arranged_rows(hold, sorted.into_iter().map(SectionRow::Project).collect())
+    /// The card of `project`, going by its folder's name.
+    fn card(project: &Project) -> Node<'_> {
+        Node::Card {
+            project,
+            naming: Naming::Folder(project.name.clone()),
+        }
     }
 
-    /// The group of the repository `name`, listing `cards`, known by its name in place of a git
-    /// dir.
-    fn group<'a>(name: &'static str, cards: Vec<&'a Project>) -> SectionRow<'a> {
-        // Kept for the rest of the test run, as a group borrows its parent from the map.
-        let repo = Box::leak(Box::new(RepoInfo {
-            common_dir: PathBuf::from(name),
-            git_dir: PathBuf::from(name),
-            worktree_name: None,
-            branch: None,
-            head: None,
-        }));
-        SectionRow::Group(Group {
-            parent: Parent::Repository(repo),
-            name: name.to_string(),
-            cards,
+    /// The line of `project`, holding its own card first, then `copies`.
+    fn line<'a>(project: &'a Project, copies: Vec<Node<'a>>) -> Node<'a> {
+        Node::Checkout(Checkout {
+            project,
+            name: project.name.clone(),
+            children: std::iter::once(card(project)).chain(copies).collect(),
             members: Vec::new(),
         })
     }
 
+    /// The group `name`, whose line holds `children`.
+    fn group<'a>(name: &'static str, children: Vec<Node<'a>>) -> Group<'a> {
+        // Kept for the rest of the test run, as a group borrows its key from the map.
+        let key = Box::leak(Box::new(GroupKey::Upstream(name.to_string())));
+        Group {
+            key,
+            name: name.to_string(),
+            checkout: None,
+            children,
+            members: Vec::new(),
+        }
+    }
+
+    /// The group of the one card `project`.
+    fn alone(project: &Project) -> Group<'_> {
+        let name = Box::leak(project.name.clone().into_boxed_str());
+        group(name, vec![card(project)])
+    }
+
     #[test]
-    fn held_cards_keep_their_order_however_the_sort_now_ranks_them() {
+    fn held_groups_keep_their_order_however_the_sort_now_ranks_them() {
         let [a, b, c] = ["a", "b", "c"].map(project);
         let hold = holding(&["a", "b", "c"]);
-        assert_eq!(arranged(&hold, vec![&c, &a, &b]), ["a", "b", "c"]);
-    }
-
-    #[test]
-    fn a_new_card_takes_the_place_the_sort_gives_it_among_held_ones() {
-        let [a, b, new] = ["a", "b", "new"].map(project);
-        let hold = holding(&["a", "b"]);
-        assert_eq!(arranged(&hold, vec![&new, &b, &a]), ["new", "a", "b"]);
-        assert_eq!(arranged(&hold, vec![&b, &new, &a]), ["a", "new", "b"]);
-    }
-
-    #[test]
-    fn a_card_gone_from_the_section_leaves_no_gap() {
-        let [a, c] = ["a", "c"].map(project);
-        let hold = holding(&["a", "b", "c"]);
-        assert_eq!(arranged(&hold, vec![&c, &a]), ["a", "c"]);
-    }
-
-    #[test]
-    fn held_groups_keep_their_order_and_a_card_new_to_one_arrives_within_it() {
-        let [a, a_fix, b, b_new] = ["a", "a-fix", "b", "b-new"].map(project);
-        let hold = holding(&["a", "a-fix", "b"]);
-        // The sort now puts b's group first, its new card second, where a flat hold would have
-        // put it between a's cards.
-        let sorted = vec![group("b", vec![&b, &b_new]), group("a", vec![&a_fix, &a])];
-        assert_eq!(arranged_rows(&hold, sorted), ["a: a, a-fix", "b: b, b-new"]);
-    }
-
-    #[test]
-    fn held_groups_and_cards_alone_keep_their_order_among_each_other() {
-        let [a, a_fix, notes, b, b_fix] = ["a", "a-fix", "notes", "b", "b-fix"].map(project);
-        let hold = holding(&["a", "a-fix", "notes", "b", "b-fix"]);
-        let sorted = vec![
-            group("b", vec![&b, &b_fix]),
-            SectionRow::Project(&notes),
-            group("a", vec![&a_fix, &a]),
-        ];
         assert_eq!(
-            arranged_rows(&hold, sorted),
-            ["a: a, a-fix", "notes", "b: b, b-fix"]
+            arranged(&hold, vec![alone(&c), alone(&a), alone(&b)]),
+            ["a: a", "b: b", "c: c"]
         );
     }
 
     #[test]
     fn a_new_group_takes_the_place_the_sort_gives_it_among_held_ones() {
-        let [a, a_fix, b, c, c_fix] = ["a", "a-fix", "b", "c", "c-fix"].map(project);
-        let hold = holding(&["a", "a-fix", "b"]);
-        let sorted = vec![
-            group("c", vec![&c, &c_fix]),
-            SectionRow::Project(&b),
-            group("a", vec![&a, &a_fix]),
-        ];
+        let [a, b, new] = ["a", "b", "new"].map(project);
+        let hold = holding(&["a", "b"]);
         assert_eq!(
-            arranged_rows(&hold, sorted),
-            ["c: c, c-fix", "a: a, a-fix", "b"]
+            arranged(&hold, vec![alone(&new), alone(&b), alone(&a)]),
+            ["new: new", "a: a", "b: b"]
+        );
+        assert_eq!(
+            arranged(&hold, vec![alone(&b), alone(&new), alone(&a)]),
+            ["a: a", "new: new", "b: b"]
         );
     }
 
     #[test]
-    fn a_group_made_or_unmade_under_the_pointer_stays_where_its_cards_stood() {
-        let [notes, a, a_fix, site] = ["notes", "a", "a-fix", "site"].map(project);
-        // a stood alone until a worktree of its repository joined the section.
-        let alone = holding(&["notes", "a", "site"]);
+    fn a_group_gone_from_the_section_leaves_no_gap() {
+        let [a, c] = ["a", "c"].map(project);
+        let hold = holding(&["a", "b", "c"]);
+        assert_eq!(
+            arranged(&hold, vec![alone(&c), alone(&a)]),
+            ["a: a", "c: c"]
+        );
+    }
+
+    #[test]
+    fn held_rows_under_a_line_keep_their_order_and_a_card_new_to_it_arrives_within_it() {
+        let [a, a_fix, b, b_new, b_old] = ["a", "a-fix", "b", "b-new", "b-old"].map(project);
+        let hold = holding(&["a", "a-fix", "b", "b-old"]);
+        // The sort now puts b's group first and its old card before its new one, where a flat
+        // hold would have put the new card between a's cards.
         let sorted = vec![
-            group("a", vec![&a, &a_fix]),
-            SectionRow::Project(&notes),
-            SectionRow::Project(&site),
+            group("b", vec![card(&b_old), card(&b_new), card(&b)]),
+            group("a", vec![card(&a_fix), card(&a)]),
         ];
         assert_eq!(
-            arranged_rows(&alone, sorted),
-            ["notes", "a: a, a-fix", "site"]
+            arranged(&hold, sorted),
+            ["a: a, a-fix", "b: b, b-new, b-old"]
         );
-        // a-fix left the section, which leaves a alone where its group stood.
-        let grouped = holding(&["notes", "a", "a-fix", "site"]);
-        let sorted = vec![
-            SectionRow::Project(&site),
-            SectionRow::Project(&a),
-            SectionRow::Project(&notes),
-        ];
-        assert_eq!(arranged_rows(&grouped, sorted), ["notes", "a", "site"]);
+    }
+
+    #[test]
+    fn a_lines_own_card_stays_first_wherever_the_held_order_had_it() {
+        let [app, copy, other] = ["app", "copy", "other"].map(project);
+        // The copy stood before the checkout it was made from until that one took on its line.
+        let hold = holding(&["copy", "app", "other"]);
+        let sorted = vec![group(
+            "app",
+            vec![line(&app, vec![card(&copy)]), card(&other)],
+        )];
+        assert_eq!(arranged(&hold, sorted), ["app: app(app, copy), other"]);
+    }
+
+    #[test]
+    fn the_rows_under_a_checkouts_line_keep_their_held_places_too() {
+        let [app, fix, wip] = ["app", "fix", "wip"].map(project);
+        let hold = holding(&["app", "wip", "fix"]);
+        let sorted = vec![group("app", vec![line(&app, vec![card(&fix), card(&wip)])])];
+        assert_eq!(arranged(&hold, sorted), ["app: app(app, wip, fix)"]);
     }
 
     #[test]
@@ -335,6 +365,9 @@ mod tests {
     #[test]
     fn an_unheld_list_keeps_the_sorts_order() {
         let [a, b] = ["a", "b"].map(project);
-        assert_eq!(arranged(&Hold::default(), vec![&b, &a]), ["b", "a"]);
+        assert_eq!(
+            arranged(&Hold::default(), vec![alone(&b), alone(&a)]),
+            ["b: b", "a: a"]
+        );
     }
 }

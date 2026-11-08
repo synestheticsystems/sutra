@@ -94,15 +94,6 @@ extension LozengeLook {
 enum Scratch {
     /// The dash of the mark's outline, as long as a gap and a half.
     static let dash: [CGFloat] = [3, 2]
-    /// The guide a session's opened scratch hangs from is a column of round dots this wide. Dashes
-    /// as faint as a repository's guide read as the same unbroken hairline at a glance; dots stay
-    /// dots.
-    static let guideDot: CGFloat = 2
-    /// About how far apart the guide's dots stand: each card's stretch of the guide spreads its
-    /// dots evenly down its own height.
-    static let guideDotSpacing: CGFloat = 5
-    /// The dots' grey, darker than a repository's hairline, so the dots read as dots.
-    static let guideInk = Color(nsColor: .secondaryLabelColor)
 }
 
 /// The surfaces a card is made of.
@@ -140,7 +131,7 @@ enum Surface {
     /// How far a card's contents, its header and its tray, stand in from inside its edge.
     static let contentInset: CGFloat = 14
 
-    /// The hairline an open group's cards hang from: firmer than a card's edge, so it reads
+    /// The hairline the rows under an open line hang from: firmer than a card's edge, so it reads
     /// on the bare window, and fainter than any text.
     static let guide = Color(nsColor: .tertiaryLabelColor).opacity(0.6)
 

@@ -1,20 +1,19 @@
 import SutraCore
 import SwiftUI
 
-/// The line of the cards that share a parent, a repository's worktrees or a session's scratch
-/// folders: a disclosure chevron, the parent's name, and the disk its cards take, inside the mark
-/// of scratch on a session's line. Open, the cards follow the line in rows of their own, nested
-/// under it (`NestedCardRow`). A click on the line folds the cards away, and another shows them
-/// again. Folded, the line holds the robots of the agents in its cards at its end and the servers
-/// running in them after its total, and throbs as their cards would while one of them waits on the
-/// user. A right click on a session's line offers to clean the build folders in its scratch.
-struct GroupLineRow: View {
-    let line: GroupLine
-    let fold: Fold
+/// A line of the list: a group's, which names the upstream its cards came from, or within a group a
+/// checkout's, which holds its own card and the copies made from it. A disclosure chevron, the
+/// line's name, and the disk all it holds takes. Open, its rows follow it, each hanging under it
+/// (`Hanging`). A click on the line folds them away, and another shows them again. Folded, the line
+/// holds the robots of the agents in its rows at its end and the servers running in them after its
+/// total, and throbs as their cards would while one of them waits on the user. A right click offers
+/// to clean the build folders in what it holds.
+struct LineRow: View {
+    let line: Line
     let dashboard: DashboardModel
 
     var body: some View {
-        switch fold {
+        switch line.fold {
         case .open:
             header(open: true)
                 .padding(.horizontal, FoldingLine.inset)
@@ -44,15 +43,15 @@ struct GroupLineRow: View {
         }
     }
 
-    /// The line itself, all of it one button: the chevron, pointing at the cards while they show,
-    /// the name and the total, in a session's scratch mark; folded, the servers running in its
-    /// cards after them, `lozenges` drawn and `moreLozenges` counted. A click on a server here
-    /// opens the cards, where a server opens in the browser.
+    /// The line itself, all of it one button: the chevron, pointing at the rows while they show,
+    /// the name and the total; folded, the servers running in its cards after them, `lozenges`
+    /// drawn and `moreLozenges` counted. A click on a server here opens the line, where a server
+    /// opens in the browser.
     private func header(
         open: Bool, lozenges: [Lozenge] = [], moreLozenges: MoreLozenges? = nil
     ) -> some View {
         Button {
-            dashboard.perform(.toggleFold(parent: line.parent))
+            dashboard.perform(.toggleFold(line: line.key))
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Chevron(open: open)
@@ -62,13 +61,7 @@ struct GroupLineRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let total = line.total {
-                        if let scratch = line.scratch {
-                            // On a session's line the mark goes around the total, which is
-                            // exactly what is throwaway.
-                            Text(total).scratchMarked(scratch)
-                        } else {
-                            Text(total)
-                        }
+                        Text(total)
                     }
                     ForEach(Array(lozenges.enumerated()), id: \.offset) { _, lozenge in
                         LozengeCapsule(lozenge: lozenge)
@@ -87,8 +80,6 @@ struct GroupLineRow: View {
         }
         .buttonStyle(.plain)
         .hoverTip(line.tooltip)
-        // A session's line offers to clean the build folders in its scratch; a repository's
-        // offers nothing.
         .contextMenu { MenuEntries(entries: line.menu, dashboard: dashboard) }
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(open ? "Open" : "Folded")

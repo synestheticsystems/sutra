@@ -1,20 +1,27 @@
-//! Docker's own card: the containers running for no project on the map, a lozenge for each port
-//! they publish, as a project's card shows what serves in it, and along its bottom the disk Docker
-//! takes, as a project's tray shows its folder's: the total, then the stores large enough to name,
-//! largest first, as `48 GB  volumes  images  build cache` reads. Each store's tooltip gives its
-//! size, how many it holds and how many are in use, and what a prune would give back: Sutra itself
-//! cleans nothing of Docker's, as its volumes hold data. The card opens no folder, as Docker keeps
-//! what it holds in its own virtual machine.
+//! Docker's own group, under a line of its own: it came from no upstream, and what it holds is no
+//! project's. Its card shows the containers running for no project on the map, a lozenge for each
+//! port they publish, as a project's card shows what serves in it, and along its bottom the disk
+//! Docker takes, as a project's tray shows its folder's: the total, then the stores large enough to
+//! name, largest first, as `48 GB  volumes  images  build cache` reads. Each store's tooltip gives
+//! its size, how many it holds and how many are in use, and what a prune would give back: Sutra
+//! itself cleans nothing of Docker's, as its volumes hold data, so its line offers no clean. The
+//! card opens no folder, as Docker keeps what it holds in its own virtual machine.
 
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
+use super::line::first_few;
 use crate::dashboard::contents::card::lozenges::containers::{self, CardOf};
 use crate::dashboard::contents::card::{CardContext, worth_showing};
 use crate::dashboard::listing::DOCKER;
-use crate::dashboard::{DiskUse, Lozenge, Tray, TrayEntry, format};
+use crate::dashboard::{
+    DiskUse, GroupKind, Line, LineFold, LineKey, Lozenge, Tray, TrayEntry, format,
+};
 use crate::map::Docker;
 use crate::map::docker::{DockerDisk, Store};
+
+/// What Docker's card and its line show, in their tooltips.
+const SHOWN: &str = "The Docker containers running for no project on the list, and the disk Docker                      takes";
 
 /// Docker's card.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -34,6 +41,39 @@ pub struct DockerCard {
     pub location: String,
 }
 
+impl LineKey {
+    /// The key of Docker's line, which stands for Docker's card alone.
+    pub(in crate::dashboard) const DOCKER: LineKey = LineKey::Group {
+        kind: GroupKind::Docker,
+    };
+}
+
+/// The line of Docker's group, `folded` shut or open: Docker's name, and the disk Docker takes,
+/// as its card's tray totals it; folded shut, the first of its card's lozenges, each running for no
+/// project, with no agent, as no agent works in Docker. It offers no clean.
+pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
+    let fold = if folded {
+        let (lozenges, more_lozenges) = first_few(lozenges(docker, ctx));
+        LineFold::Folded {
+            sessions: Vec::new(),
+            subagents: Vec::new(),
+            waiting: false,
+            lozenges,
+            more_lozenges,
+        }
+    } else {
+        LineFold::Open
+    };
+    Line {
+        key: LineKey::DOCKER,
+        name: DOCKER.to_string(),
+        tooltip: format!("{SHOWN}\n{}", format::tilde(&docker.socket, ctx.home)),
+        total: docker.disk.map(|disk| format::size(disk.bytes(), false)),
+        menu: Vec::new(),
+        fold,
+    }
+}
+
 /// The card of `docker`.
 pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
     let newest = docker
@@ -41,14 +81,11 @@ pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
         .iter()
         .map(|container| container.created)
         .max();
-    let ports = BTreeSet::new();
     DockerCard {
         name: DOCKER.to_string(),
-        name_tooltip: "The Docker containers running for no project on the list, and the disk \
-                       Docker takes"
-            .to_string(),
+        name_tooltip: SHOWN.to_string(),
         age: newest.map(|then| format::age(then, ctx.now)),
-        lozenges: containers::lozenges(&docker.containers, CardOf::Docker, &ports, ctx.home),
+        lozenges: lozenges(docker, ctx),
         tray: docker.disk.map(|disk| Tray {
             disk: Some(disk_use(&disk)),
             sessions: Vec::new(),
@@ -56,6 +93,12 @@ pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
         }),
         location: format::tilde(&docker.socket, ctx.home),
     }
+}
+
+/// The lozenges of the containers on Docker's card, each running, by name.
+fn lozenges(docker: &Docker, ctx: &CardContext) -> Vec<Lozenge> {
+    let none_shown = BTreeSet::new();
+    containers::lozenges(&docker.containers, CardOf::Docker, &none_shown, ctx.home)
 }
 
 /// One of Docker's stores, as its card names it.
@@ -228,5 +271,59 @@ mod tests {
         assert_eq!(lozenges, [("postgres", Some(":55596"))]);
         assert_eq!(card.tray, None, "Docker has not said what it takes");
         assert_eq!(card.location, "~/.docker/run/docker.sock");
+    }
+
+    #[test]
+    fn dockers_line_totals_the_disk_docker_takes_shows_its_cards_containers_folded_and_cleans_nothing()
+     {
+        let running = |name: &str| Container {
+            id: name.to_string(),
+            name: name.to_string(),
+            image: format!("{name}:1"),
+            compose_folder: None,
+            bound: Vec::new(),
+            ports: Vec::new(),
+            created: now(),
+        };
+        let docker = Docker {
+            socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
+            containers: vec![running("redis"), running("minio"), running("nats")],
+            disk: Some(disk()),
+        };
+        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
+        let ctx = CardContext {
+            notifier: &notifier,
+            cleaning: &cleaning,
+            home: Path::new("/Users/dev"),
+            now: now(),
+        };
+
+        let folded = line(&docker, true, &ctx);
+
+        assert_eq!(folded.key, LineKey::DOCKER);
+        assert_eq!(folded.name, "Docker");
+        assert_eq!(
+            folded.total.as_deref(),
+            Some("48 GB"),
+            "as its card's tray totals it"
+        );
+        assert_eq!(folded.menu, [], "Sutra cleans nothing of Docker's");
+        let LineFold::Folded {
+            lozenges,
+            more_lozenges,
+            sessions,
+            ..
+        } = &folded.fold
+        else {
+            panic!("folded: {:?}", folded.fold);
+        };
+        let names: Vec<&str> = lozenges.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["redis", "minio"]);
+        assert_eq!(
+            more_lozenges.as_ref().map(|more| more.label.as_str()),
+            Some("+1")
+        );
+        assert_eq!(sessions, &[], "no agent works in Docker");
+        assert_eq!(line(&docker, false, &ctx).fold, LineFold::Open);
     }
 }

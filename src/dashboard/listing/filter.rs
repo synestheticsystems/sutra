@@ -4,10 +4,11 @@
 use std::path::Path;
 
 use super::DOCKER;
-use crate::map::{Docker, Project, ScratchSpace};
+use crate::map::{Docker, GroupKey, Project, ScratchSpace};
 
-/// Typed text matched against a project's name, the name its card's chip or its parent's line
-/// shows beside it (a worktree's branch, a scratch folder's session), and its path, ignoring case.
+/// Typed text matched against a project's name, the name its card's chip shows beside it (a
+/// worktree's branch, a scratch folder's session), what its group is keyed by, which its group's
+/// line names, and its path, ignoring case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Query {
     /// Lowercase, without the spaces around it.
@@ -27,9 +28,16 @@ impl Query {
             .as_ref()
             .and_then(|repo| repo.branch.as_deref());
         let session = project.scratch.as_ref().map(ScratchSpace::name);
+        let group = || match &project.provenance.group {
+            GroupKey::Upstream(remote) => self.matches(remote),
+            GroupKey::LocalRepository(folder) => self.admits_folder(folder),
+            GroupKey::Package(name) => self.matches(name),
+            GroupKey::Other => self.matches("Other"),
+        };
         self.matches(&project.name)
             || branch.is_some_and(|branch| self.matches(branch))
             || session.is_some_and(|session| self.matches(&session))
+            || group()
             || self.admits_folder(&project.path)
     }
 
@@ -110,5 +118,22 @@ mod tests {
         assert_eq!(Query::new(""), None);
         assert_eq!(Query::new("   "), None);
         assert!(admits("  sutra ", &project("/code/sutra", None)));
+    }
+
+    #[test]
+    fn a_query_matches_the_upstream_a_project_came_from_as_its_groups_line_names_it() {
+        use crate::dashboard::listing::fixtures::{came_from, upstream};
+        let review = came_from(
+            upstream("github.com/synestheticsystems/sutra"),
+            &[],
+            project("/tmp/s/review", None),
+        );
+        assert!(admits("synesthetic", &review), "its owner's name");
+        assert!(admits("SUTRA", &review), "its repository's name");
+        assert!(!admits("alice", &review));
+        assert!(
+            admits("other", &project("/code/notes", None)),
+            "Other's line"
+        );
     }
 }

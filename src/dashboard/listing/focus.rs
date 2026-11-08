@@ -1,13 +1,14 @@
 //! Which projects the list keeps in focus, in each sort. Discovery casts a wide net, every worktree
 //! under the roots, which on a busy machine is hundreds of rows; focus keeps the ones worth a look,
-//! and the rest wait behind the quiet row. What is worth a look depends on what the sort is for:
-//! the Activity sort shows the work going on, so what only takes disk waits there, as the gauge of
-//! the disk and the Disk sort show it.
+//! with the groups they stand in, and the groups with none wait behind the quiet row. What is
+//! worth a look depends on what the sort is for: the Activity sort shows the work going on, so what
+//! only takes disk waits there, as the gauge of the disk and the Disk sort show it.
 
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use crate::dashboard::SortOrder;
-use crate::map::{Docker, LARGE_FOLDER_BYTES, Project};
+use crate::map::{Docker, GroupKey, LARGE_FOLDER_BYTES, Project};
 
 /// How recent a project's last activity must be to keep it in focus. A first guess.
 pub(in crate::dashboard) const FOCUS_RECENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -39,22 +40,28 @@ pub(super) fn in_focus(project: &Project, sort: SortOrder, now: SystemTime) -> b
         }
 }
 
-/// Whether Docker's card belongs in the focused view of `sort`, as a project's would: in every sort
-/// while a container runs on it, and in the Name and Disk sorts also while Docker takes
-/// `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as for a scratch folder
-/// whose session has ended.
-pub(super) fn docker_in_focus(docker: &Docker, sort: SortOrder) -> bool {
-    !docker.containers.is_empty()
-        || match sort {
-            SortOrder::Activity => false,
-            SortOrder::Name | SortOrder::Disk => docker_bytes(docker) >= LARGE_FOLDER_BYTES,
+/// `projects`, every project with a row on the list, split into those of the groups in focus in
+/// `sort`, which any of their projects being in focus puts there, and the rest. Other is in focus
+/// too while it holds agents working elsewhere, as `elsewhere` says it does, as agents at work are
+/// news in every sort.
+pub(super) fn split_by_group(
+    projects: Vec<&Project>,
+    sort: SortOrder,
+    now: SystemTime,
+    elsewhere: bool,
+) -> (Vec<&Project>, Vec<&Project>) {
+    let mut focused: HashSet<&GroupKey> = HashSet::new();
+    for &project in &projects {
+        if in_focus(project, sort, now) {
+            focused.insert(&project.provenance.group);
         }
-}
-
-/// What the Disk sort and the focus rule weigh of Docker: all it takes, as its engine last said,
-/// and nothing until it has.
-pub(super) fn docker_bytes(docker: &Docker) -> u64 {
-    docker.disk.map_or(0, |disk| disk.bytes())
+    }
+    if elsewhere {
+        focused.insert(&GroupKey::Other);
+    }
+    projects
+        .into_iter()
+        .partition(|project| focused.contains(&project.provenance.group))
 }
 
 /// Whether `project` is a scratch folder whose session has ended, so that nothing will build in it
@@ -70,6 +77,24 @@ pub(super) fn disk_bytes(project: &Project) -> u64 {
     project
         .folder_size()
         .map_or_else(|| project.measured_build_bytes(), |size| size.bytes)
+}
+
+/// Whether Docker's group belongs in the focused view of `sort`, as a project's would: in every
+/// sort while a container runs on its card, and in the Name and Disk sorts also while Docker takes
+/// `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as for a scratch folder
+/// whose session has ended.
+pub(super) fn docker_in_focus(docker: &Docker, sort: SortOrder) -> bool {
+    !docker.containers.is_empty()
+        || match sort {
+            SortOrder::Activity => false,
+            SortOrder::Name | SortOrder::Disk => docker_bytes(docker) >= LARGE_FOLDER_BYTES,
+        }
+}
+
+/// What the Disk sort and the focus rule weigh of Docker: all it takes, as its engine last said,
+/// and nothing until it has.
+pub(super) fn docker_bytes(docker: &Docker) -> u64 {
+    docker.disk.map_or(0, |disk| disk.bytes())
 }
 
 #[cfg(test)]
@@ -249,6 +274,52 @@ mod tests {
         assert_eq!(
             disk_bytes(&sized(Measurement::Measuring, measured(700))),
             700
+        );
+    }
+
+    #[test]
+    fn a_group_is_in_focus_while_any_of_its_projects_is_and_other_while_agents_work_elsewhere() {
+        use crate::dashboard::listing::fixtures::{came_from, upstream};
+        let in_group = |remote: &str, name: &str, last_active| {
+            let project = Project {
+                last_activity: last_active,
+                ..project_at(format!("/code/{name}"))
+            };
+            came_from(upstream(remote), &[], project)
+        };
+        let recent = Some(now());
+        let projects = [
+            in_group("github.com/me/app", "app", recent),
+            in_group("github.com/me/app", "app-old", None),
+            in_group("github.com/me/site", "site", None),
+            project_at("/code/notes"),
+        ];
+        // Each side's projects by name, as `app, app-old` reads.
+        let names = |projects: Vec<&Project>| {
+            let names: Vec<&str> = projects
+                .iter()
+                .map(|project| project.name.as_str())
+                .collect();
+            names.join(", ")
+        };
+        let split = |elsewhere| {
+            let (focused, quiet) = split_by_group(
+                projects.iter().collect(),
+                SortOrder::Activity,
+                now(),
+                elsewhere,
+            );
+            [names(focused), names(quiet)]
+        };
+        assert_eq!(
+            split(false),
+            ["app, app-old", "site, notes"],
+            "app-old comes with app"
+        );
+        assert_eq!(
+            split(true),
+            ["app, app-old, notes", "site"],
+            "Other holds the agents working elsewhere"
         );
     }
 }

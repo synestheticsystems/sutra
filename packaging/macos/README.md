@@ -139,9 +139,11 @@ open -n "dist/Sutra Recording.app"
   `feature/search` worktree's agent and its two subagents finish.
 - For another take, quit and launch it again, or choose Help > Welcome to Robo
   Sutra, which brings the screen back and rewinds the script.
-- Folding a repository, the sort and the quiet projects' row change the list as
-  the app would. The rest is left undone, and no button, menu or link reaches
-  the Mac: a stand-in for macOS's services opens, copies and changes nothing.
+- Folding a line, the sort and the quiet projects' row change the list as the
+  app would. A take opens with Cedar Web's line open over its three worktrees,
+  the other lines folded, as a user who opened it left them. The rest is left
+  undone, and no button, menu or link reaches the Mac: a stand-in for macOS's
+  services opens, copies and changes nothing.
 - Its bundle identifier, `systems.synesthetic.sutra.recording`, and the App
   Sandbox (`sutra-recording.entitlements`, the sandbox alone) give it a
   container and preferences of its own, so it reads and writes none of
@@ -176,7 +178,7 @@ ffmpeg -framerate 30 -i frames/frame-%04d.png \
   would keep the frames in its container.
 - The film presses Return, which Let's untangle this answers as the window's
   default action, and folds Cedar Web by asking the script what a click on
-  the repository's line asks.
+  its line asks.
 - Drawn offscreen, the window has no Liquid Glass: the toolbar's buttons stand
   without the glass platter that the window server draws behind them on the
   screen.

@@ -1,25 +1,24 @@
-//! The folds the user chose from the lines of the Activity sort's groups. A group starts as its
-//! parent does: a repository's open, as its worktrees are the user's projects, and a session's
-//! folded, as its scratch is what the list should keep out of the way of those projects. A click
-//! on a line turns its fold, and the choice outlasts the run, kept with the saved settings; so that
-//! what is kept never outgrows the map, a choice goes once a live map no longer lists its parent.
+//! The folds the user chose from the list's lines. Every line starts folded: a group's, so the list
+//! opens on one line per upstream, and a checkout's, so a group opens on its clones before their
+//! copies. A click on a line turns its fold, and the choice outlasts the run, kept with the saved
+//! settings. So that what is kept never outgrows the map, a choice goes once a live map no longer
+//! knows what its line stands for: not what one snapshot lists, which leaves out a folder that
+//! waits to be sized for its card, but every group and every copied checkout the engine tracks
+//! (see `map::Ancestry`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::group;
-use crate::dashboard::{Parent, format};
-use crate::map::Snapshot;
+use crate::dashboard::{GroupKind, LineKey, format};
+use crate::map::{GroupKey, Snapshot};
 
-/// The fold the user left each line in, by the text the window knows its parent by
-/// (`format::path_text` of its folder), which names no other folder. A line never clicked is not
-/// here, and starts as its parent does (see `Parent::starts_folded`).
+/// The fold the user left each line in, by the words `saved_as` writes its key in. A line never
+/// clicked is not here, and starts folded.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "SavedFolds")]
 pub(in crate::dashboard) struct Folds(BTreeMap<String, Fold>);
 
-/// Whether a group's cards show under its line.
+/// Whether the rows under a line show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Fold {
@@ -27,196 +26,209 @@ enum Fold {
     Folded,
 }
 
-/// The folds as a settings file keeps them: as now, or as runs kept them before a session had a
-/// line, which folded only repositories, and kept the git dir of each one folded shut.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum SavedFolds {
-    Chosen(BTreeMap<String, Fold>),
-    FoldedRepositories(BTreeSet<String>),
-}
-
-impl From<SavedFolds> for Folds {
-    fn from(saved: SavedFolds) -> Folds {
-        match saved {
-            SavedFolds::Chosen(chosen) => Folds(chosen),
-            SavedFolds::FoldedRepositories(folded) => {
-                let folded = folded.into_iter().map(|key| (key, Fold::Folded));
-                Folds(folded.collect())
-            }
-        }
-    }
-}
-
-impl Parent {
-    /// The text the window knows the parent by: the folder it is known by.
-    fn key(&self) -> &str {
-        match self {
-            Parent::Repository { common_dir } => common_dir,
-            Parent::Session { folder } => folder,
-        }
-    }
-
-    /// Whether the parent's group starts folded: a session's does, and a repository's does not.
-    fn starts_folded(&self) -> bool {
-        matches!(self, Parent::Session { .. })
-    }
-}
-
 impl Folds {
-    /// Whether the group of `parent` is folded shut.
-    pub(in crate::dashboard) fn is_folded(&self, parent: &Parent) -> bool {
-        match self.0.get(parent.key()) {
-            Some(fold) => *fold == Fold::Folded,
-            None => parent.starts_folded(),
-        }
+    /// Whether the line of `line` is folded shut.
+    pub(in crate::dashboard) fn is_folded(&self, line: &LineKey) -> bool {
+        self.0.get(&saved_as(line)) != Some(&Fold::Open)
     }
 
-    /// The user clicked the line of `parent`: fold its group shut, or open it again. A parent `map`
-    /// no longer lists changes nothing, as the line belonged to an older map, and the next map
-    /// would forget its fold anyway. Returns whether the folds changed.
-    pub(in crate::dashboard) fn toggle(&mut self, parent: &Parent, map: &Snapshot) -> bool {
-        if !lists(map, parent.key()) {
+    /// The user clicked the line of `line`: fold it shut, or open it. A line whose key `map` no
+    /// longer knows changes nothing, as it belonged to an older map, and the next would forget its
+    /// fold anyway. Returns whether the folds changed.
+    pub(in crate::dashboard) fn toggle(&mut self, line: &LineKey, map: &Snapshot) -> bool {
+        let saved = saved_as(line);
+        if !known(map).contains(&saved) {
             return false;
         }
-        let turned = if self.is_folded(parent) {
+        let turned = if self.is_folded(line) {
             Fold::Open
         } else {
             Fold::Folded
         };
-        self.0.insert(parent.key().to_string(), turned);
+        self.0.insert(saved, turned);
         true
     }
 
-    /// A live map arrived: forget the fold of every parent `map` no longer lists. Returns whether
-    /// any went.
+    /// A live map arrived: forget the fold of every line whose key `map` no longer knows. Returns
+    /// whether any went.
     pub(in crate::dashboard) fn forget_gone(&mut self, map: &Snapshot) -> bool {
+        let known = known(map);
         let before = self.0.len();
-        self.0.retain(|key, _| lists(map, key));
+        self.0.retain(|saved, _| known.contains(saved));
         self.0.len() < before
     }
 }
 
-/// Whether a project on `map` has a parent known by the text `key`.
-fn lists(map: &Snapshot, key: &str) -> bool {
-    let parents = map.projects.iter().filter_map(group::Parent::of);
-    parents
-        .map(|parent| parent.folder())
-        .any(|folder| format::is_path_text(folder, key))
+/// The words a line's fold is kept under in the settings: its kind, then what it is known by.
+fn saved_as(line: &LineKey) -> String {
+    match line {
+        LineKey::Group {
+            kind: GroupKind::Upstream { remote },
+        } => format!("upstream {remote}"),
+        LineKey::Group {
+            kind: GroupKind::LocalRepository { folder },
+        } => format!("local repository {folder}"),
+        LineKey::Group {
+            kind: GroupKind::Package { name },
+        } => format!("package {name}"),
+        LineKey::Group {
+            kind: GroupKind::Other,
+        } => "other".to_string(),
+        LineKey::Group {
+            kind: GroupKind::Docker,
+        } => "docker".to_string(),
+        LineKey::Checkout { folder } => format!("checkout {folder}"),
+    }
+}
+
+/// The words of the key of every line `map` may show, as `saved_as` writes them: every group its
+/// projects stand in, and every checkout copies were made from; and always Other's and Docker's,
+/// one line each, which may stand whatever the map holds: Other's with the agents working
+/// elsewhere alone, and Docker's whenever Docker answers, which it may not have yet.
+fn known(map: &Snapshot) -> Vec<String> {
+    let groups = map.ancestry.groups.iter().map(LineKey::group);
+    let always = [LineKey::group(&GroupKey::Other), LineKey::DOCKER];
+    let checkouts = map
+        .ancestry
+        .made_from
+        .iter()
+        .map(|folder| LineKey::Checkout {
+            folder: format::path_text(folder),
+        });
+    let mut known: Vec<String> = groups
+        .chain(always)
+        .chain(checkouts)
+        .map(|line| saved_as(&line))
+        .collect();
+    known.sort();
+    known.dedup();
+    known
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
     use super::*;
-    use crate::dashboard::listing::fixtures::{
-        linked_worktree, main_worktree, project, scratch_folder, snapshot,
-    };
+    use crate::dashboard::listing::fixtures::snapshot;
+    use crate::map::Ancestry;
 
-    const APP: &str = "/code/app/.git";
-    const SESSION: &str = "/private/tmp/claude-501/-code-app/e26ca359";
+    const APP: &str = "github.com/me/app";
+    const SITE: &str = "/code/site";
 
-    fn app() -> Parent {
-        Parent::Repository {
-            common_dir: APP.to_string(),
+    fn app() -> LineKey {
+        LineKey::Group {
+            kind: GroupKind::Upstream {
+                remote: APP.to_string(),
+            },
         }
     }
 
-    fn session() -> Parent {
-        Parent::Session {
-            folder: SESSION.to_string(),
+    fn site_checkout() -> LineKey {
+        LineKey::Checkout {
+            folder: SITE.to_string(),
         }
     }
 
-    /// A map listing the repository `APP` by its linked worktree alone, a folder in none, and a
-    /// scratch folder of the session whose folder is `SESSION`.
+    /// A map whose engine knows the group of `APP`'s clones, and that copies were made from the
+    /// checkout at `SITE`, whatever cards it lists: none here.
     fn map() -> Snapshot {
-        snapshot(
-            vec![
-                linked_worktree(APP, "fix", project("app-fix", 1)),
-                project("notes", 1),
-                scratch_folder("e26ca359", "r567", project("Foundry", 1)),
-            ],
-            vec![],
-        )
+        Snapshot {
+            ancestry: Arc::new(Ancestry {
+                groups: BTreeSet::from([GroupKey::Upstream(APP.to_string())]),
+                made_from: BTreeSet::from([PathBuf::from(SITE)]),
+            }),
+            ..snapshot(vec![], vec![])
+        }
     }
 
     #[test]
-    fn a_repositorys_group_starts_open_and_a_sessions_folded_and_a_click_turns_each() {
+    fn every_line_starts_folded_and_a_click_opens_it_and_another_folds_it_again() {
         let mut folds = Folds::default();
-        assert!(!folds.is_folded(&app()));
-        assert!(folds.is_folded(&session()));
-
-        assert!(folds.toggle(&app(), &map()));
-        assert!(folds.toggle(&session(), &map()));
         assert!(folds.is_folded(&app()));
-        assert!(!folds.is_folded(&session()));
+        assert!(folds.is_folded(&site_checkout()));
 
         assert!(folds.toggle(&app(), &map()));
-        assert!(folds.toggle(&session(), &map()));
+        assert!(folds.toggle(&site_checkout(), &map()));
         assert!(!folds.is_folded(&app()));
-        assert!(folds.is_folded(&session()));
+        assert!(!folds.is_folded(&site_checkout()));
+
+        assert!(folds.toggle(&app(), &map()));
+        assert!(folds.is_folded(&app()));
     }
 
     #[test]
-    fn a_click_on_the_line_of_a_parent_the_map_no_longer_lists_changes_nothing() {
+    fn a_click_on_a_line_the_engine_no_longer_knows_changes_nothing() {
         let mut folds = Folds::default();
-        let gone = Parent::Repository {
-            common_dir: "/code/gone/.git".to_string(),
+        let gone = LineKey::Group {
+            kind: GroupKind::Package {
+                name: "gone".to_string(),
+            },
         };
         assert!(!folds.toggle(&gone, &map()));
-        let notes = Parent::Session {
+        let notes = LineKey::Checkout {
             folder: "/code/notes".to_string(),
         };
-        assert!(!folds.toggle(&notes, &map()), "a folder in no session");
+        assert!(
+            !folds.toggle(&notes, &map()),
+            "a checkout nothing was copied from"
+        );
         assert_eq!(folds, Folds::default());
+        let other = LineKey::group(&GroupKey::Other);
+        assert!(folds.toggle(&other, &map()), "Other is always known");
     }
 
     #[test]
-    fn a_fold_lasts_while_the_map_lists_its_parent_and_goes_with_it() {
+    fn dockers_fold_outlasts_a_map_on_which_docker_has_not_answered_yet() {
+        let mut folds = Folds::default();
+        assert!(folds.toggle(&LineKey::DOCKER, &map()));
+        assert_eq!(map().docker, None, "Docker has said nothing");
+
+        assert!(!folds.forget_gone(&map()));
+        assert!(!folds.is_folded(&LineKey::DOCKER), "still open");
+    }
+
+    #[test]
+    fn a_fold_lasts_while_the_engine_knows_its_line_with_or_without_a_card_and_goes_with_it() {
         let mut folds = Folds::default();
         folds.toggle(&app(), &map());
-        folds.toggle(&session(), &map());
-        let site = "/code/site/.git";
-        let with_site = snapshot(
-            vec![
-                linked_worktree(APP, "fix", project("app-fix", 1)),
-                main_worktree(site, "main", project("site", 1)),
-                scratch_folder("e26ca359", "r567", project("Foundry", 1)),
-            ],
-            vec![],
+        folds.toggle(&site_checkout(), &map());
+        assert!(
+            !folds.forget_gone(&map()),
+            "both known, though no card is listed"
         );
-        let site = Parent::Repository {
-            common_dir: site.to_string(),
+
+        let only_app = Snapshot {
+            ancestry: Arc::new(Ancestry {
+                groups: BTreeSet::from([GroupKey::Upstream(APP.to_string())]),
+                made_from: BTreeSet::new(),
+            }),
+            ..map()
         };
-        folds.toggle(&site, &with_site);
-
-        assert!(!folds.forget_gone(&with_site), "all three still listed");
-        let only_site = snapshot(
-            vec![main_worktree("/code/site/.git", "main", project("site", 1))],
-            vec![],
+        assert!(folds.forget_gone(&only_app));
+        assert!(!folds.is_folded(&app()), "app's opening stays");
+        assert!(
+            folds.is_folded(&site_checkout()),
+            "folded, as it starts again"
         );
-        assert!(folds.forget_gone(&only_site));
-        assert!(!folds.is_folded(&app()));
-        assert!(folds.is_folded(&session()), "folded, as it starts again");
-        assert!(folds.is_folded(&site), "site's fold stays");
     }
 
     #[test]
-    fn folds_are_saved_as_each_lines_choice_and_read_back_from_the_repositories_once_folded() {
+    fn folds_are_saved_as_each_lines_choice_under_its_kind_and_key() {
         let mut folds = Folds::default();
         folds.toggle(&app(), &map());
-        folds.toggle(&session(), &map());
+        folds.toggle(&site_checkout(), &map());
+        folds.toggle(&site_checkout(), &map());
         let saved = serde_json::to_value(&folds).unwrap();
         assert_eq!(
             saved,
-            serde_json::json!({ APP: "folded", SESSION: "open" }),
-            "each choice in words"
+            serde_json::json!({
+                "upstream github.com/me/app": "open",
+                "checkout /code/site": "folded",
+            })
         );
         assert_eq!(serde_json::from_value::<Folds>(saved).unwrap(), folds);
-
-        let before_sessions = serde_json::json!([APP]);
-        let read = serde_json::from_value::<Folds>(before_sessions).unwrap();
-        assert!(read.is_folded(&app()), "a repository folded then stays so");
-        assert!(read.is_folded(&session()), "and a session starts folded");
     }
 }

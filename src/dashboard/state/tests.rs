@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::dashboard::live;
-use crate::dashboard::{Card, Dialog, List, ListRow};
+use crate::dashboard::{Card, Dialog, LineFold, List, ListRow};
 use crate::map::Project;
 use crate::map::test_support::{TempDir, project_at};
 
@@ -91,10 +91,31 @@ fn card_at<'a>(contents: &'a WindowContents, path: &Path) -> &'a Card {
     let path = format::path_text(path);
     rows.iter()
         .find_map(|row| match row {
-            ListRow::Card { card } if card.path == path => Some(card.as_ref()),
+            ListRow::Card { card, .. } if card.path == path => Some(card.as_ref()),
             _ => None,
         })
         .expect("a card for the project")
+}
+
+/// What the window shows once the user has opened every line on the list, as they would to reach
+/// its cards, every line starting folded.
+fn with_every_line_open(state: &mut State) -> WindowContents {
+    loop {
+        let contents = state.contents(now());
+        let List::Rows { rows } = &contents.list else {
+            return contents;
+        };
+        let folded = rows.iter().find_map(|row| match row {
+            ListRow::Line { line, .. } if matches!(line.fold, LineFold::Folded { .. }) => {
+                Some(line.key.clone())
+            }
+            _ => None,
+        });
+        match folded {
+            Some(line) => state.perform(Action::ToggleFold { line }, now()),
+            None => return contents,
+        }
+    }
 }
 
 fn now() -> SystemTime {

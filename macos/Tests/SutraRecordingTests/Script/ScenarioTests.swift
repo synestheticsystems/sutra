@@ -55,8 +55,10 @@ struct ScenarioTests {
 
     @Test func theTakeKeepsTheScenariosTimeAndNotTheMacs() throws {
         let lantern = "/Demo/Projects/lantern-docs"
-        #expect(try #require(card(at: lantern, in: contents(at: 0))).age == "38m")
-        #expect(try #require(card(at: lantern, in: contents(at: 120))).age == "40m")
+        var opened = Arrangement()
+        opened.toggleFold(of: .group(kind: .upstream(remote: "example.com/lantern/lantern-docs")))
+        #expect(try #require(card(at: lantern, in: opened.contents(at: 0))).age == "38m")
+        #expect(try #require(card(at: lantern, in: opened.contents(at: 120))).age == "40m")
     }
 
     @Test func everySessionIsInAPhaseFromTheMomentTheTakeOpens() {

@@ -16,7 +16,6 @@ pub use lozenges::{Lozenge, LozengeLook};
 pub use robots::Robot;
 pub use tray::{DiskUse, Tray, TrayEntry};
 
-pub(super) use header::scratch_mark;
 pub(in crate::dashboard) use menu::{offers_clean, offers_terminate};
 pub(super) use tray::worth_showing;
 
@@ -24,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::dashboard::cleaning::Cleaning;
+use crate::dashboard::listing::Naming;
 use crate::dashboard::{MenuEntry, format};
 use crate::map::{FolderAccess, FolderSize, KeptOutBy, Project, Snapshot};
 use crate::notifications::Notifier;
@@ -35,13 +35,14 @@ pub struct Card {
     pub path: String,
     /// The folder in full, with `~` for the home folder: shown while the pointer is over the card.
     pub location: String,
-    /// The folder's name; nested under its repository's line, a worktree's branch.
+    /// What it goes by among the rows beside it: under its repository's own line, a worktree's
+    /// branch; else its folder's name, made longer where a row beside it would read alike.
     pub name: String,
-    /// The folder, then when its last activity was and where it came from; nested, a worktree's
-    /// branch in full before them.
+    /// The folder, then when its last activity was and where it came from; for a card going by
+    /// its branch, the branch in full before them.
     pub name_tooltip: String,
-    /// The chip beside the name: a worktree's branch, or a scratch folder's session. `None` for a
-    /// plain folder, and for a card nested under its parent's line, which says what the chip would.
+    /// The chip beside the name: a worktree's branch, or a scratch folder's session in the mark of
+    /// scratch. `None` for a plain folder, and for a card going by its branch.
     pub chip: Option<Chip>,
     /// How long ago the last activity was, as `4m` reads.
     pub age: Option<String>,
@@ -85,19 +86,8 @@ pub(in crate::dashboard) struct CardContext<'a> {
     pub(in crate::dashboard) now: SystemTime,
 }
 
-/// What a card goes by, which its place on the list decides.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Naming {
-    /// Standing alone, it says whose it is: a worktree its folder's name, beside its branch on a
-    /// chip, and a scratch folder its session's name, beside its place in the session's scratch.
-    Alone,
-    /// Nested under the line that names its parent, it goes by what sets it apart there: a
-    /// worktree by its branch, and a scratch folder by its folder's own name.
-    Nested,
-}
-
-/// The card of `project`, on `map`, going by what `naming` says.
-pub(super) fn card(project: &Project, naming: Naming, map: &Snapshot, ctx: &CardContext) -> Card {
+/// The card of `project`, on `map`, going by what its place on the list gives it, `naming`.
+pub(super) fn card(project: &Project, naming: &Naming, map: &Snapshot, ctx: &CardContext) -> Card {
     let last_activity = project.last_activity.and_then(format::timestamp);
     let identity = header::identity(project, naming, ctx.home, last_activity.as_deref());
     // A scratch folder's own session stands on the card of the folder it works in alone: a robot
@@ -269,7 +259,7 @@ mod tests {
         let waiting: Vec<bool> = map
             .projects
             .iter()
-            .map(|project| card(project, Naming::Alone, &map, &ctx).waiting)
+            .map(|project| card(project, &Naming::Folder(project.name.clone()), &map, &ctx).waiting)
             .collect();
         assert_eq!(waiting, [true, false, false]);
     }
@@ -289,7 +279,12 @@ mod tests {
             now: now(),
         };
 
-        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
+        let card = card(
+            &map.projects[0],
+            &Naming::Folder(map.projects[0].name.clone()),
+            &map,
+            &ctx,
+        );
 
         let tray = card.tray.expect("a tray for the agents");
         assert_eq!(tray.disk, None, "nothing is sized yet");
@@ -327,7 +322,12 @@ mod tests {
             now: now(),
         };
 
-        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
+        let card = card(
+            &map.projects[0],
+            &Naming::Folder(map.projects[0].name.clone()),
+            &map,
+            &ctx,
+        );
 
         let sessions = card.tray.expect("a tray for the agents").sessions;
         assert_eq!(
@@ -351,7 +351,12 @@ mod tests {
             home: Path::new(HOME),
             now: now(),
         };
-        let card = card(&map.projects[0], Naming::Alone, &map, &ctx);
+        let card = card(
+            &map.projects[0],
+            &Naming::Folder(map.projects[0].name.clone()),
+            &map,
+            &ctx,
+        );
         assert_eq!(card.path, "/Users/dev/code/app");
         assert_eq!(card.location, "~/code/app");
         assert_eq!(card.name, "app");

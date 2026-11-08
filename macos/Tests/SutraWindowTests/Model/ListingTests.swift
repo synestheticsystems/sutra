@@ -2,32 +2,25 @@ import SutraCore
 @testable import SutraWindow
 import Testing
 
-/// The core's list as the window keeps it: an open group's cards in rows of their own under the
-/// group's line, each card with its model from one set of contents to the next.
+/// The core's list as the window keeps it: a row for each of the core's, each card with its model
+/// from one set of contents to the next, wherever it hangs.
 @MainActor
 struct ListingTests {
-    @Test func anOpenGroupListsItsLineThenEachOfItsCardsInARowOfItsOwn() {
+    @Test func eachOfTheCoresRowsIsARowAtItsPlace() {
         let rows = shown(.rows(rows: [
-            .card(card: card("/code/notes")),
-            .group(line: repository, fold: .open(cards: worktrees)),
-            .group(line: session, fold: .open(cards: [card("/tmp/5f1c/scratchpad/render")])),
+            .line(line: group, place: Place(depth: 0, first: false)),
+            .line(line: checkout, place: Place(depth: 1, first: true)),
+            .card(card: card("/code/app"), place: Place(depth: 2, first: true)),
+            .card(card: card("/code/app-fix"), place: Place(depth: 2, first: false)),
+            .card(card: card("/code/app-2"), place: Place(depth: 1, first: false)),
         ]))
         #expect(rows == [
-            "card /code/notes",
-            "line app, open",
-            "nested /code/app, first, unbroken",
-            "nested /code/app-fix, unbroken",
-            "line Sutra launch plan, open",
-            "nested /tmp/5f1c/scratchpad/render, first, dotted",
+            "line app at 0",
+            "line app at 1, first",
+            "card /code/app at 2, first",
+            "card /code/app-fix at 2",
+            "card /code/app-2 at 1",
         ])
-    }
-
-    @Test func aFoldedGroupListsItsLineAlone() {
-        let folded = GroupFold.folded(
-            sessions: [], subagents: [], waiting: false, lozenges: [], moreLozenges: nil
-        )
-        let rows = shown(.rows(rows: [.group(line: repository, fold: folded)]))
-        #expect(rows == ["line app, folded"])
     }
 
     @Test func dockersCardIsARowOfItsOwnKnownAsTheOneDockerCard() {
@@ -35,40 +28,40 @@ struct ListingTests {
             name: "Docker", nameTooltip: "", age: nil, lozenges: [], tray: nil,
             location: "~/.docker/run/docker.sock"
         )
+        let place = Place(depth: 1, first: true)
         var models = CardModels()
-        guard case .rows(let rows) = models.listing(of: .rows(rows: [.docker(card: docker)])) else {
+        let list = SutraCore.List.rows(rows: [.docker(card: docker, place: place)])
+        guard case .rows(let rows) = models.listing(of: list) else {
             Issue.record("a list of rows")
             return
         }
         #expect(rows.map(\.id) == [.docker])
-        #expect(rows == [.docker(docker)])
+        #expect(rows == [.docker(docker, place: place)])
     }
 
-    @Test func aCardKeepsItsModelAsItMovesIntoAGroupAndOutAgain() throws {
+    @Test func aCardKeepsItsModelAsItMovesFromOneLineToAnother() throws {
         var models = CardModels()
-        let alone = models.listing(of: .rows(rows: [.card(card: card("/code/app"))]))
-        let nested = models.listing(of: .rows(rows: [
-            .group(line: repository, fold: .open(cards: worktrees)),
+        let underTheGroup = models.listing(of: .rows(rows: [
+            .line(line: group, place: Place(depth: 0, first: false)),
+            .card(card: card("/code/app"), place: Place(depth: 1, first: true)),
         ]))
-        let aloneAgain = models.listing(of: .rows(rows: [.card(card: card("/code/app"))]))
-        let model = try #require(self.model(at: "/code/app", in: alone))
-        #expect(self.model(at: "/code/app", in: nested) === model)
-        #expect(self.model(at: "/code/app", in: aloneAgain) === model)
+        let underItsCheckout = models.listing(of: .rows(rows: [
+            .line(line: group, place: Place(depth: 0, first: false)),
+            .line(line: checkout, place: Place(depth: 1, first: true)),
+            .card(card: card("/code/app"), place: Place(depth: 2, first: true)),
+        ]))
+        let model = try #require(self.model(at: "/code/app", in: underTheGroup))
+        #expect(self.model(at: "/code/app", in: underItsCheckout) === model)
     }
 
-    private let repository = GroupLine(
-        parent: .repository(commonDir: "/code/app/.git"), name: "app", tooltip: "", scratch: nil,
-        total: nil, menu: []
+    private let group = Line(
+        key: .group(kind: .upstream(remote: "github.com/me/app")), name: "app", tooltip: "",
+        total: nil, menu: [], fold: .open
     )
 
-    /// The repository's two worktrees.
-    private var worktrees: [Card] {
-        [card("/code/app"), card("/code/app-fix")]
-    }
-
-    private let session = GroupLine(
-        parent: .session(folder: "/tmp/5f1c"), name: "Sutra launch plan", tooltip: "",
-        scratch: ScratchMark(tooltip: "", sessionRuns: true), total: nil, menu: []
+    private let checkout = Line(
+        key: .checkout(folder: "/code/app"), name: "app", tooltip: "", total: nil, menu: [],
+        fold: .open
     )
 
     private func card(_ path: String) -> Card {
@@ -84,17 +77,12 @@ struct ListingTests {
         guard case .rows(let rows) = models.listing(of: list) else { return [] }
         return rows.map { row in
             switch row {
-            case .card(let model):
-                "card \(model.path)"
-            case .groupLine(let line, .open):
-                "line \(line.name), open"
-            case .groupLine(let line, .folded):
-                "line \(line.name), folded"
-            case .nested(let model, let guide):
-                "nested \(model.path)" + (guide.first ? ", first" : "")
-                    + (guide.dotted ? ", dotted" : ", unbroken")
-            case .docker:
-                "docker"
+            case .line(let line, let place):
+                "line \(line.name)" + at(place)
+            case .card(let model, let place):
+                "card \(model.path)" + at(place)
+            case .docker(_, let place):
+                "docker" + at(place)
             case .elsewhere:
                 "elsewhere"
             case .quietProjects:
@@ -103,13 +91,17 @@ struct ListingTests {
         }
     }
 
-    /// The model of the card at `path` in `listing`, alone or nested.
+    private func at(_ place: Place) -> String {
+        " at \(place.depth)" + (place.first ? ", first" : "")
+    }
+
+    /// The model of the card at `path` in `listing`.
     private func model(at path: String, in listing: Listing) -> CardModel? {
         guard case .rows(let rows) = listing else { return nil }
         return rows.lazy.compactMap { row -> CardModel? in
             switch row {
-            case .card(let model), .nested(let model, _): model.path == path ? model : nil
-            case .groupLine, .docker, .elsewhere, .quietProjects: nil
+            case .card(let model, _): model.path == path ? model : nil
+            case .line, .docker, .elsewhere, .quietProjects: nil
             }
         }.first
     }

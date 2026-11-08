@@ -162,12 +162,30 @@ mod tests {
     use std::path::PathBuf;
 
     use super::super::fixtures::{
-        agent, docker, linked_worktree, main_worktree, now, project, quiet, shown, snapshot,
+        self, agent, came_from, docker, linked_worktree, main_worktree, now, shown, snapshot,
+        upstream,
     };
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::map::test_support::{cargo_target, measured, node_modules};
     use crate::map::{AgentStatus, Measurement, Project};
+
+    /// `project`, cloned from an upstream of its own named after it, so it stands in a group of
+    /// its own, which moves as the card would.
+    fn alone(project: Project) -> Project {
+        let remote = format!("github.com/me/{}", project.name);
+        came_from(upstream(&remote), &[], project)
+    }
+
+    /// A project last active `minutes_ago`, in a group of its own.
+    fn project(name: &str, minutes_ago: u64) -> Project {
+        alone(fixtures::project(name, minutes_ago))
+    }
+
+    /// A project out of focus, in a group of its own.
+    fn quiet(name: &str) -> Project {
+        alone(fixtures::quiet(name))
+    }
 
     fn listed(map: &Snapshot, arrangement: &Arrangement) -> Vec<String> {
         shown(&Listing::new(map, arrangement, &cleaning(), now()).rows)
@@ -188,30 +206,34 @@ mod tests {
 
         let b_active = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
         arrangement.observe(&b_active, &cleaning(), now());
-        assert_eq!(listed(&b_active, &arrangement), ["a", "b"]);
+        assert_eq!(listed(&b_active, &arrangement), ["a: a", "b: b"]);
 
         arrangement.pointer_left();
-        assert_eq!(listed(&b_active, &arrangement), ["b", "a"], "re-sorted");
+        assert_eq!(
+            listed(&b_active, &arrangement),
+            ["b: b", "a: a"],
+            "re-sorted"
+        );
     }
 
     #[test]
-    fn while_the_pointer_is_over_the_list_dockers_card_keeps_its_place_as_a_cards_does() {
+    fn while_the_pointer_is_over_the_list_dockers_group_keeps_its_place_as_a_group_does() {
         let with = |containers: &[(&str, u64)]| Snapshot {
             docker: Some(docker(containers, 0)),
             ..snapshot(vec![project("a", 10), project("b", 20)], vec![])
         };
         let before = with(&[("pg", 15)]);
         let mut arrangement = pointed_at(&before);
-        assert_eq!(listed(&before, &arrangement), ["a", "docker", "b"]);
+        assert_eq!(listed(&before, &arrangement), ["a: a", "docker", "b: b"]);
 
         let started = with(&[("pg", 15), ("cache", 0)]);
         arrangement.observe(&started, &cleaning(), now());
-        assert_eq!(listed(&started, &arrangement), ["a", "docker", "b"]);
+        assert_eq!(listed(&started, &arrangement), ["a: a", "docker", "b: b"]);
 
         arrangement.pointer_left();
         assert_eq!(
             listed(&started, &arrangement),
-            ["docker", "a", "b"],
+            ["docker", "a: a", "b: b"],
             "re-sorted"
         );
     }
@@ -259,11 +281,11 @@ mod tests {
 
         let first = snapshot(vec![project("a", 10), project("b", 20)], vec![]);
         arrangement.observe(&first, &cleaning(), now());
-        assert_eq!(listed(&first, &arrangement), ["a", "b"]);
+        assert_eq!(listed(&first, &arrangement), ["a: a", "b: b"]);
 
         let b_active = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
         arrangement.observe(&b_active, &cleaning(), now());
-        assert_eq!(listed(&b_active, &arrangement), ["a", "b"], "held");
+        assert_eq!(listed(&b_active, &arrangement), ["a: a", "b: b"], "held");
     }
 
     #[test]
@@ -274,15 +296,19 @@ mod tests {
         arrangement.forget_map();
         let first = snapshot(vec![project("b", 0), project("a", 10)], vec![]);
         arrangement.observe(&first, &cleaning(), now());
-        assert_eq!(listed(&first, &arrangement), ["b", "a"], "sorted afresh");
+        assert_eq!(
+            listed(&first, &arrangement),
+            ["b: b", "a: a"],
+            "sorted afresh"
+        );
 
         let a_active = snapshot(vec![project("a", 0), project("b", 10)], vec![]);
         arrangement.observe(&a_active, &cleaning(), now());
-        assert_eq!(listed(&a_active, &arrangement), ["b", "a"], "held");
+        assert_eq!(listed(&a_active, &arrangement), ["b: b", "a: a"], "held");
     }
 
     #[test]
-    fn a_card_that_stops_qualifying_leaves_at_once_while_the_pointer_is_over_the_list() {
+    fn a_group_that_stops_qualifying_leaves_at_once_while_the_pointer_is_over_the_list() {
         let mut working = project("b", 2);
         working.agents.push(agent("/code/b", AgentStatus::Busy));
         let before = snapshot(vec![project("a", 1), working, project("c", 3)], vec![]);
@@ -291,7 +317,7 @@ mod tests {
         // b's agent ended, and its last activity is long past: it leaves the focus.
         let after = snapshot(vec![project("a", 1), project("c", 3), quiet("b")], vec![]);
         arrangement.observe(&after, &cleaning(), now());
-        assert_eq!(listed(&after, &arrangement), ["a", "c", "quiet:1"]);
+        assert_eq!(listed(&after, &arrangement), ["a: a", "c: c", "quiet:1"]);
     }
 
     #[test]
@@ -304,25 +330,28 @@ mod tests {
             vec![],
         );
         arrangement.observe(&arrived, &cleaning(), now());
-        assert_eq!(listed(&arrived, &arrangement), ["new", "a", "b"]);
+        assert_eq!(listed(&arrived, &arrangement), ["new: new", "a: a", "b: b"]);
 
         let later = snapshot(
             vec![project("b", 0), project("a", 0), project("new", 25)],
             vec![],
         );
         arrangement.observe(&later, &cleaning(), now());
-        assert_eq!(listed(&later, &arrangement), ["new", "a", "b"]);
+        assert_eq!(listed(&later, &arrangement), ["new: new", "a: a", "b: b"]);
     }
 
     #[test]
-    fn opening_the_quiet_row_under_the_pointer_moves_no_card_above_it() {
+    fn opening_the_quiet_row_under_the_pointer_moves_no_group_above_it() {
         let before = snapshot(vec![project("a", 1), project("b", 2), quiet("q")], vec![]);
         let mut arrangement = pointed_at(&before);
         let b_active = snapshot(vec![project("b", 0), project("a", 1), quiet("q")], vec![]);
         arrangement.observe(&b_active, &cleaning(), now());
 
         arrangement.toggle_quiet(Some(&b_active), &cleaning(), now());
-        assert_eq!(listed(&b_active, &arrangement), ["a", "b", "quiet:1", "q"]);
+        assert_eq!(
+            listed(&b_active, &arrangement),
+            ["a: a", "b: b", "quiet:1", "q: q"]
+        );
     }
 
     /// A project in focus whose only build folder is measured as `target`, and whose own files
@@ -351,7 +380,10 @@ mod tests {
         let mut arrangement = Arrangement::default();
         arrangement.observe(&early, &cleaning(), now());
         arrangement.set_sort(SortOrder::Disk, &early, &cleaning(), now());
-        assert_eq!(listed(&early, &arrangement), ["small", "large"]);
+        assert_eq!(
+            listed(&early, &arrangement),
+            ["small: small", "large: large"]
+        );
 
         let landing = snapshot(
             vec![
@@ -361,7 +393,11 @@ mod tests {
             vec![],
         );
         arrangement.observe(&landing, &cleaning(), now());
-        assert_eq!(listed(&landing, &arrangement), ["small", "large"], "held");
+        assert_eq!(
+            listed(&landing, &arrangement),
+            ["small: small", "large: large"],
+            "held"
+        );
 
         let done = snapshot(
             vec![
@@ -371,7 +407,10 @@ mod tests {
             vec![],
         );
         arrangement.observe(&done, &cleaning(), now());
-        assert_eq!(listed(&done, &arrangement), ["large", "small"]);
+        assert_eq!(
+            listed(&done, &arrangement),
+            ["large: large", "small: small"]
+        );
     }
 
     #[test]
@@ -388,7 +427,10 @@ mod tests {
         let mut arrangement = Arrangement::default();
         arrangement.observe(&done(500), &cleaning(), now());
         arrangement.set_sort(SortOrder::Disk, &done(500), &cleaning(), now());
-        assert_eq!(listed(&done(500), &arrangement), ["large", "small"]);
+        assert_eq!(
+            listed(&done(500), &arrangement),
+            ["large: large", "small: small"]
+        );
 
         // A build folder found later waits for its first size, as a new `target/` does, and the
         // list follows the sizes that change meanwhile at once.
@@ -399,7 +441,10 @@ mod tests {
         ));
         assert!(!later.sizing().is_finished());
         arrangement.observe(&later, &cleaning(), now());
-        assert_eq!(listed(&later, &arrangement), ["small", "large"]);
+        assert_eq!(
+            listed(&later, &arrangement),
+            ["small: small", "large: large"]
+        );
     }
 
     #[test]
@@ -417,6 +462,6 @@ mod tests {
         arrangement.set_sort(SortOrder::Disk, &early, &cleaning(), now());
         arrangement.set_sort(SortOrder::Name, &early, &cleaning(), now());
         assert!(!arrangement.hold.is_held());
-        assert_eq!(listed(&early, &arrangement), ["a", "b"]);
+        assert_eq!(listed(&early, &arrangement), ["a: a", "b: b"]);
     }
 }

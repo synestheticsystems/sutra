@@ -17,8 +17,9 @@ use super::docker::Container;
 use super::processes::ListeningProcess;
 use super::scan::Boundary;
 use super::{
-    AgentSession, AgentStatus, ArtifactDir, ArtifactKind, DirUsage, FolderAccess, GroupKey,
-    Harness, Measurement, Project, Provenance, ScanOptions, ScanStats, Snapshot, Subagent,
+    AgentSession, AgentStatus, Ancestry, ArtifactDir, ArtifactKind, DirUsage, FolderAccess,
+    GroupKey, Harness, Measurement, Project, Provenance, ScanOptions, ScanStats, Snapshot,
+    Subagent,
 };
 use crate::model::{EnvSources, Environment};
 
@@ -381,6 +382,17 @@ pub(crate) fn container_for(folder: impl Into<PathBuf>, name: &str) -> Container
 /// A map of `projects`, in the order given, under the one root `/code`, generated at the epoch,
 /// with nothing else on it.
 pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
+    let provenance = projects.iter().map(|project| &project.provenance);
+    // What the engine would know of them, had it tracked only them.
+    let ancestry = Ancestry {
+        groups: provenance
+            .clone()
+            .map(|known| known.group.clone())
+            .collect(),
+        made_from: provenance
+            .flat_map(|known| known.made_from.clone())
+            .collect(),
+    };
     Snapshot {
         roots: vec![PathBuf::from("/code")],
         skipped_private_folders: Vec::new(),
@@ -391,7 +403,7 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
         unplaced_subagents: Vec::new(),
         docker: None,
         problems: Vec::new(),
-        ancestry: Arc::default(),
+        ancestry: Arc::new(ancestry),
         scan: ScanStats::default(),
         generated_at: UNIX_EPOCH,
     }

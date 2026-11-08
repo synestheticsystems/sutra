@@ -49,10 +49,8 @@ final class Film {
                 throw .welcomeStayed
             }
         case Cut.frame(at: Cut.folds), Cut.frame(at: Cut.unfolds):
-            // What a click on the repository's line asks of the core.
-            recording.script.perform(
-                action: .toggleFold(parent: .repository(commonDir: Scenario.cedarWebGit))
-            )
+            // What a click on Cedar Web's line asks of the core.
+            recording.script.perform(action: .toggleFold(line: Scenario.cedarWebLine))
         default:
             break
         }

@@ -34,7 +34,7 @@ impl From<Option<Result<Cleaned, CleanError>>> for CleanOutcome {
 #[derive(Debug)]
 pub(in crate::dashboard) enum Report {
     /// What a click on Clean means for each folder it cleans, `clicked`: a card's one, or every
-    /// build folder of a session's scratch. In the order of `clicked`.
+    /// build folder a line's menu offers in what it holds. In the order of `clicked`.
     Prepared {
         clicked: Vec<PathBuf>,
         prepared: Option<Vec<Result<Prepared, PrepareError>>>,

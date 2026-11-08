@@ -50,6 +50,9 @@ struct Project {
 
 /// A project's place in a git repository.
 struct Worktree {
+    /// The remote its repository was cloned from, which the live core keys its group by, as
+    /// `example.com/cedar/cedar-web` reads.
+    let remote: String
     /// The git folder its repository's worktrees share.
     let commonDir: String
     let branch: String

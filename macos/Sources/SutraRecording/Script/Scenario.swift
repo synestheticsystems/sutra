@@ -35,13 +35,19 @@ enum Scenario {
         pineScripts,
     ]
 
-    /// The git folder Cedar Web's three worktrees share, which the preview's cut folds by.
+    /// The git folder Cedar Web's three worktrees share.
     static let cedarWebGit = "/Demo/Projects/cedar-web/.git"
+    /// The remote Cedar Web was cloned from, which keys its group.
+    static let cedarWebRemote = "example.com/cedar/cedar-web"
+    /// The line of Cedar Web's group, which a take opens with open and the preview's cut folds.
+    static let cedarWebLine = LineKey.group(kind: .upstream(remote: cedarWebRemote))
     private static let day: TimeInterval = 86_400
 
     private static let cedarWeb = Project(
         path: "/Demo/Projects/cedar-web",
-        worktree: Worktree(commonDir: cedarWebGit, branch: "main", linkedName: nil),
+        worktree: Worktree(
+            remote: cedarWebRemote, commonDir: cedarWebGit, branch: "main", linkedName: nil
+        ),
         units: [Unit(name: "web", port: 5173)],
         sessions: [
             Session(
@@ -59,7 +65,8 @@ enum Scenario {
     private static let cedarWebSearch = Project(
         path: "/Demo/Projects/cedar-web-search",
         worktree: Worktree(
-            commonDir: cedarWebGit, branch: "feature/search", linkedName: "cedar-web-search"
+            remote: cedarWebRemote, commonDir: cedarWebGit, branch: "feature/search",
+            linkedName: "cedar-web-search"
         ),
         units: [],
         sessions: [
@@ -92,7 +99,8 @@ enum Scenario {
     private static let cedarWebLayout = Project(
         path: "/Demo/Projects/cedar-web-layout",
         worktree: Worktree(
-            commonDir: cedarWebGit, branch: "fix/layout", linkedName: "cedar-web-layout"
+            remote: cedarWebRemote, commonDir: cedarWebGit, branch: "fix/layout",
+            linkedName: "cedar-web-layout"
         ),
         units: [],
         sessions: [
@@ -115,7 +123,8 @@ enum Scenario {
     private static let harborAPI = Project(
         path: "/Demo/Projects/harbor-api",
         worktree: Worktree(
-            commonDir: "/Demo/Projects/harbor-api/.git", branch: "feature/cache", linkedName: nil
+            remote: "example.com/harbor/harbor-api", commonDir: "/Demo/Projects/harbor-api/.git",
+            branch: "feature/cache", linkedName: nil
         ),
         units: [Unit(name: "api", port: 3000)],
         sessions: [
@@ -134,6 +143,7 @@ enum Scenario {
     private static let lanternDocs = Project(
         path: "/Demo/Projects/lantern-docs",
         worktree: Worktree(
+            remote: "example.com/lantern/lantern-docs",
             commonDir: "/Demo/Projects/lantern-docs/.git", branch: "main", linkedName: nil
         ),
         units: [], sessions: [], subagents: [],
@@ -144,8 +154,8 @@ enum Scenario {
     private static let atlasNotes = Project(
         path: "/Demo/Projects/atlas-notes",
         worktree: Worktree(
-            commonDir: "/Demo/Projects/atlas-notes/.git", branch: "docs/onboarding",
-            linkedName: nil
+            remote: "example.com/atlas/atlas-notes", commonDir: "/Demo/Projects/atlas-notes/.git",
+            branch: "docs/onboarding", linkedName: nil
         ),
         units: [], sessions: [], subagents: [],
         ownBytes: 48_000_000, buildFolders: [],
@@ -155,6 +165,7 @@ enum Scenario {
     private static let orchardKit = Project(
         path: "/Demo/Projects/orchard-kit",
         worktree: Worktree(
+            remote: "example.com/orchard/orchard-kit",
             commonDir: "/Demo/Projects/orchard-kit/.git", branch: "main", linkedName: nil
         ),
         units: [], sessions: [], subagents: [],
