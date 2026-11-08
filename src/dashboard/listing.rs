@@ -10,6 +10,7 @@
 //! counts always agree.
 
 mod arrangement;
+mod by_line;
 mod filter;
 #[cfg(test)]
 pub(super) mod fixtures;
@@ -21,6 +22,7 @@ mod scratch_rows;
 mod sort;
 
 pub(super) use arrangement::Arrangement;
+pub(super) use by_line::ByLine;
 pub(super) use focus::FOCUS_RECENT;
 pub(super) use folds::Folds;
 pub(super) use group::{Checkout, Group, Naming, Node};
