@@ -435,7 +435,7 @@ fn a_scratch_folder_whose_one_clone_cannot_be_read_joins_its_sessions_checkout_a
 }
 
 #[test]
-fn a_scratch_folder_that_is_a_repository_with_no_remote_joins_its_sessions_checkout() {
+fn a_scratch_folder_that_is_a_repository_made_or_left_over_there_joins_its_sessions_checkout() {
     let fixture = TempDir::new("engine-provenance-scratch-repository");
     let (_, app, scratchpad) = alice_and_a_session_in_app(&fixture);
     let made_there = fixture.repo(&format!("{scratchpad}/git-check"));
@@ -465,5 +465,41 @@ fn a_scratch_folder_that_is_a_repository_with_no_remote_joins_its_sessions_check
             made_from: vec![],
         },
         "a repository at home is a project of its own"
+    );
+}
+
+#[test]
+fn a_scratch_clone_of_a_repository_kept_at_home_with_no_remote_stands_under_it() {
+    let fixture = TempDir::new("engine-provenance-scratch-clone-of-home");
+    let (_, _, scratchpad) = alice_and_a_session_in_app(&fixture);
+    let notes = fixture.repo("home/code/notes");
+    let copy = fixture.path(&format!("{scratchpad}/notes-copy"));
+    clone_into(&notes, &copy);
+    let copy_of_copy = fixture.path(&format!("{scratchpad}/notes-copy-2"));
+    clone_into(&copy, &copy_of_copy);
+    let task = fixture.path(&format!("{scratchpad}/task"));
+    clone_into(&notes, &task.join("notes"));
+    let mut state = state_over(&fixture);
+
+    state.rediscover(None);
+
+    let under = |made_from: &[&Path]| Provenance {
+        group: GroupKey::LocalRepository(notes.clone()),
+        made_from: made_from.iter().map(|path| path.to_path_buf()).collect(),
+    };
+    assert_eq!(
+        provenance_on(&state, &copy),
+        under(&[&notes]),
+        "not app's, where its session started"
+    );
+    assert_eq!(
+        provenance_on(&state, &copy_of_copy),
+        under(&[&copy, &notes]),
+        "a copy of the copy a line deeper"
+    );
+    assert_eq!(
+        provenance_on(&state, &task),
+        under(&[&notes]),
+        "a folder holding a clone"
     );
 }

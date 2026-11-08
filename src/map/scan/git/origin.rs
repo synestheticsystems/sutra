@@ -4,10 +4,10 @@
 //! that is a folder on this Mac, a clone of a local checkout, the folder is followed in turn, a
 //! worktree or a bare repository, until a remote names a host. A bare repository with no remote,
 //! as Cargo's git cache keeps one, came from what it last fetched. In a session's scratch only a
-//! chain that ends at a remote counts, and a scratch folder whose own does not goes by the one
-//! checkout directly inside it. Only files and folders are read, none where Sutra may not follow,
-//! not even a linked worktree's admin folder there: a chain ends at what lies there, unread. No git
-//! runs, and nothing is written.
+//! chain that ends outside the scratch counts, at a remote or at a repository kept elsewhere, and a
+//! scratch folder whose own does not goes by the one checkout directly inside it. Only files and
+//! folders are read, none where Sutra may not follow, not even a linked worktree's admin folder
+//! there: a chain ends at what lies there, unread. No git runs, and nothing is written.
 
 use std::collections::HashSet;
 use std::fs;
@@ -60,17 +60,19 @@ pub fn lineage_of_folder(
     lineage_of_checkout(folder, checked_out, may_follow)
 }
 
-/// The lineage of `folder`, a session's scratch folder, by which the list groups its card: its own
-/// when its chain ends at a remote, and else that of the single checkout directly inside it, as an
-/// agent often clones one folder down (`scratchpad/<task>/<clone>`), when that one's chain does.
-/// Outside the scratch a repository with no remote is a project of its own, but in a session's
-/// scratch it is the session's own work, made there, left over there or copied from one, and says
-/// nothing of where the work came from. `None` when neither chain ends at a remote, or the folder
+/// The lineage of `folder`, a session's scratch folder in `scratch_root`, by which the list groups
+/// its card: its own when its chain ends outside the scratch, and else that of the single checkout
+/// directly inside it, as an agent often clones one folder down (`scratchpad/<task>/<clone>`), when
+/// that one's chain does. A chain that ends outside, at a remote or at a repository kept elsewhere,
+/// says where the work came from, and the folder stands under what it ends at. One that ends in the
+/// scratch, at a repository made there, left over there or cloned from one there, ends at the
+/// session's own work, and says nothing. `None` when neither chain ends outside, or the folder
 /// holds several checkouts, as which one its work came from is not known, or its `.git` could not
 /// be read; the failures name what could not be read. A folder in it that could not be looked into
 /// leaves it none too, as that one may be a checkout (see `single_checkout_in`).
 pub fn lineage_of_scratch_folder(
     folder: &Path,
+    scratch_root: &Path,
     may_follow: &(dyn Fn(&Path) -> bool + Sync),
 ) -> (Option<Lineage>, Vec<Failure>) {
     let (own, mut failures) = match Repository::checked_out_at(folder, may_follow) {
@@ -78,12 +80,22 @@ pub fn lineage_of_scratch_folder(
         Err(err) => return (None, vec![(folder.join(".git"), err.kind())]),
         checked_out => lineage_of_checkout(folder, checked_out, may_follow),
     };
-    if own.as_ref().is_some_and(|own| own.remote.is_some()) {
+    if own
+        .as_ref()
+        .is_some_and(|own| ends_outside(own, scratch_root))
+    {
         return (own, failures);
     }
-    let (held, unread) = lineage_of_single_checkout_in(folder, may_follow);
+    let (held, unread) = lineage_of_single_checkout_in(folder, scratch_root, may_follow);
     failures.extend(unread);
     (held, failures)
+}
+
+/// Whether the chain of `lineage` ends outside `scratch_root`: at a remote, or at a repository that
+/// lies elsewhere, gone or not.
+fn ends_outside(lineage: &Lineage, scratch_root: &Path) -> bool {
+    let root = lineage.made_from.last();
+    lineage.remote.is_some() || root.is_some_and(|root| !root.starts_with(scratch_root))
 }
 
 /// The lineage of `folder` by what `Repository::checked_out_at` read of it, `checked_out`, as
@@ -107,17 +119,21 @@ fn lineage_of_checkout(
     }
 }
 
-/// The lineage of the single checkout directly inside `folder`, a scratch folder, when its chain
-/// ends at a remote, as `lineage_of_scratch_folder` says.
+/// The lineage of the single checkout directly inside `folder`, a scratch folder in `scratch_root`,
+/// when its chain ends outside the scratch, as `lineage_of_scratch_folder` says.
 fn lineage_of_single_checkout_in(
     folder: &Path,
+    scratch_root: &Path,
     may_follow: &(dyn Fn(&Path) -> bool + Sync),
 ) -> (Option<Lineage>, Vec<Failure>) {
     let Some(checkout) = single_checkout_in(folder) else {
         return (None, Vec::new());
     };
     let (lineage, failures) = lineage_of_folder(&checkout, may_follow);
-    (lineage.filter(|lineage| lineage.remote.is_some()), failures)
+    (
+        lineage.filter(|lineage| ends_outside(lineage, scratch_root)),
+        failures,
+    )
 }
 
 /// The one folder directly inside `folder` that holds a `.git`, a directory or a linked worktree's

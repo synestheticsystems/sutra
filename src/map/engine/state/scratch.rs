@@ -63,7 +63,7 @@ impl State {
         // The map traces every project's provenance once the rediscovery is done, whatever changed.
         let TrackedFolders {
             mut kept, searched, ..
-        } = self.track_scratch_folders(found, previous, is_worktree);
+        } = self.track_scratch_folders(root, found, previous, is_worktree);
         kept.extend(searched);
         let unlisted: Vec<PathBuf> = previous
             .iter()
@@ -120,11 +120,13 @@ impl State {
     /// took the place of the folder the map found there, and drop each gone. Returns whether any
     /// came, went or was searched anew, or `None` when the session's folders could not all be
     /// listed, which leaves those on the map as they were, for a rediscovery to say why; so does a
-    /// folder no session's folder could be, whose name is not text.
+    /// folder no session's folder could be, whose name is not text, or any while the map reads no
+    /// scratch root.
     pub(in crate::map::engine) fn refind_scratch_folders(
         &mut self,
         session: &Path,
     ) -> Option<bool> {
+        let scratch_root = self.scratch_root.as_deref()?;
         let session_folder = SessionFolder::at(session)?;
         let (folders, failures) = scan::scratch_folders(session);
         if !failures.is_empty() {
@@ -151,7 +153,12 @@ impl State {
             kept,
             searched,
             origins_changed,
-        } = self.track_scratch_folders(vec![(session_folder, folders)], &mut previous, is_worktree);
+        } = self.track_scratch_folders(
+            scratch_root,
+            vec![(session_folder, folders)],
+            &mut previous,
+            is_worktree,
+        );
         // What the listing did not name is left in `previous`, and goes.
         let changed = !searched.is_empty() || !previous.is_empty() || origins_changed;
         self.projects.extend(kept.into_iter().chain(searched));
@@ -166,16 +173,17 @@ impl State {
         Some(changed)
     }
 
-    /// Track the scratch folders `found`, listed by the session folder holding them: one tracked
-    /// already is taken from `previous` whole, with the build folders last found in it, while it is
-    /// still the folder searched and Sutra's access to it is unchanged, and where it came from read
-    /// again, as it may have become a clone since, or come to hold one; one new to the map, or
-    /// another folder in the place of one on it, is searched through, on discovery's threads, in
-    /// the space its session's folders on the map share, with what the map knows of the session,
-    /// or in a new one. A folder `is_worktree` names stays the worktree it is, as git's claim on it
-    /// comes first.
+    /// Track the scratch folders `found` in the scratch root `scratch_root`, listed by the session
+    /// folder holding them: one tracked already is taken from `previous` whole, with the build
+    /// folders last found in it, while it is still the folder searched and Sutra's access to it is
+    /// unchanged, and where it came from read again, as it may have become a clone since, or come
+    /// to hold one; one new to the map, or another folder in the place of one on it, is searched
+    /// through, on discovery's threads, in the space its session's folders on the map share, with
+    /// what the map knows of the session, or in a new one. A folder `is_worktree` names stays the
+    /// worktree it is, as git's claim on it comes first.
     fn track_scratch_folders(
         &self,
+        scratch_root: &Path,
         found: Vec<(SessionFolder, Vec<ScratchFolder>)>,
         previous: &mut BTreeMap<PathBuf, Tracked>,
         is_worktree: impl Fn(&Path) -> bool,
@@ -221,7 +229,7 @@ impl State {
                 .par_iter_mut()
                 .map(|(_, tracked)| {
                     let before = tracked.origin.clone();
-                    tracked.read_origin_again(&may_follow);
+                    tracked.read_origin_again(scratch_root, &may_follow);
                     tracked.origin != before
                 })
                 .reduce(|| false, |one, other| one || other);
@@ -229,7 +237,9 @@ impl State {
                 .into_par_iter()
                 .map(|(listed, space)| {
                     let path = listed.path.clone();
-                    (path, Tracked::scratch(listed, space, boundary, &may_follow))
+                    let tracked =
+                        Tracked::scratch(listed, space, boundary, scratch_root, &may_follow);
+                    (path, tracked)
                 })
                 .collect();
             (searched, origins_changed)

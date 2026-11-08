@@ -240,6 +240,7 @@ fn a_worktree_of_a_repository_where_sutra_may_not_follow_stops_its_chain_without
         made_from,
         remote: None,
     };
+    let scratch = fixture.path("scratch");
 
     assert_eq!(
         lineage_of_folder(&top, &outside_desktop),
@@ -247,13 +248,13 @@ fn a_worktree_of_a_repository_where_sutra_may_not_follow_stops_its_chain_without
         "a worktree of it"
     );
     assert_eq!(
-        lineage_of_scratch_folder(&top, &outside_desktop),
-        (None, vec![]),
-        "a scratch folder that is one, its chain ending at no remote"
+        lineage_of_scratch_folder(&top, &scratch, &outside_desktop),
+        (Some(ends_at(vec![private.clone()])), vec![]),
+        "a scratch folder that is one, under that repository"
     );
     assert_eq!(
-        lineage_of_scratch_folder(&fixture.path("scratch/task"), &outside_desktop),
-        (None, vec![]),
+        lineage_of_scratch_folder(&fixture.path("scratch/task"), &scratch, &outside_desktop),
+        (Some(ends_at(vec![private.clone()])), vec![]),
         "a scratch folder holding one"
     );
     let copy = repo_info(&fixture.path("scratch/copy")).expect("a worktree");
@@ -319,8 +320,9 @@ fn a_scratch_folder_with_no_git_goes_by_the_one_folder_in_it_holding_one_and_no_
     fixture.write("scratch/review/README.md", "");
     let elsewhere = cloned_from_host(&fixture, "elsewhere", "https://github.com/me/elsewhere");
     std::os::unix::fs::symlink(&elsewhere, review.join("linked")).unwrap();
+    let scratch = fixture.path("scratch");
     let remote = |folder: &Path| {
-        let (lineage, failures) = lineage_of_scratch_folder(folder, &anywhere);
+        let (lineage, failures) = lineage_of_scratch_folder(folder, &scratch, &anywhere);
         assert_eq!(failures, []);
         lineage.and_then(|lineage| lineage.remote)
     };
@@ -341,18 +343,19 @@ fn a_scratch_folder_with_no_git_goes_by_the_one_folder_in_it_holding_one_and_no_
     let sealed = fixture.dir("scratch/review/sealed");
     fixture.restrict(&sealed, 0o000);
     assert_eq!(
-        lineage_of_scratch_folder(&review, &anywhere),
+        lineage_of_scratch_folder(&review, &scratch, &anywhere),
         (None, vec![]),
         "a folder it cannot look into may hold a checkout too, and its search names that folder"
     );
 }
 
 #[test]
-fn in_scratch_only_a_chain_that_ends_at_a_remote_counts_a_folders_own_or_its_one_checkouts() {
+fn in_scratch_a_chain_counts_when_it_ends_outside_at_a_remote_or_a_repository_kept_elsewhere() {
     let fixture = TempDir::new("origin-scratch-remote");
+    let scratch = fixture.path("scratch");
     let notes = fixture.repo("home/notes");
-    let clone_of_notes = |into: &str| {
-        let (from, into) = (notes.to_str().unwrap(), fixture.path(into));
+    let clone = |from: &Path, into: &str| {
+        let (from, into) = (from.to_str().unwrap(), fixture.path(into));
         git(
             fixture.root(),
             &["clone", "-q", from, into.to_str().unwrap()],
@@ -360,28 +363,44 @@ fn in_scratch_only_a_chain_that_ends_at_a_remote_counts_a_folders_own_or_its_one
         into
     };
     let made_there = fixture.repo("scratch/git-check");
-    let copy = clone_of_notes("scratch/notes-copy");
-    clone_of_notes("scratch/task/notes");
+    let copy_of_made_there = clone(&made_there, "scratch/git-check-copy");
+    let copy_of_notes = clone(&notes, "scratch/notes-copy");
+    clone(&notes, "scratch/task/notes");
     let work = fixture.repo("scratch/work");
     cloned_from_host(&fixture, "scratch/work/app", "https://github.com/me/app");
-    let lineage = |folder: &Path| lineage_of_scratch_folder(folder, &anywhere);
+    let lineage = |folder: &Path| lineage_of_scratch_folder(folder, &scratch, &anywhere);
+    let under_notes = || {
+        let made_from = vec![notes.clone()];
+        (
+            Some(Lineage {
+                made_from,
+                remote: None,
+            }),
+            vec![],
+        )
+    };
 
     assert_eq!(lineage(&made_there), (None, vec![]), "made there");
     assert_eq!(
-        lineage(&copy),
+        lineage(&copy_of_made_there),
         (None, vec![]),
-        "cloned from a repository with no remote"
+        "cloned from one made there"
+    );
+    assert_eq!(
+        lineage(&copy_of_notes),
+        under_notes(),
+        "cloned from a repository kept elsewhere"
     );
     assert_eq!(
         lineage(&fixture.path("scratch/task")),
-        (None, vec![]),
+        under_notes(),
         "holding such a clone"
     );
     let (held, failures) = lineage(&work);
     assert_eq!(
         held.and_then(|held| held.remote).as_deref(),
         Some("github.com/me/app"),
-        "a repository with no remote, holding one clone of a host"
+        "made there, holding one clone of a host"
     );
     assert_eq!(failures, []);
 }
