@@ -1,7 +1,8 @@
 //! Where each project on the map came from (see `Provenance`). Each project's own files are read
 //! with it, a checkout's git files for its lineage and the packages it builds, a folder's manifests
-//! for its package (`Origin`); then the map as a whole decides what they alone cannot. In order, a
-//! project's group is keyed by:
+//! for its package (`Origin`), and a scratch folder with no git of its own takes the lineage of the
+//! one checkout directly inside it; then the map as a whole decides what they alone cannot. In
+//! order, a project's group is keyed by:
 //!   - the remote its checkout's chain of origins ends at;
 //!   - for a repository with no remote anywhere in that chain, the folder at the chain's root;
 //!   - for a folder with no git, the package it builds: in the group of the checkouts that build a
@@ -26,9 +27,10 @@ type Unread = (PathBuf, io::ErrorKind);
 /// What a project's own files say of where it came from, read with the project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Origin {
-    /// A git checkout: its lineage, and the packages it builds, by which a folder with no git may
-    /// join its group. A linked worktree of a repository with a main worktree builds none here, as
-    /// the main worktree speaks for the repository.
+    /// A git checkout, or a scratch folder taking the lineage of the one it holds: its lineage, and
+    /// the packages it builds, by which a folder with no git may join its group. A linked worktree
+    /// of a repository with a main worktree builds none here, as the main worktree speaks for the
+    /// repository.
     Checkout {
         lineage: Lineage,
         builds: Vec<String>,
@@ -61,9 +63,8 @@ impl Origin {
         (Origin::Checkout { lineage, builds }, unread)
     }
 
-    /// Where `folder`, a folder no discovery read as a worktree, came from: a session's scratch
-    /// folder, or one only a dev-runner environment names. Either may be a checkout git made, or a
-    /// folder with no git.
+    /// Where `folder`, a folder only a dev-runner environment names, came from: it may be a checkout
+    /// git made, or a folder with no git.
     pub(super) fn of_folder(
         folder: &Path,
         access: FolderAccess,
@@ -72,7 +73,32 @@ impl Origin {
         if access != FolderAccess::Readable {
             return (Origin::Folder { package: None }, Vec::new());
         }
-        let (lineage, mut unread) = scan::lineage_of_folder(folder, may_follow);
+        let (lineage, unread) = scan::lineage_of_folder(folder, may_follow);
+        Origin::of_lineage_or_package(folder, lineage, unread)
+    }
+
+    /// Where `folder`, a session's scratch folder, came from: it may be a checkout git made, a
+    /// folder holding one alone (see `scan::lineage_of_scratch_folder`), or a folder with no git.
+    pub(super) fn of_scratch_folder(
+        folder: &Path,
+        access: FolderAccess,
+        may_follow: &(dyn Fn(&Path) -> bool + Sync),
+    ) -> (Origin, Vec<Unread>) {
+        if access != FolderAccess::Readable {
+            return (Origin::Folder { package: None }, Vec::new());
+        }
+        let (lineage, unread) = scan::lineage_of_scratch_folder(folder, may_follow);
+        Origin::of_lineage_or_package(folder, lineage, unread)
+    }
+
+    /// Where `folder` came from, by `lineage`, what git's files say of it, with `unread`, what
+    /// reading them could not read: a checkout, with the packages the folder builds, or else a
+    /// folder with no git, by its package.
+    fn of_lineage_or_package(
+        folder: &Path,
+        lineage: Option<Lineage>,
+        mut unread: Vec<Unread>,
+    ) -> (Origin, Vec<Unread>) {
         let origin = match lineage {
             Some(lineage) => {
                 let (builds, failures) = scan::packages_built(folder);

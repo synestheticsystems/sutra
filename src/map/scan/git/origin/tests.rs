@@ -1,6 +1,6 @@
 //! Lineages read from repositories git itself made: clones of a host, of a local checkout, of a
 //! linked worktree and of a bare repository, Cargo's git cache among them, and chains that end at a
-//! folder gone, kept out of or sealed, or that loop.
+//! folder gone, kept out of or sealed, or that loop; and a scratch folder's, read from what it holds.
 
 use super::*;
 use crate::map::scan::repo_info;
@@ -260,6 +260,43 @@ fn a_folder_that_is_a_checkout_has_a_lineage_and_one_that_is_not_has_none() {
     );
     assert_eq!(failures, []);
     assert_eq!(lineage_of_folder(&plain, &anywhere), (None, vec![]));
+}
+
+#[test]
+fn a_scratch_folder_with_no_git_goes_by_the_one_folder_in_it_holding_one_and_no_link() {
+    let fixture = TempDir::new("origin-scratch-folder");
+    let review = fixture.dir("scratch/review");
+    cloned_from_host(&fixture, "scratch/review/app", "https://github.com/me/app");
+    fixture.dir("scratch/review/notes");
+    fixture.write("scratch/review/README.md", "");
+    let elsewhere = cloned_from_host(&fixture, "elsewhere", "https://github.com/me/elsewhere");
+    std::os::unix::fs::symlink(&elsewhere, review.join("linked")).unwrap();
+    let remote = |folder: &Path| {
+        let (lineage, failures) = lineage_of_scratch_folder(folder, &anywhere);
+        assert_eq!(failures, []);
+        lineage.and_then(|lineage| lineage.remote)
+    };
+    assert_eq!(remote(&review).as_deref(), Some("github.com/me/app"));
+
+    let own = cloned_from_host(&fixture, "scratch/own", "https://github.com/me/own");
+    cloned_from_host(
+        &fixture,
+        "scratch/own/vendored",
+        "https://github.com/me/vendored",
+    );
+    assert_eq!(
+        remote(&own).as_deref(),
+        Some("github.com/me/own"),
+        "its own git comes first"
+    );
+
+    let sealed = fixture.dir("scratch/review/sealed");
+    fixture.restrict(&sealed, 0o000);
+    assert_eq!(
+        lineage_of_scratch_folder(&review, &anywhere),
+        (None, vec![]),
+        "a folder it cannot look into may hold a checkout too, and its search names that folder"
+    );
 }
 
 #[test]

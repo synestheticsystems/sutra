@@ -82,7 +82,7 @@ impl Tracked {
         may_follow: MayFollow,
     ) -> Tracked {
         let access = scan::folder_access(&listed.path, boundary);
-        let (origin, origin_unread) = Origin::of_folder(&listed.path, access, may_follow);
+        let (origin, origin_unread) = Origin::of_scratch_folder(&listed.path, access, may_follow);
         let provenance = origin.own_provenance(&listed.path);
         let project = new_project(listed.path, None, Some(space), access, provenance);
         Tracked::searched(
@@ -120,11 +120,11 @@ impl Tracked {
         }
     }
 
-    /// Read where the folder came from again, as a scratch folder kept on the map may have become
-    /// a clone since, or ceased to be one.
+    /// Read where the scratch folder came from again, as one kept on the map may have become a
+    /// clone since, or come to hold one, or ceased to.
     pub(super) fn read_origin_again(&mut self, may_follow: MayFollow) {
         let project = &self.project;
-        let (origin, unread) = Origin::of_folder(&project.path, project.access, may_follow);
+        let (origin, unread) = Origin::of_scratch_folder(&project.path, project.access, may_follow);
         self.origin = origin;
         self.origin_unread = unread;
     }

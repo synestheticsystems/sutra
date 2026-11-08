@@ -326,3 +326,110 @@ fn a_rediscovery_groups_a_repository_its_clone_in_scratch_and_its_sessions_scrat
         "the group of the clone with no card among them"
     );
 }
+
+/// Lays out `fixture` with `home/code/alice`, cloned from GitHub, and `home/code/app`, where a
+/// session started. Returns alice, app, and where the session's scratchpad lies in the fixture.
+fn alice_and_a_session_in_app(fixture: &TempDir) -> (PathBuf, PathBuf, String) {
+    let alice = fixture.repo("home/code/alice");
+    git(
+        &alice,
+        &["remote", "add", "origin", "git@github.com:me/alice.git"],
+    );
+    let app = fixture.repo("home/code/app");
+    git(
+        &app,
+        &["remote", "add", "origin", "https://github.com/me/app"],
+    );
+    let scratchpad = format!("claude-501/{}/e26ca359/scratchpad", key_of(&app));
+    (alice, app, scratchpad)
+}
+
+/// Clone the repository at `repository` into `folder`.
+fn clone_into(repository: &Path, folder: &Path) {
+    let (from, into) = (repository.to_str().unwrap(), folder.to_str().unwrap());
+    git(repository, &["clone", "-q", from, into]);
+}
+
+/// The provenance the map gives the project at `path`, a card or not.
+fn provenance_on(state: &State, path: &Path) -> Provenance {
+    state.projects[path].project.provenance.clone()
+}
+
+#[test]
+fn a_scratch_folder_holding_one_clone_of_a_checkout_stands_in_its_upstream_and_hangs_from_it() {
+    let fixture = TempDir::new("engine-provenance-held-clone");
+    let (alice, _, scratchpad) = alice_and_a_session_in_app(&fixture);
+    let review = fixture.path(&format!("{scratchpad}/review"));
+    clone_into(&alice, &review.join("alice"));
+    let mut state = state_over(&fixture);
+
+    state.rediscover(None);
+
+    assert_eq!(
+        provenance_on(&state, &review),
+        Provenance {
+            group: upstream("github.com/me/alice"),
+            made_from: vec![alice],
+        },
+        "not app's, where its session started"
+    );
+}
+
+#[test]
+fn a_scratch_folder_holding_two_clones_or_a_repository_made_there_joins_its_sessions_checkout() {
+    let fixture = TempDir::new("engine-provenance-held-several");
+    let (alice, app, scratchpad) = alice_and_a_session_in_app(&fixture);
+    let compare = fixture.path(&format!("{scratchpad}/compare"));
+    for clone in ["alice-1", "alice-2"] {
+        clone_into(&alice, &compare.join(clone));
+    }
+    let trial = fixture.path(&format!("{scratchpad}/trial"));
+    fixture.repo(&format!("{scratchpad}/trial/repo"));
+    let mut state = state_over(&fixture);
+
+    state.rediscover(None);
+
+    let sessions = Provenance {
+        group: upstream("github.com/me/app"),
+        made_from: vec![app],
+    };
+    assert_eq!(
+        provenance_on(&state, &compare),
+        sessions,
+        "which clone its work came from is not known"
+    );
+    assert_eq!(
+        provenance_on(&state, &trial),
+        sessions,
+        "a repository made where it stands came from nowhere"
+    );
+}
+
+#[test]
+fn a_scratch_folder_whose_one_clone_cannot_be_read_joins_its_sessions_checkout_and_says_so() {
+    let fixture = TempDir::new("engine-provenance-held-unread");
+    let (alice, app, scratchpad) = alice_and_a_session_in_app(&fixture);
+    let sealed = fixture.path(&format!("{scratchpad}/sealed"));
+    clone_into(&alice, &sealed.join("alice"));
+    fixture.restrict(&sealed.join("alice/.git"), 0o000);
+    let mut state = state_over(&fixture);
+
+    state.rediscover(None);
+
+    assert_eq!(
+        provenance_on(&state, &sealed),
+        Provenance {
+            group: upstream("github.com/me/app"),
+            made_from: vec![app],
+        }
+    );
+    let problems = state.snapshot().problems.into_iter();
+    let unread: Vec<_> = problems
+        .map(|problem| (problem.path, problem.kind))
+        .collect();
+    assert_eq!(
+        unread,
+        [(sealed.join("alice/.git"), io::ErrorKind::PermissionDenied)],
+        "and says what it could not read"
+    );
+}

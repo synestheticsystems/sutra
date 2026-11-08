@@ -169,10 +169,11 @@ impl State {
     /// Track the scratch folders `found`, listed by the session folder holding them: one tracked
     /// already is taken from `previous` whole, with the build folders last found in it, while it is
     /// still the folder searched and Sutra's access to it is unchanged, and where it came from read
-    /// again, as it may have become a clone since; one new to the map, or another folder in the
-    /// place of one on it, is searched through, on discovery's threads, in the space its session's
-    /// folders on the map share, with what the map knows of the session, or in a new one. A folder
-    /// `is_worktree` names stays the worktree it is, as git's claim on it comes first.
+    /// again, as it may have become a clone since, or come to hold one; one new to the map, or
+    /// another folder in the place of one on it, is searched through, on discovery's threads, in
+    /// the space its session's folders on the map share, with what the map knows of the session,
+    /// or in a new one. A folder `is_worktree` names stays the worktree it is, as git's claim on it
+    /// comes first.
     fn track_scratch_folders(
         &self,
         found: Vec<(SessionFolder, Vec<ScratchFolder>)>,

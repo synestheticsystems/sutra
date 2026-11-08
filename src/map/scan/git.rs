@@ -5,7 +5,7 @@
 
 mod origin;
 
-pub use origin::{Lineage, lineage, lineage_of_folder};
+pub use origin::{Lineage, lineage, lineage_of_folder, lineage_of_scratch_folder};
 
 use std::fs;
 use std::io;

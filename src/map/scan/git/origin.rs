@@ -3,8 +3,9 @@
 //! the bare repository it was added to; a repository, from what its `origin` remote names. When
 //! that is a folder on this Mac, a clone of a local checkout, the folder is followed in turn, a
 //! worktree or a bare repository, until a remote names a host. A bare repository with no remote,
-//! as Cargo's git cache keeps one, came from what it last fetched. Only files are read: no git
-//! runs, and nothing is written.
+//! as Cargo's git cache keeps one, came from what it last fetched. A session's scratch folder with
+//! no git of its own goes by the one checkout directly inside it. Only files and folders are read:
+//! no git runs, and nothing is written.
 
 use std::collections::HashSet;
 use std::fs;
@@ -46,14 +47,42 @@ pub fn lineage(
     follow(repo.common_dir.clone(), made_from, may_follow)
 }
 
-/// The lineage of the folder `folder` when it is a checkout, which no discovery read as a
-/// worktree, as a session's scratch folder is: `None` for a folder with no `.git`, or one whose
-/// `.git` could not be read, which the failures then name.
+/// The lineage of the folder `folder` when it is a checkout no discovery read as a worktree, as a
+/// folder only a dev-runner environment names may be, or the one a scratch folder holds: `None` for
+/// a folder with no `.git`, or one whose `.git` could not be read, which the failures then name.
 pub fn lineage_of_folder(
     folder: &Path,
     may_follow: &(dyn Fn(&Path) -> bool + Sync),
 ) -> (Option<Lineage>, Vec<Failure>) {
+    lineage_of_checkout(folder, Repository::checked_out_at(folder), may_follow)
+}
+
+/// The lineage of `folder`, a session's scratch folder, by which the list groups its card. An agent
+/// often clones into a folder of its scratch, `scratchpad/<task>/<clone>`, so a scratch folder with
+/// no `.git` of its own takes the lineage of the single checkout directly inside it. It takes none
+/// from a repository made where it stands, with no origin, which came from nowhere, nor from one of
+/// several, as which one its work came from is not known. `None` too for a folder holding no
+/// checkout, or whose `.git` or whose checkout's `.git` could not be read, which the failures then
+/// name, or holding a folder that could not be looked into, as that one may be a checkout too
+/// (see `single_checkout_in`).
+pub fn lineage_of_scratch_folder(
+    folder: &Path,
+    may_follow: &(dyn Fn(&Path) -> bool + Sync),
+) -> (Option<Lineage>, Vec<Failure>) {
     match Repository::checked_out_at(folder) {
+        Ok(None) => lineage_of_single_checkout_in(folder, may_follow),
+        checked_out => lineage_of_checkout(folder, checked_out, may_follow),
+    }
+}
+
+/// The lineage of `folder` by what `Repository::checked_out_at` read of it, `checked_out`, as
+/// `lineage_of_folder` says.
+fn lineage_of_checkout(
+    folder: &Path,
+    checked_out: io::Result<Option<Repository>>,
+    may_follow: &(dyn Fn(&Path) -> bool + Sync),
+) -> (Option<Lineage>, Vec<Failure>) {
+    match checked_out {
         Ok(Some(repository)) => {
             let (lineage, failures) = follow(
                 repository.common_dir,
@@ -64,6 +93,65 @@ pub fn lineage_of_folder(
         }
         Ok(None) => (None, Vec::new()),
         Err(err) => (None, vec![(folder.join(".git"), err.kind())]),
+    }
+}
+
+/// The lineage of the single checkout directly inside `folder`, a scratch folder with no `.git` of
+/// its own, as `lineage_of_scratch_folder` says.
+fn lineage_of_single_checkout_in(
+    folder: &Path,
+    may_follow: &(dyn Fn(&Path) -> bool + Sync),
+) -> (Option<Lineage>, Vec<Failure>) {
+    let Some(checkout) = single_checkout_in(folder) else {
+        return (None, Vec::new());
+    };
+    let (lineage, failures) = lineage_of_folder(&checkout, may_follow);
+    // A repository made where it stands came from nowhere, so it says nothing of where the work in
+    // the folder holding it came from.
+    let came_from_somewhere = lineage.filter(|lineage| *lineage != Lineage::default());
+    (came_from_somewhere, failures)
+}
+
+/// The one folder directly inside `folder` that holds a `.git`, a directory or a linked worktree's
+/// file: `None` when none does, or several, or when `folder` or a folder in it could not be looked
+/// into, as that one may hold one too. A link is no folder `folder` holds.
+///
+/// What could not be looked into goes unnamed here, on purpose. The search of a scratch folder for
+/// its build folders lists every folder in it but those, names each it cannot, and lets the name go
+/// at the change that lets it in (see `scan::find_artifacts_throughout`). This is read again only
+/// when the folders of its session are listed again, so a name given here would outlast that
+/// change.
+fn single_checkout_in(folder: &Path) -> Option<PathBuf> {
+    let mut found = None;
+    for entry in fs::read_dir(folder).ok()? {
+        let entry = entry.ok()?;
+        if holds_git(&entry).ok()? {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(entry.path());
+        }
+    }
+    found
+}
+
+/// Whether `entry`, listed in a folder, is a folder holding a `.git`. `DirEntry::file_type` does not
+/// follow a link, so a link is no folder here. One removed or replaced since the listing holds none.
+fn holds_git(entry: &fs::DirEntry) -> io::Result<bool> {
+    if !entry.file_type()?.is_dir() {
+        return Ok(false);
+    }
+    match fs::symlink_metadata(entry.path().join(".git")) {
+        Ok(_) => Ok(true),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(err),
     }
 }
 

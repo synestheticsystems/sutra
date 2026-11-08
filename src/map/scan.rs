@@ -26,7 +26,9 @@ use rayon::prelude::*;
 pub use artifacts::{Searched, find_artifacts, find_artifacts_throughout};
 pub use boundary::{Boundary, MacOsAnswer, folder_access};
 pub use cargo_target::{CACHEDIR_TAG_FILE, is_cargo_tag, is_cargo_target};
-pub use git::{Lineage, git_activity, lineage, lineage_of_folder, repo_info};
+pub use git::{
+    Lineage, git_activity, lineage, lineage_of_folder, lineage_of_scratch_folder, repo_info,
+};
 pub use package::{own_package, packages_built};
 pub use scratch::{ScratchFolder, SessionFolder, scratch_folders, scratch_root, session_folders};
 

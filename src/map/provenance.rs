@@ -12,9 +12,10 @@ pub struct Provenance {
     /// The group its card stands in.
     pub group: GroupKey,
     /// The projects the engine tracks that it was made from, nearest first: the checkout a linked
-    /// worktree or a clone was made from, and what that one was made from in turn; or for a scratch
-    /// folder with no git, the checkout its session started in when that is in its group. Its card
-    /// hangs from the nearest of them listed beside it.
+    /// worktree or a clone was made from, and what that one was made from in turn, which for a
+    /// scratch folder holding one checkout are that checkout's; or for any other scratch folder with
+    /// no git, the checkout its session started in when that is in its group. Its card hangs from
+    /// the nearest of them listed beside it.
     pub made_from: Vec<PathBuf>,
 }
 
