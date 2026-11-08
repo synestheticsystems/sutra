@@ -2,15 +2,15 @@
 //! its dev-runner units, as its environment lists them (see `units`), then the ports its processes
 //! listen on (see `processes`), then those its Docker containers publish (see `containers`). Each
 //! port shows once, the first time: a port a unit shows is not shown again, as the unit says more.
-//! The look says the state, and a lozenge with a port opens it in the browser on a click. A group's
-//! folded line shows the lozenges of the cards it holds, so whatever serves in a card shows there
-//! too.
+//! The look says the state, and a lozenge with a port opens it in the browser on a click. A folded
+//! line shows the lozenges of the cards it holds, so whatever serves in a card shows there too, the
+//! same rule holding across them all: each port once, and a container on several of them once.
 
 pub(in crate::dashboard::contents) mod containers;
 mod processes;
 mod units;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::IpAddr;
 
 use super::CardContext;
@@ -49,28 +49,69 @@ pub enum LozengeLook {
     Still,
 }
 
-/// The lozenges of `project`: its units, then the ports its processes listen on, in port order,
-/// then its containers, by name, each port once.
+/// A lozenge, with the cards it stands on.
+pub(in crate::dashboard::contents) struct Placed<'p> {
+    pub(in crate::dashboard::contents) lozenge: Lozenge,
+    /// The card whose lozenge it is, or for a container bind-mounting several of the cards, each of
+    /// them, in their order.
+    pub(in crate::dashboard::contents) cards: Vec<&'p Project>,
+}
+
+/// The lozenges of `project`'s card (see `on_cards`).
 pub(in crate::dashboard::contents) fn lozenges(
     project: &Project,
     ctx: &CardContext,
 ) -> Vec<Lozenge> {
-    let mut shown = BTreeSet::new();
-    let mut lozenges = Vec::new();
-    if let Some(env) = &project.environment {
-        shown.extend(env.units.iter().filter_map(|unit| env.port_for(&unit.name)));
-        lozenges.extend(units::lozenges(env, ctx.notifier));
+    let placed = on_cards(&[project], ctx).into_iter();
+    placed.map(|placed| placed.lozenge).collect()
+}
+
+/// The lozenges of `cards`, a card alone or the cards a folded line holds, each card's in turn:
+/// its units, then the ports its processes listen on, in port order, then its containers, by name.
+/// Each port shows once, the first time, but a unit's shows wherever it is, as the unit says more
+/// of it than a process or a container does; and a container on several of the cards shows once,
+/// on the first of them.
+pub(in crate::dashboard::contents) fn on_cards<'p>(
+    cards: &[&'p Project],
+    ctx: &CardContext,
+) -> Vec<Placed<'p>> {
+    let environments = cards.iter().filter_map(|card| card.environment.as_ref());
+    let mut shown: BTreeSet<u16> = environments
+        .flat_map(|env| env.units.iter().filter_map(|unit| env.port_for(&unit.name)))
+        .collect();
+    let mut containers_shown = HashSet::new();
+    let mut placed = Vec::new();
+    for &card in cards {
+        let alone = |lozenge| Placed {
+            lozenge,
+            cards: vec![card],
+        };
+        if let Some(env) = &card.environment {
+            placed.extend(units::lozenges(env, ctx.notifier).into_iter().map(alone));
+        }
+        let listening = processes::lozenges(&card.listening, &shown, ctx.home);
+        placed.extend(listening.into_iter().map(alone));
+        shown.extend(card.listening.iter().flat_map(|process| process.ports()));
+        let on = containers::CardOf::Project(&card.path);
+        for container in &card.containers {
+            if !containers_shown.insert(container.id.as_str()) {
+                continue;
+            }
+            let holding = cards.iter().copied().filter(|other| {
+                let mut theirs = other.containers.iter();
+                theirs.any(|their| their.id == container.id)
+            });
+            let holding: Vec<&Project> = holding.collect();
+            let lozenges = containers::of(container, on, &shown, ctx.home).into_iter();
+            placed.extend(lozenges.map(|lozenge| Placed {
+                lozenge,
+                cards: holding.clone(),
+            }));
+            let tcp = container.ports.iter().filter(|port| !port.udp);
+            shown.extend(tcp.map(|port| port.port));
+        }
     }
-    lozenges.extend(processes::lozenges(&project.listening, &shown, ctx.home));
-    shown.extend(project.listening.iter().flat_map(|process| process.ports()));
-    let on = containers::CardOf::Project(&project.path);
-    lozenges.extend(containers::lozenges(
-        &project.containers,
-        on,
-        &shown,
-        ctx.home,
-    ));
-    lozenges
+    placed
 }
 
 /// What opens `port` in the browser.

@@ -96,6 +96,14 @@ extension Unit {
             notificationsOff: false, tooltip: "ready", link: "http://localhost:\(port)"
         )
     }
+
+    /// Its lozenge on a folded line, whose tip names first the folder it serves in, `folder`, as the
+    /// live core's does.
+    func lozenge(onALineOver folder: String) -> Lozenge {
+        var lozenge = self.lozenge
+        lozenge.tooltip = "\(name) in \(Words.tilde(folder))\n\(lozenge.tooltip)"
+        return lozenge
+    }
 }
 
 extension Session {

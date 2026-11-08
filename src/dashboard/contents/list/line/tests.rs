@@ -12,6 +12,7 @@ use crate::dashboard::listing::fixtures::{
 };
 use crate::dashboard::listing::{Arrangement, Folds, Listing};
 use crate::dashboard::{AgentLook, ListRow, Place};
+use crate::map::docker::Container;
 use crate::map::test_support::{cargo_target, measured, node_modules, project_at, usage};
 use crate::map::{AgentStatus, Measurement, Snapshot};
 use crate::notifications::Notifier;
@@ -266,6 +267,15 @@ fn a_folded_line_shows_two_of_the_servers_up_in_what_it_holds_and_counts_the_res
         "up or on its way, in the cards' order; not the stopped worker"
     );
     assert_eq!(
+        lozenges[0].tooltip, "web in /code/app\nready",
+        "the folder it serves in, which the folded line does not show, then its card's tip"
+    );
+    assert_eq!(
+        lozenges[1].link.as_deref(),
+        Some("http://localhost:8787"),
+        "a click opens the port, as on its card"
+    );
+    assert_eq!(
         *more_lozenges,
         Some(MoreLozenges {
             label: "+1".to_string(),
@@ -275,23 +285,40 @@ fn a_folded_line_shows_two_of_the_servers_up_in_what_it_holds_and_counts_the_res
 }
 
 #[test]
-fn a_folded_line_shows_the_ports_its_cards_processes_listen_on_as_their_cards_do() {
-    use crate::map::test_support::listening_in;
-    let main = app("app", &[], project("", 1));
-    let mut fix = app("app-fix", &["/code/app"], project("", 1));
-    fix.listening = vec![listening_in("/code/app-fix", "node", &[5177])];
-    let map = snapshot(vec![main, fix], vec![]);
+fn a_folded_line_shows_its_cards_processes_and_containers_and_a_container_on_two_of_them_once() {
+    use crate::map::test_support::{container_for, listening_in};
+    let both = || Container {
+        bound: vec!["/code/app".into(), "/code/app-2".into()],
+        ..container_for("/code/app", "app-db-1")
+    };
+    let mut first = app("app", &[], project("", 1));
+    first.listening = vec![listening_in("/code/app", "node", &[5177])];
+    first.containers = vec![both()];
+    let mut second = app("app-2", &[], project("", 1));
+    second.containers = vec![both()];
+    let map = snapshot(vec![first, second], vec![]);
     let [(line, _)] = &lines(rows_of(&map, &[]))[..] else {
         panic!("one line");
     };
-    let LineFold::Folded { lozenges, .. } = &line.fold else {
+    let LineFold::Folded {
+        lozenges,
+        more_lozenges,
+        ..
+    } = &line.fold
+    else {
         panic!("folded: {:?}", line.fold);
     };
     let shown: Vec<(&str, Option<&str>)> = lozenges
         .iter()
         .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
         .collect();
-    assert_eq!(shown, [("node", Some(":5177"))]);
+    assert_eq!(shown, [("node", Some(":5177")), ("postgres", None)]);
+    assert_eq!(*more_lozenges, None, "the container on both cards, once");
+    assert_eq!(
+        lozenges[1].tooltip,
+        "postgres in /code/app and /code/app-2\nContainer app-db-1, of postgres:17, publishing \
+         no TCP port\n/code/app"
+    );
 }
 
 #[test]

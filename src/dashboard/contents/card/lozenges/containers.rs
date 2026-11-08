@@ -36,7 +36,12 @@ pub(in crate::dashboard::contents) fn lozenges(
 
 /// The lozenges of `container`: one for each TCP port it publishes but those in `shown`, or one
 /// with no port when it publishes none.
-fn of(container: &Container, on: CardOf, shown: &BTreeSet<u16>, home: &Path) -> Vec<Lozenge> {
+pub(super) fn of(
+    container: &Container,
+    on: CardOf,
+    shown: &BTreeSet<u16>,
+    home: &Path,
+) -> Vec<Lozenge> {
     let folder = match on {
         CardOf::Project(project) => container.folder_in(project),
         CardOf::Docker => container.folders().next(),

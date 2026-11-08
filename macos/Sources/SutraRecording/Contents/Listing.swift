@@ -63,19 +63,19 @@ struct Arrangement: Equatable {
     }
 
     /// What a line folded shut shows of `cards` at `moment`: their robots, the throb while one
-    /// waits, and the first two of their servers, every unit of the invented work being up, with
-    /// the rest counted.
+    /// waits, and the first two of their servers, every unit of the invented work being up, each
+    /// naming its card's folder in its tip, with the rest counted.
     private func folded(_ cards: [Project], at moment: TimeInterval) -> LineFold {
-        let units = cards.flatMap(\.units)
+        let units = cards.flatMap { card in card.units.map { (unit: $0, folder: card.path) } }
         let rest = units.dropFirst(2)
         return .folded(
             sessions: cards.flatMap { $0.sessionBadges(at: moment) },
             subagents: cards.flatMap { $0.subagentBadges(at: moment) },
             waiting: cards.contains { $0.waiting(at: moment) },
-            lozenges: units.prefix(2).map(\.lozenge),
+            lozenges: units.prefix(2).map { $0.unit.lozenge(onALineOver: $0.folder) },
             moreLozenges: rest.isEmpty ? nil : MoreLozenges(
                 label: "+\(rest.count)",
-                tooltip: rest.map { "\($0.name) :\($0.port)" }.joined(separator: "\n")
+                tooltip: rest.map { "\($0.unit.name) :\($0.unit.port)" }.joined(separator: "\n")
             )
         )
     }

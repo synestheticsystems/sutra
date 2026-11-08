@@ -1,11 +1,16 @@
 //! A line's fold. Folded shut, the line stands alone and still says what the rows under it would of
 //! their agents and their servers: a robot for each agent in them stands at its end, every session
 //! before every subagent; it throbs while one of the sessions waits on the user; and the first
-//! servers up or on their way in them stand after its total, with a count of the rest.
+//! servers up or on their way in them stand after its total, with a count of the rest. Each of
+//! those lozenges opens its port on a click, as on its card, and names in its tip the folder it
+//! serves in, which the folded line no longer shows.
 
-use crate::dashboard::contents::card::{CardContext, agents, lozenges, subagents};
+use std::path::Path;
+
+use crate::dashboard::contents::card::lozenges::{self, Placed};
+use crate::dashboard::contents::card::{CardContext, agents, subagents};
 use crate::dashboard::listing::Elsewhere;
-use crate::dashboard::{AgentBadge, Lozenge, LozengeLook};
+use crate::dashboard::{AgentBadge, Lozenge, LozengeLook, format};
 use crate::map::Project;
 
 /// Whether a line's rows show under it.
@@ -22,8 +27,8 @@ pub enum LineFold {
         waiting: bool,
         /// After the line's total, the first two lozenges up or on their way in the cards it
         /// holds, dev-runner units, ports processes listen on and containers alike, in the cards'
-        /// order, as their cards draw them, so folding a line shut never hides that a server runs
-        /// under it.
+        /// order, so folding a line shut never hides that a server runs under it. Each opens its
+        /// port as on its card, and its tip names the folders it serves in first.
         lozenges: Vec<Lozenge>,
         /// The lozenges up or on their way past those two; `None` while there are none.
         more_lozenges: Option<MoreLozenges>,
@@ -77,13 +82,34 @@ pub(in crate::dashboard::contents) fn folded(
 /// enough to leave the line its name.
 const LOZENGES_ON_A_FOLDED_LINE: usize = 2;
 
-/// The lozenges up or on their way in `cards`, as their cards draw them, in the cards' order: the
-/// first `LOZENGES_ON_A_FOLDED_LINE` of them, and what counts the rest.
+/// The lozenges up or on their way in `cards`, in the cards' order (see `lozenges::on_cards`), as a
+/// folded line shows them (see `on_the_line`): the first `LOZENGES_ON_A_FOLDED_LINE` of them, and
+/// what counts the rest.
 fn live_lozenges(cards: &[&Project], ctx: &CardContext) -> (Vec<Lozenge>, Option<MoreLozenges>) {
-    let all = cards.iter().flat_map(|card| lozenges::lozenges(card, ctx));
-    let live =
-        all.filter(|lozenge| matches!(lozenge.look, LozengeLook::Up | LozengeLook::Starting));
-    first_few(live.collect())
+    let placed = lozenges::on_cards(cards, ctx).into_iter();
+    let live = placed
+        .filter(|placed| matches!(placed.lozenge.look, LozengeLook::Up | LozengeLook::Starting));
+    first_few(live.map(|placed| on_the_line(placed, ctx.home)).collect())
+}
+
+/// `placed` as a folded line shows it: its capsule alone, as the line has room for little beside
+/// its name, and a tip that names first what serves and the folders of the cards it stands on, as
+/// `web in ~/code/app` reads, then says what its card's would.
+fn on_the_line(placed: Placed, home: &Path) -> Lozenge {
+    let folders: Vec<String> = placed
+        .cards
+        .iter()
+        .map(|card| format::tilde(&card.path, home))
+        .collect();
+    let folders = format::all(&folders.iter().map(String::as_str).collect::<Vec<_>>());
+    let lozenge = placed.lozenge;
+    Lozenge {
+        tooltip: format!("{} in {folders}\n{}", lozenge.name, lozenge.tooltip),
+        beside: None,
+        muted: false,
+        notifications_off: false,
+        ..lozenge
+    }
 }
 
 /// The first `LOZENGES_ON_A_FOLDED_LINE` of `lozenges`, and what counts the rest.

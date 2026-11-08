@@ -31,9 +31,9 @@ struct LozengeView: View {
     }
 }
 
-/// A lozenge's capsule alone, as `(web :3000)` reads: its name and port in the ink of its state, on
-/// a capsule of that state's fill. What a folded line shows of the servers in the cards it holds.
-struct LozengeCapsule: View {
+/// A lozenge's capsule, as `(web :3000)` reads: its name and port in the ink of its state, on a
+/// capsule of that state's fill.
+private struct LozengeCapsule: View {
     let lozenge: Lozenge
 
     var body: some View {
