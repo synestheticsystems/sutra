@@ -27,8 +27,8 @@ const LONGEST_CHAIN: usize = 8;
 pub struct Lineage {
     /// The checkouts and repositories it was made from, nearest first: for a linked worktree, its
     /// repository's main worktree or bare repository; then the folder each repository's `origin`
-    /// names. Each is canonical, but one that is gone or Sutra may not read keeps the path git
-    /// recorded.
+    /// names. Each is canonical: one that is gone as far as the folders holding it still stand
+    /// (see `resolved_as_far_as_it_stands`), and one Sutra may not read keeps the path git recorded.
     pub made_from: Vec<PathBuf>,
     /// The remote the chain ends at, as `normalized_url` writes it; `None` for a chain that ends at
     /// a repository with no remote, or at a folder that is gone or kept out of.
@@ -232,16 +232,46 @@ fn follow(
                 made_from.extend(repository.main);
                 common_dir = repository.common_dir;
             }
+            // Gone, or no repository now, which is an ordinary answer.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let resolved = resolved_as_far_as_it_stands(&path).unwrap_or_else(|failure| {
+                    failures.push(failure);
+                    path
+                });
+                made_from.push(resolved);
+                break None;
+            }
             Err(err) => {
-                if err.kind() != io::ErrorKind::NotFound {
-                    failures.push((path.clone(), err.kind()));
-                }
+                failures.push((path.clone(), err.kind()));
                 made_from.push(path);
                 break None;
             }
         }
     };
     (Lineage { made_from, remote }, failures)
+}
+
+/// `path`, a folder a chain of origins reached that is gone or holds no repository now, written as
+/// `fs::canonicalize` would write it, as far as the disk still shows it: itself where it stands,
+/// and else the folder holding it so written, with its name after. Git records the path a clone
+/// was made from as the agent wrote it, often through `/tmp`, which links to `/private/tmp`, where
+/// the scratch root lies, and the folder may be cleaned away since.
+fn resolved_as_far_as_it_stands(path: &Path) -> Result<PathBuf, Failure> {
+    match fs::canonicalize(path) {
+        Ok(resolved) => Ok(resolved),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            match (path.parent(), path.file_name()) {
+                (Some(parent), Some(name)) => Ok(resolved_as_far_as_it_stands(parent)?.join(name)),
+                _ => Ok(path.to_path_buf()),
+            }
+        }
+        Err(err) => Err((path.to_path_buf(), err.kind())),
+    }
 }
 
 /// A repository a chain of origins reaches.

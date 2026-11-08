@@ -199,6 +199,44 @@ fn a_chain_that_reaches_a_folder_gone_ends_there_and_that_is_no_failure() {
 }
 
 #[test]
+fn a_chain_that_reaches_a_folder_gone_names_it_as_the_folders_still_standing_resolve_it() {
+    let fixture = TempDir::new("origin-gone-through-a-link");
+    // As `/tmp` links to `/private/tmp`, where Claude Code's scratch root lies.
+    let scratch = fixture.dir("private/tmp/claude-501");
+    std::os::unix::fs::symlink(fixture.path("private/tmp"), fixture.path("tmp")).unwrap();
+    let made_there = fixture.repo("private/tmp/claude-501/s/git-check");
+    let copy = fixture.path("private/tmp/claude-501/s/copy");
+    let through_the_link = fixture.path("tmp/claude-501/s/git-check");
+    git(
+        fixture.root(),
+        &[
+            "clone",
+            "-q",
+            through_the_link.to_str().unwrap(),
+            copy.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(&made_there).unwrap();
+
+    assert_eq!(
+        lineage_at(&copy),
+        (
+            Lineage {
+                made_from: vec![made_there],
+                remote: None,
+            },
+            vec![]
+        ),
+        "as the scratch root reads it, not as git recorded it"
+    );
+    assert_eq!(
+        lineage_of_scratch_folder(&copy, &scratch, &anywhere),
+        (None, vec![]),
+        "so a copy of a repository made in the scratch, gone since, is the session's own work"
+    );
+}
+
+#[test]
 fn a_chain_stops_where_sutra_may_not_follow_without_reading_there() {
     let fixture = TempDir::new("origin-kept-out");
     let private = cloned_from_host(&fixture, "Desktop/app", "https://github.com/me/app");
