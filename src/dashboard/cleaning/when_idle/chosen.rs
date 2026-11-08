@@ -10,7 +10,7 @@ use super::DAY;
 use crate::dashboard::LineKey;
 use crate::dashboard::cleaning::words;
 use crate::dashboard::listing::{self, ByLine};
-use crate::map::{GroupKey, Snapshot};
+use crate::map::{GroupKey, Project, Snapshot};
 
 /// How many days the user can let a group's build folders sit idle before Sutra cleans them.
 const DAYS_CHOICES: [u32; 4] = [1, 3, 7, 14];
@@ -52,10 +52,30 @@ impl CleanWhenIdle {
     }
 
     /// How long the build folders of each group on `map` the user chose a time for may sit idle.
-    pub(super) fn times_on(&self, map: &Snapshot) -> HashMap<GroupKey, Duration> {
-        listing::groups(map)
-            .filter_map(|group| Some((group.clone(), DAY * self.days_for(group)?)))
-            .collect()
+    pub(super) fn times_on(&self, map: &Snapshot) -> IdleTimes {
+        let chosen = listing::groups(map)
+            .filter_map(|group| Some((group.clone(), DAY * self.days_for(group)?)));
+        IdleTimes(chosen.collect())
+    }
+}
+
+/// How long the build folders of each group on a map may sit idle before Sutra cleans them, for
+/// the groups the user chose a time for, as they stood when Sutra looked. A project in any other
+/// group never goes for being idle, nor does a folder it shares: "Never" on a group's line is a
+/// promise that no other group's time breaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::dashboard) struct IdleTimes(HashMap<GroupKey, Duration>);
+
+impl IdleTimes {
+    /// How long `project` must have been quiet for its build folders to go, by its group's time;
+    /// `None` for never.
+    pub(in crate::dashboard) fn of(&self, project: &Project) -> Option<Duration> {
+        self.0.get(&project.provenance.group).copied()
+    }
+
+    /// Whether no group on the map has a time.
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -85,8 +105,8 @@ pub(in crate::dashboard) fn when_idle_mark(days: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::Provenance;
     use crate::map::test_support::{project_at, snapshot_of};
-    use crate::map::{Project, Provenance};
 
     fn upstream(name: &str) -> GroupKey {
         GroupKey::Upstream(format!("github.com/me/{name}"))
@@ -119,7 +139,10 @@ mod tests {
         assert!(chosen.choose(&GroupKey::Other, Some(1), &map));
         assert_eq!(
             chosen.times_on(&map),
-            HashMap::from([(upstream("app"), DAY * 7), (GroupKey::Other, DAY)])
+            IdleTimes(HashMap::from([
+                (upstream("app"), DAY * 7),
+                (GroupKey::Other, DAY)
+            ]))
         );
 
         assert!(chosen.choose(&upstream("app"), None, &map));

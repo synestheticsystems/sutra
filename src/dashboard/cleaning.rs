@@ -209,7 +209,9 @@ impl Cleaning {
                 project,
                 prepared,
             } => self.clean_unasked(clicked, project, prepared, map, now, home),
-            Report::WhenIdlePrepared(found) => self.when_idle_prepared(found, map, now, home),
+            Report::WhenIdlePrepared { times, found } => {
+                self.when_idle_prepared(times, found, map, now, home);
+            }
             Report::Cleaned { target, outcome } => self.finished(&target, outcome, map, now, home),
         }
     }

@@ -2,7 +2,8 @@
 //! from the group's line (see `chosen`). Every hour, and soon after a choice, the build folders of
 //! each idle project in such a group are cleaned with no question asked, as the user's choice is
 //! their say so: idle as the toolbar's offer tells it (see `clean::prepare_idle`), only for the
-//! group's own time, and never where the clean would take the builds of a project quiet for less.
+//! group's own time, and never where the clean would take the builds of a project not idle by its
+//! own group's time, so that a group left at Never keeps every folder it shares with another.
 //! A group may hold busy and idle checkouts at once, and only the idle ones' folders go. Each
 //! group's cleans end in one banner saying what went. Keeping free space (see `auto`) stays the
 //! rule for a disk running short, beside this one.
@@ -11,7 +12,9 @@ mod chosen;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::dashboard) use chosen::{CleanWhenIdle, when_idle_choices, when_idle_mark};
+pub(in crate::dashboard) use chosen::{
+    CleanWhenIdle, IdleTimes, when_idle_choices, when_idle_mark,
+};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -22,7 +25,7 @@ use super::queue::Waiting;
 use super::{By, Cleaning, Report, words};
 use crate::dashboard::listing;
 use crate::map::clean::{self, CargoEnv, CleanError, Cleaned, IdleCleans, PrepareError, Why};
-use crate::map::{GroupKey, Project, Snapshot};
+use crate::map::{GroupKey, Snapshot};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -64,8 +67,8 @@ struct Round {
 impl Cleaning {
     /// The clock ticked: if the user chose a time for any group, it is time to look, and nothing
     /// is being cleaned, work out on a thread of its own the clean of each build folder of those
-    /// groups idle that long, as `map` shows them, but for those a clean or a question already
-    /// has, and those passed over.
+    /// groups idle that long, as `map` shows them, every project sharing it idle by its own
+    /// group's time, but for those a clean or a question already has, and those passed over.
     pub(in crate::dashboard) fn clean_when_idle(
         &mut self,
         map: &Arc<Snapshot>,
@@ -80,7 +83,7 @@ impl Cleaning {
         }
         self.when_idle.next_check = Some(at + CHECK_EVERY);
         self.when_idle.passed_over.retain(|_, until| *until > now);
-        let times = chosen.times_on(map);
+        let times = Arc::new(chosen.times_on(map));
         if times.is_empty() {
             return;
         }
@@ -88,13 +91,11 @@ impl Cleaning {
         left_alone.extend(self.when_idle.passed_over.keys().cloned());
         let map = Arc::clone(map);
         let env = CargoEnv::of_this_process(home);
+        let looked_with = Arc::clone(&times);
         let looking = self.threads.run(
             "sutra-clean-prepare",
-            move || {
-                let time_of = |project: &Project| times.get(&project.provenance.group).copied();
-                clean::prepare_idle(&map, now, time_of, &left_alone, &env)
-            },
-            Report::WhenIdlePrepared,
+            move || clean::prepare_idle(&map, now, |its| looked_with.of(its), &left_alone, &env),
+            move |found| Report::WhenIdlePrepared { times, found },
         );
         match looking {
             Ok(()) => self.when_idle.preparing = true,
@@ -102,15 +103,17 @@ impl Cleaning {
         }
     }
 
-    /// The cleans a look found have been worked out, or their thread ended with no word (`None`).
-    /// Each joins its group's round and is queued, no question asked, unless a clean or a
-    /// question took its folder meanwhile; one reaching into a folder a question asks about waits
-    /// for the answer at its turn (see `may_start`). Worked out before the user changed a group's
-    /// time, they all wait for the next look, at the next tick. What stopped a clean being tried
-    /// is told, and its folder passed over; what Sutra will not clean, or a build or a busy sharer
-    /// uses, waits for the next look. `map` is the map now, `None` with no engine to keep it.
+    /// The cleans a look found with the groups' `times` have been worked out, or their thread
+    /// ended with no word (`None`). Each joins its group's round and is queued, no question asked,
+    /// unless a clean or a question took its folder meanwhile; one reaching into a folder a
+    /// question asks about waits for the answer at its turn (see `may_start`). Worked out before
+    /// the user changed a group's time, they all wait for the next look, at the next tick. What
+    /// stopped a clean being tried is told, and its folder passed over; what Sutra will not clean,
+    /// or a build or a busy sharer uses, waits for the next look. `map` is the map now, `None`
+    /// with no engine to keep it.
     pub(super) fn when_idle_prepared(
         &mut self,
+        times: Arc<IdleTimes>,
         found: Option<IdleCleans>,
         map: Option<&Snapshot>,
         now: SystemTime,
@@ -162,22 +165,23 @@ impl Cleaning {
             let by = By::WhenIdle {
                 project: clean.project_path,
                 group: group.clone(),
-                quiet_at_least: clean.quiet_at_least,
+                times: Arc::clone(&times),
             };
             self.queue(clean.clicked, clean.prepared, by);
         }
         self.start_next(Some(map), now, home);
     }
 
-    /// The user chose another time for `group`, or none: its cleans still waiting were worked out
-    /// for the old one, so they go back, while those deleting finish, and what a look is working
-    /// out is dropped when it comes back. The groups are looked at again at the next tick.
-    pub(in crate::dashboard) fn when_idle_changed(&mut self, group: &GroupKey) {
-        let of_group = |waiting: &Waiting| matches!(&waiting.by, By::WhenIdle { group: its, .. } if its == group);
+    /// The user chose another time for a group, or none: the cleans still waiting were worked out
+    /// with the old times, by which a project sharing a folder of another group may be idle, so
+    /// they all go back, while those deleting finish, and what a look is working out is dropped
+    /// when it comes back. The groups are looked at again at the next tick.
+    pub(in crate::dashboard) fn when_idle_changed(&mut self) {
+        let when_idle = |waiting: &Waiting| matches!(waiting.by, By::WhenIdle { .. });
         let (dropped, waiting): (VecDeque<Waiting>, VecDeque<Waiting>) =
             std::mem::take(&mut self.waiting)
                 .into_iter()
-                .partition(of_group);
+                .partition(when_idle);
         self.waiting = waiting;
         for clean in &dropped {
             self.show_sizes_again(clean.prepared.plan().folders());

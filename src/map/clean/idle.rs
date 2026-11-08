@@ -59,6 +59,16 @@ fn is_idle(project: &Project, now: SystemTime, at_least: Duration) -> bool {
     !in_use(project) && quiet_for(project, now).is_some_and(|quiet| quiet >= at_least)
 }
 
+/// Whether `project` is idle, quiet as long as `quiet_at_least` says of it; never where it says
+/// nothing.
+fn is_idle_by(
+    project: &Project,
+    now: SystemTime,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
+) -> bool {
+    quiet_at_least(project).is_some_and(|at_least| is_idle(project, now, at_least))
+}
+
 /// Whether `map` can say what is at work. It cannot while something that tells of agents,
 /// environments or activity goes unread, and then an empty project proves nothing.
 pub fn can_tell_what_is_at_work(map: &Snapshot) -> bool {
@@ -119,40 +129,43 @@ fn idle_folders_by(
 
 /// The name of a project that shares `prepared`'s folders and is not idle, whose builds must not go
 /// with the clean of an idle one's folder: one that shared them as the clean was worked out for the
-/// project at `project`, or one `map` shows building in them now.
+/// project at `project`, or one `map` shows building in them now. Each is idle by its own time, as
+/// `quiet_at_least` says of it, and one it says nothing of never is: a project whose builds may not
+/// go for being idle keeps every folder it shares.
 pub fn is_blocked_by_a_sharer(
     prepared: &Prepared,
     project: &Path,
     map: &Snapshot,
     now: SystemTime,
-    at_least: Duration,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
 ) -> Option<String> {
     let found_then = (prepared.sharing.project_folders.iter())
         .filter_map(|folder| map.projects.iter().find(|sharer| sharer.path == *folder));
     let building_now = building_in(prepared.plan(), project, map);
     let busy = found_then
         .chain(building_now)
-        .find(|sharer| !is_idle(sharer, now, at_least))?;
+        .find(|sharer| !is_idle_by(sharer, now, &quiet_at_least))?;
     Some(busy.name.clone())
 }
 
 /// Whether `prepared`, worked out for a build folder of the idle project at `project`, may still go
-/// as `map` shows things now. Its turn can come many minutes after it was worked out, and by then
+/// as `map` shows things now, the project and each sharer idle by its own time, as
+/// `quiet_at_least` says of it. Its turn can come many minutes after it was worked out, and by then
 /// an agent or an environment may have started there, or in a project sharing its folders.
 pub fn is_still_idle(
     prepared: &Prepared,
     project: &Path,
     map: &Snapshot,
     now: SystemTime,
-    at_least: Duration,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
 ) -> bool {
     can_tell_what_is_at_work(map)
         && map
             .projects
             .iter()
             .find(|candidate| candidate.path == project)
-            .is_some_and(|project| is_idle(project, now, at_least))
-        && is_blocked_by_a_sharer(prepared, project, map, now, at_least).is_none()
+            .is_some_and(|project| is_idle_by(project, now, &quiet_at_least))
+        && is_blocked_by_a_sharer(prepared, project, map, now, &quiet_at_least).is_none()
 }
 
 /// One idle folder's clean, ready to ask about.
@@ -162,8 +175,7 @@ pub struct IdleClean {
     pub clicked: PathBuf,
     pub project_name: String,
     pub project_path: PathBuf,
-    /// How long the project had to have been quiet, as it must still have been when the clean's
-    /// turn comes (see `is_still_idle`).
+    /// How long the project had to have been quiet, which the banner telling what went says.
     pub quiet_at_least: Duration,
     pub prepared: Prepared,
 }
@@ -194,9 +206,9 @@ pub struct IdleCleans {
 
 /// Work out the clean of every idle folder, each project idle once quiet for as long as
 /// `quiet_at_least` says of it, and left out where it says nothing, but for the folders in
-/// `left_alone`, such as those already being cleaned. A sharer of a folder must have been quiet as
-/// long as the folder's own project. What every project's build deletes is read only once some
-/// folder is idle.
+/// `left_alone`, such as those already being cleaned. A project sharing a folder must be idle by
+/// its own time too (see `is_blocked_by_a_sharer`). What every project's build deletes is read only
+/// once some folder is idle.
 pub fn prepare_idle(
     map: &Snapshot,
     now: SystemTime,
@@ -205,7 +217,7 @@ pub fn prepare_idle(
     env: &CargoEnv,
 ) -> IdleCleans {
     let mut found = IdleCleans::default();
-    let idle: Vec<IdleFolder> = idle_folders_by(map, now, quiet_at_least)
+    let idle: Vec<IdleFolder> = idle_folders_by(map, now, &quiet_at_least)
         .into_iter()
         .filter(|folder| !left_alone.contains(&folder.dir.path))
         .collect();
@@ -215,7 +227,6 @@ pub fn prepare_idle(
     let builds = Builds::of(map, env);
     for folder in idle {
         let project = folder.project;
-        let at_least = folder.quiet_at_least;
         let left_out = |why| LeftOut {
             project_name: project.name.clone(),
             folder: folder.dir.path.clone(),
@@ -224,13 +235,13 @@ pub fn prepare_idle(
         match prepare_among(&folder.dir.path, &project.path, map, env, &builds) {
             Err(err) => found.left_out.push(left_out(Why::Refused(err))),
             Ok(prepared) => {
-                match is_blocked_by_a_sharer(&prepared, &project.path, map, now, at_least) {
+                match is_blocked_by_a_sharer(&prepared, &project.path, map, now, &quiet_at_least) {
                     Some(sharer) => found.left_out.push(left_out(Why::SharedWith(sharer))),
                     None => found.cleans.push(IdleClean {
                         clicked: folder.dir.path.clone(),
                         project_name: project.name.clone(),
                         project_path: project.path.clone(),
-                        quiet_at_least: at_least,
+                        quiet_at_least: folder.quiet_at_least,
                         prepared,
                     }),
                 }
@@ -447,7 +458,7 @@ mod tests {
                 &walked.path,
                 &snapshot_of(vec![project.clone()]),
                 now(),
-                THREE_DAYS,
+                |_| Some(THREE_DAYS),
             )
         };
 
@@ -585,36 +596,56 @@ mod tests {
         assert!(found.left_out.is_empty(), "{:?}", found.left_out);
     }
 
+    /// How long `app` and `other` must each have been quiet: `app` for `app_days`, `other` for
+    /// `other_days`, or never with `None`.
+    fn times(app_days: u64, other_days: Option<u64>) -> impl Fn(&Project) -> Option<Duration> {
+        move |project| {
+            let days = if project.name == "app" {
+                Some(app_days)
+            } else {
+                other_days
+            };
+            days.map(|days| Duration::from_secs(days * DAY))
+        }
+    }
+
     #[test]
-    fn a_sharer_must_have_been_quiet_as_long_as_the_folders_own_project() {
+    fn a_sharer_is_idle_by_its_own_time_whether_shorter_or_longer_than_the_folders_and_never_by_none()
+     {
         let fixture = TempDir::new("idle-shared-own-time");
         let (app, other) = app_and_a_package_building_in_it(&fixture);
         let quiet_two_days = Project {
             last_activity: Some(at((1_000 - 2) * DAY)),
             ..other
         };
-        let map = snapshot_of(vec![app, quiet_two_days]);
-        // The sharer's own time plays no part: `other` is given none.
-        let app_after = |days: u64| {
-            move |project: &Project| {
-                (project.name == "app").then_some(Duration::from_secs(days * DAY))
-            }
-        };
+        let map = snapshot_of(vec![app.clone(), quiet_two_days]);
         let env = fixture.cargo_env();
+        let prepared = |times| prepare_idle(&map, now(), times, &HashSet::new(), &env);
 
-        let after_a_day = prepare_idle(&map, now(), app_after(1), &HashSet::new(), &env);
-        assert_eq!(cleaned_folders(&after_a_day), [fixture.path("app/target")]);
+        // `app`, quiet 9 days, goes after a week; `other`, quiet 2 days, after one: idle by its own.
+        let shorter = prepared(times(7, Some(1)));
+        assert_eq!(cleaned_folders(&shorter), [fixture.path("app/target")]);
+        let clean = &shorter.cleans[0].prepared;
+        let still = |times| is_still_idle(clean, &app.path, &map, now(), times);
+        assert!(still(times(7, Some(1))), "and still at its turn");
 
-        let after_three_days = prepare_idle(&map, now(), app_after(3), &HashSet::new(), &env);
-        assert!(after_three_days.cleans.is_empty());
-        assert_eq!(
-            after_three_days.left_out,
-            [LeftOut {
-                project_name: "app".to_string(),
-                folder: fixture.path("app/target"),
-                why: Why::SharedWith("other".to_string()),
-            }]
-        );
+        // `app` goes after a day, but `other` has not been quiet its own 3 days, or never goes.
+        for other_days in [Some(3), None] {
+            let kept = prepared(times(1, other_days));
+            assert!(kept.cleans.is_empty(), "{other_days:?}");
+            assert_eq!(
+                kept.left_out,
+                [LeftOut {
+                    project_name: "app".to_string(),
+                    folder: fixture.path("app/target"),
+                    why: Why::SharedWith("other".to_string()),
+                }]
+            );
+            assert!(
+                !still(times(1, other_days)),
+                "nor at its turn: {other_days:?}"
+            );
+        }
     }
 
     #[test]
@@ -733,7 +764,7 @@ mod tests {
         );
         let prepared = &found.cleans[0].prepared;
         let still_idle =
-            |map: &Snapshot| is_still_idle(prepared, &app.path, map, now(), THREE_DAYS);
+            |map: &Snapshot| is_still_idle(prepared, &app.path, map, now(), |_| Some(THREE_DAYS));
         let at_work = |project: &Project| Project {
             agents: vec![agent_session("/code/x", AgentStatus::Busy)],
             ..project.clone()
@@ -912,7 +943,7 @@ mod tests {
                 &app.path,
                 &snapshot_of(vec![app.clone(), live.clone()]),
                 now(),
-                THREE_DAYS
+                |_| Some(THREE_DAYS)
             ),
             "a session running there again by its turn keeps it"
         );
@@ -938,7 +969,7 @@ mod tests {
             &app.path,
             &before,
             now(),
-            THREE_DAYS
+            |_| Some(THREE_DAYS)
         ));
         let now_on_map = snapshot_of(vec![app.clone(), live]);
         assert!(!is_still_idle(
@@ -946,7 +977,7 @@ mod tests {
             &app.path,
             &now_on_map,
             now(),
-            THREE_DAYS
+            |_| Some(THREE_DAYS)
         ));
     }
 }

@@ -442,7 +442,7 @@ impl State {
         };
         if self.settings.clean_when_idle.choose(group, days, &map) {
             self.save_settings();
-            self.cleaning.when_idle_changed(group);
+            self.cleaning.when_idle_changed();
         }
     }
 

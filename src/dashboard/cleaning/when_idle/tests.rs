@@ -14,7 +14,7 @@ use crate::map::clean::{LeftOut, Progress};
 use crate::map::test_support::{
     TempDir, agent_session, at, cargo_target, measured, project_at, snapshot_of,
 };
-use crate::map::{AgentStatus, Provenance};
+use crate::map::{AgentStatus, Project, Provenance};
 
 const DAY_SECS: u64 = 24 * 60 * 60;
 const LARGE: u64 = 100 * clean::WORTH_CLEANING_BYTES;
@@ -113,8 +113,8 @@ fn the_groups_are_looked_at_once_a_time_is_chosen_then_hourly_and_soon_after_a_c
         cleaning.clean_when_idle(&map, chosen, at, now(), home);
         let looked = cleaning.when_idle.preparing;
         if looked {
-            let found = Some(IdleCleans::default());
-            cleaning.when_idle_prepared(found, Some(&map), now(), home);
+            let (times, found) = (Arc::new(chosen.times_on(&map)), IdleCleans::default());
+            cleaning.when_idle_prepared(times, Some(found), Some(&map), now(), home);
         }
         looked
     };
@@ -127,7 +127,7 @@ fn the_groups_are_looked_at_once_a_time_is_chosen_then_hourly_and_soon_after_a_c
     assert!(look(&mut cleaning, &chosen, start));
     assert!(!look(&mut cleaning, &chosen, start + CHECK_EVERY / 2));
     assert!(look(&mut cleaning, &chosen, start + CHECK_EVERY));
-    cleaning.when_idle_changed(&upstream("app"));
+    cleaning.when_idle_changed();
     let soon = start + CHECK_EVERY + Duration::from_secs(2);
     assert!(look(&mut cleaning, &chosen, soon));
 }
@@ -159,12 +159,13 @@ fn what_a_look_found_before_the_user_changed_a_groups_time_is_dropped_and_looked
     let mut cleaning = cleaning();
     cleaning.clean_when_idle(&map, &chosen, Instant::now(), now(), fixture.root());
 
-    cleaning.when_idle_changed(&upstream("app"));
+    cleaning.when_idle_changed();
     let found = IdleCleans {
         cleans: vec![idle_clean(&[&target])],
         left_out: Vec::new(),
     };
-    cleaning.when_idle_prepared(Some(found), Some(&map), now(), fixture.root());
+    let times = Arc::new(chosen.times_on(&map));
+    cleaning.when_idle_prepared(times, Some(found), Some(&map), now(), fixture.root());
 
     assert!(cleaning.waiting.is_empty() && cleaning.running.is_empty());
     assert!(!cleaning.is_busy());
@@ -172,30 +173,39 @@ fn what_a_look_found_before_the_user_changed_a_groups_time_is_dropped_and_looked
     assert!(fixture.path("app/target/debug/deps/lib").exists());
 }
 
-/// `WhenIdle` for the clean of the project at `project`, in `group`, once idle for 3 days.
-fn when_idle(project: &Path, group: GroupKey) -> By {
+/// `WhenIdle` for the clean of the project at `project`, in `group`, found with `times`.
+fn when_idle(project: &Path, group: GroupKey, times: &Arc<IdleTimes>) -> By {
     By::WhenIdle {
         project: project.to_path_buf(),
         group,
-        quiet_at_least: DAY * 3,
+        times: Arc::clone(times),
     }
 }
 
 #[test]
-fn the_cleans_waiting_go_back_when_the_user_changes_their_groups_time() {
+fn the_cleans_waiting_go_back_when_the_user_changes_any_groups_time_and_the_users_own_stay() {
     let fixture = TempDir::new("when-idle-changed");
-    let app = fixture.dir("app/target");
-    let site = fixture.dir("site/target");
+    let [app, site, card] =
+        ["app", "site", "card"].map(|name| fixture.dir(&format!("{name}/target")));
+    let map = snapshot_of(vec![
+        in_group(upstream("app"), project_at(fixture.path("app"))),
+        in_group(upstream("site"), project_at(fixture.path("site"))),
+    ]);
+    let mut chosen = chosen(&upstream("app"), 3, &map);
+    chosen.choose(&upstream("site"), Some(7), &map);
+    let times = Arc::new(chosen.times_on(&map));
     let mut cleaning = cleaning();
-    let by_app = when_idle(&fixture.path("app"), upstream("app"));
+    let by_app = when_idle(&fixture.path("app"), upstream("app"), &times);
     cleaning.queue(app.clone(), prepared_at(&app), by_app);
-    let by_site = when_idle(&fixture.path("site"), upstream("site"));
+    let by_site = when_idle(&fixture.path("site"), upstream("site"), &times);
     cleaning.queue(site.clone(), prepared_at(&site), by_site);
+    cleaning.queue(card.clone(), prepared_at(&card), By::User);
 
-    cleaning.when_idle_changed(&upstream("app"));
+    // A sharer of app's folders may stand in site's group: every clean worked out goes back.
+    cleaning.when_idle_changed();
 
     let waiting: Vec<&PathBuf> = cleaning.waiting.iter().map(|w| &w.clicked).collect();
-    assert_eq!(waiting, [&site]);
+    assert_eq!(waiting, [&card]);
     let app_card = cargo_target(app, measured(LARGE));
     assert_eq!(
         cleaning.state_of(&app_card),
@@ -205,27 +215,44 @@ fn the_cleans_waiting_go_back_when_the_user_changes_their_groups_time() {
 }
 
 #[test]
-fn a_clean_goes_at_its_turn_only_while_its_project_is_still_idle_as_long_as_its_group_says() {
+fn a_clean_goes_at_its_turn_only_while_its_project_and_every_sharer_are_idle_by_their_own_time() {
     let fixture = TempDir::new("when-idle-turn");
     let target = fixture.dir("app/target");
     let project = fixture.path("app");
-    let quiet_for = |days: u64| {
-        snapshot_of(vec![Project {
-            last_activity: Some(at((1_000 - days) * DAY_SECS)),
-            artifacts: vec![cargo_target(target.clone(), measured(LARGE))],
-            ..in_group(upstream("app"), project_at(project.clone()))
-        }])
+    let sharer = fixture.path("lib");
+    let quiet = |path: &Path, group: GroupKey, days: u64| Project {
+        last_activity: Some(at((1_000 - days) * DAY_SECS)),
+        ..in_group(group, project_at(path))
     };
-    let started = |map: &Snapshot| {
+    // `app`, quiet for `days`, goes after 3 days; `lib`, quiet 9 days, builds in its folder too,
+    // and goes after `lib_days`, or never.
+    let started = |days: u64, lib_days: Option<u32>| {
+        let map = snapshot_of(vec![
+            Project {
+                artifacts: vec![cargo_target(target.clone(), measured(LARGE))],
+                ..quiet(&project, upstream("app"), days)
+            },
+            quiet(&sharer, upstream("lib"), 9),
+        ]);
+        let mut chosen = chosen(&upstream("app"), 3, &map);
+        chosen.choose(&upstream("lib"), lib_days, &map);
+        let times = Arc::new(chosen.times_on(&map));
+        let mut shared = prepared_at(&target);
+        shared.sharing.project_folders = vec![sharer.clone()];
         let mut cleaning = cleaning();
-        let by = when_idle(&project, upstream("app"));
-        cleaning.queue(target.clone(), prepared_at(&target), by);
-        cleaning.start_next(Some(map), now(), fixture.root());
+        let by = when_idle(&project, upstream("app"), &times);
+        cleaning.queue(target.clone(), shared, by);
+        cleaning.start_next(Some(&map), now(), fixture.root());
         !cleaning.running.is_empty()
     };
 
-    assert!(!started(&quiet_for(1)), "active since the look");
-    assert!(started(&quiet_for(9)));
+    assert!(!started(1, Some(7)), "active since the look");
+    assert!(started(9, Some(7)), "lib quiet longer than its own week");
+    assert!(!started(9, Some(14)), "lib not quiet its own two weeks");
+    assert!(
+        !started(9, None),
+        "lib's group is never cleaned for being idle"
+    );
 }
 
 #[test]
@@ -249,7 +276,8 @@ fn a_folder_the_user_cleans_or_a_question_asks_about_meanwhile_is_left_to_them()
         cleans: vec![idle_clean(&[asked_target]), idle_clean(&[clicked_target])],
         left_out: Vec::new(),
     };
-    cleaning.when_idle_prepared(Some(found), Some(&map), now(), home);
+    let times = Arc::new(chosen(&upstream("app"), 3, &map).times_on(&map));
+    cleaning.when_idle_prepared(times, Some(found), Some(&map), now(), home);
 
     let wanted: Vec<&By> = (cleaning.waiting.iter().map(|waiting| &waiting.by))
         .chain(cleaning.running.iter().map(|running| &running.by))
@@ -286,11 +314,13 @@ fn a_clean_that_failed_is_told_and_its_folder_passed_over_for_a_day_and_a_busy_b
             left_out(&building, build_running),
         ],
     };
-    cleaning.when_idle_prepared(Some(found), Some(&map), now(), home);
+    let chosen = chosen(&upstream("app"), 3, &map);
+    let times = Arc::new(chosen.times_on(&map));
+    cleaning.when_idle_prepared(Arc::clone(&times), Some(found), Some(&map), now(), home);
     cleaning.running.push(Running {
         clicked: deleting.clone(),
         folders: vec![deleting.clone()],
-        by: when_idle(&fixture.path("old"), upstream("app")),
+        by: when_idle(&fixture.path("old"), upstream("app"), &times),
         progress: Arc::new(Progress::default()),
     });
     let failed = CleanOutcome::Failed(CleanError::Io {
@@ -298,7 +328,7 @@ fn a_clean_that_failed_is_told_and_its_folder_passed_over_for_a_day_and_a_busy_b
         kind: io::ErrorKind::PermissionDenied,
     });
     cleaning.finished(&deleting, failed, Some(&map), now(), home);
-    cleaning.when_idle_prepared(None, Some(&map), now(), home);
+    cleaning.when_idle_prepared(times, None, Some(&map), now(), home);
 
     let titles: Vec<String> = cleaning.take_banners().into_iter().map(|b| b.0).collect();
     assert_eq!(titles.len(), 3, "{titles:?}");
@@ -310,7 +340,6 @@ fn a_clean_that_failed_is_told_and_its_folder_passed_over_for_a_day_and_a_busy_b
     assert!(passed_over(&target) && passed_over(&deleting));
     assert!(!passed_over(&building), "a build at work passes");
 
-    let chosen = chosen(&upstream("app"), 3, &map);
     let a_day_on = now() + PASS_OVER_FOR;
     cleaning.clean_when_idle(&map, &chosen, Instant::now(), a_day_on, home);
     assert!(

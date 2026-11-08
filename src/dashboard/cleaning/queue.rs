@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use super::when_idle::IdleTimes;
 use super::{CleanOutcome, Cleaning, OFFER_QUIET_AT_LEAST, Report, Stage, auto, overlap, words};
 use crate::dashboard::state::Alert;
 use crate::map::clean::{self, Prepared, Progress};
-use crate::map::{GroupKey, Snapshot};
+use crate::map::{GroupKey, Project, Snapshot};
 
 /// Who wanted a clean, which decides how its end is told and what must still hold when its turn
 /// comes.
@@ -26,14 +27,15 @@ pub(super) enum By {
     /// question waiting for the user asks about, and the project at `project` is still idle when
     /// its turn comes. Nobody is waiting, so a banner tells of its end.
     Sutra { project: PathBuf },
-    /// Sutra chose it as the user chose for `group`, to clean its build folders once idle for
-    /// `quiet_at_least`, so it goes only if the project at `project` still is, and it keeps clear
-    /// of the folders a question waiting for the user asks about. A banner tells of a failure, and
-    /// another of what the group's cleans gave back once all have ended.
+    /// Sutra chose it as the user chose for the groups, by their `times` when it looked, so it
+    /// goes only if the project at `project`, in `group`, and every project sharing its folders
+    /// are still idle by their own groups' times, and it keeps clear of the folders a question
+    /// waiting for the user asks about. A banner tells of a failure, and another of what the
+    /// group's cleans gave back once all have ended.
     WhenIdle {
         project: PathBuf,
         group: GroupKey,
-        quiet_at_least: Duration,
+        times: Arc<IdleTimes>,
     },
 }
 
@@ -87,14 +89,15 @@ impl Cleaning {
         now: SystemTime,
         home: &Path,
     ) -> bool {
-        let still_idle = |project: &Path, at_least| {
+        // How long the project and each sharer must have been quiet, as `quiet_at_least` says.
+        let still_idle = |project: &Path, quiet_at_least: &dyn Fn(&Project) -> Option<Duration>| {
             map.is_some_and(|map| {
-                clean::is_still_idle(&waiting.prepared, project, map, now, at_least)
+                clean::is_still_idle(&waiting.prepared, project, map, now, quiet_at_least)
             })
         };
         match &waiting.by {
             By::User => true,
-            By::UserForIdle { project } => still_idle(project, OFFER_QUIET_AT_LEAST),
+            By::UserForIdle { project } => still_idle(project, &|_| Some(OFFER_QUIET_AT_LEAST)),
             By::Sutra { project } => {
                 if !self.keeping_free.is_short_of_room(home) {
                     return false;
@@ -103,7 +106,7 @@ impl Cleaning {
                 // build-dir set on another disk, where emptying it gives none of the room back. A
                 // question may also have asked about one of its folders since, and the user's
                 // answer decides that folder.
-                let may_go = still_idle(project, auto::QUIET_AT_LEAST)
+                let may_go = still_idle(project, &|_| Some(auto::QUIET_AT_LEAST))
                     && auto::is_all_on_volume_of(&waiting.prepared, home)
                     && self
                         .questions
@@ -115,12 +118,8 @@ impl Cleaning {
                 may_go
             }
             // Should it not go, the next look finds it again while it stays idle.
-            By::WhenIdle {
-                project,
-                quiet_at_least,
-                ..
-            } => {
-                still_idle(project, *quiet_at_least)
+            By::WhenIdle { project, times, .. } => {
+                still_idle(project, &|its| times.of(its))
                     && (self.questions)
                         .asked_about_in(&waiting.clicked, &waiting.prepared)
                         .is_none()
