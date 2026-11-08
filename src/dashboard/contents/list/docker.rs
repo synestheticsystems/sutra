@@ -50,7 +50,8 @@ impl LineKey {
 
 /// The line of Docker's group, `folded` shut or open: Docker's name, and the disk Docker takes,
 /// as its card's tray totals it; folded shut, the first of its card's lozenges, each running for no
-/// project, with no agent, as no agent works in Docker. It offers no clean.
+/// project, with no agent, as no agent works in Docker. It offers no clean, nor to clean by itself
+/// once idle: Sutra cleans nothing of Docker's.
 pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
     let fold = if folded {
         let (lozenges, more_lozenges) = first_few(lozenges(docker, ctx));
@@ -69,6 +70,7 @@ pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
         name: DOCKER.to_string(),
         tooltip: format!("{SHOWN}\n{}", format::tilde(&docker.socket, ctx.home)),
         total: docker.disk.map(|disk| format::size(disk.bytes(), false)),
+        cleans_when_idle: None,
         menu: Vec::new(),
         fold,
     }

@@ -1,6 +1,7 @@
 //! A line on the list: a group's, which names the upstream its cards came from, or within a group,
 //! a checkout's, which holds the checkout's own card first, then the copies made from it. Each says
-//! what all it holds takes on disk, and offers to clean the build folders in it. Folded shut (see
+//! what all it holds takes on disk, and offers to clean the build folders in it; a group's offers
+//! to clean them by itself too, once they sit idle a while, and then says so. Folded shut (see
 //! `fold`), a line still says what its cards would of their agents and their servers. Docker's
 //! group has a line too (see `list::docker`).
 
@@ -11,7 +12,7 @@ pub use fold::{LineFold, MoreLozenges};
 
 use std::path::Path;
 
-use crate::dashboard::cleaning::Cleaning;
+use crate::dashboard::cleaning::{self, Cleaning};
 use crate::dashboard::contents::card::{self, CardContext};
 use crate::dashboard::listing::{Checkout, Group};
 use crate::dashboard::{Action, MenuAction, MenuEntry, format};
@@ -31,8 +32,12 @@ pub struct Line {
     /// The disk all it holds on the map takes, listed or not, as their trays write it: the sizes
     /// measured so far, added up, and `None` before the first.
     pub total: Option<String>,
+    /// While Sutra cleans a group's build folders by itself once they sit idle, as the user chose
+    /// from its line, what the quiet mark beside its total says of it; `None` while it does not.
+    pub cleans_when_idle: Option<String>,
     /// What a right click offers: the clean of every build folder in what it holds that a card
-    /// would offer, while one is on offer.
+    /// would offer, while one is on offer; and on a group's line, how long its build folders may
+    /// sit idle before Sutra cleans them by itself.
     pub menu: Vec<MenuEntry>,
     /// Whether its rows show under it, or it stands folded shut over them.
     pub fold: LineFold,
@@ -62,10 +67,10 @@ pub enum GroupKind {
     Docker,
 }
 
-impl LineKey {
-    /// The key of the line of the group `key` names.
-    pub(in crate::dashboard) fn group(key: &GroupKey) -> LineKey {
-        let kind = match key {
+impl GroupKind {
+    /// What the group `key` names is keyed by.
+    fn of(key: &GroupKey) -> GroupKind {
+        match key {
             GroupKey::Upstream(remote) => GroupKind::Upstream {
                 remote: remote.clone(),
             },
@@ -74,8 +79,16 @@ impl LineKey {
             },
             GroupKey::Package(name) => GroupKind::Package { name: name.clone() },
             GroupKey::Other => GroupKind::Other,
-        };
-        LineKey::Group { kind }
+        }
+    }
+}
+
+impl LineKey {
+    /// The key of the line of the group `key` names.
+    pub(in crate::dashboard) fn group(key: &GroupKey) -> LineKey {
+        LineKey::Group {
+            kind: GroupKind::of(key),
+        }
     }
 
     /// The key of the line of the checkout at `folder`.
@@ -86,8 +99,14 @@ impl LineKey {
     }
 }
 
-/// The line of `group`, folded shut or not as `fold` says.
-pub(super) fn group_line(group: &Group, fold: LineFold, cards: &CardContext) -> Line {
+/// The line of `group`, folded shut or not as `fold` says, whose build folders Sutra cleans once
+/// they have sat idle for `idle_days`, if the user chose that.
+pub(super) fn group_line(
+    group: &Group,
+    fold: LineFold,
+    idle_days: Option<u32>,
+    cards: &CardContext,
+) -> Line {
     let key = LineKey::group(group.key);
     let what = match group.key {
         GroupKey::Upstream(remote) => remote.clone(),
@@ -111,12 +130,18 @@ pub(super) fn group_line(group: &Group, fold: LineFold, cards: &CardContext) -> 
         Some(checkout) => format!("{what}\n{}", format::tilde(&checkout.path, cards.home)),
         None => what,
     };
+    let mut menu = clean_build_folders(&key, &group.members, cards.cleaning);
+    if !menu.is_empty() {
+        menu.push(MenuEntry::Separator);
+    }
+    menu.push(clean_when_idle(group.key, idle_days));
     Line {
-        menu: clean_build_folders(&key, &group.members, cards.cleaning),
+        menu,
         key,
         name: group.name.clone(),
         tooltip,
         total: total_of(&group.members, cards),
+        cleans_when_idle: idle_days.map(cleaning::when_idle_mark),
         fold,
     }
 }
@@ -130,7 +155,30 @@ pub(super) fn checkout_line(checkout: &Checkout, fold: LineFold, cards: &CardCon
         name: checkout.name.clone(),
         tooltip: format::tilde(&checkout.project.path, cards.home),
         total: total_of(&checkout.members, cards),
+        cleans_when_idle: None,
         fold,
+    }
+}
+
+/// What the line of the group `group` offers for cleaning its build folders by itself: how long
+/// they may sit idle first, or never, with the choice made, `idle_days`, checked.
+fn clean_when_idle(group: &GroupKey, idle_days: Option<u32>) -> MenuEntry {
+    let choose = |days| Action::CleanWhenIdle {
+        group: GroupKind::of(group),
+        days,
+    };
+    let entries = cleaning::when_idle_choices()
+        .into_iter()
+        .map(|choice| MenuEntry::Item {
+            title: choice.label,
+            checked: choice.days == idle_days,
+            action: MenuAction::Dashboard {
+                action: choose(choice.days),
+            },
+        });
+    MenuEntry::Submenu {
+        title: "Clean When Idle".to_string(),
+        entries: entries.collect(),
     }
 }
 

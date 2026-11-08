@@ -144,7 +144,7 @@ mod tests {
         entries
             .iter()
             .map(|entry| match entry {
-                MenuEntry::Item { title, .. } => title.as_str(),
+                MenuEntry::Item { title, .. } | MenuEntry::Submenu { title, .. } => title.as_str(),
                 MenuEntry::Separator => "-",
             })
             .collect()

@@ -223,6 +223,7 @@ mod tests {
         menu.iter()
             .map(|entry| match entry {
                 MenuEntry::Item { title, checked, .. } => (Some(title.clone()), *checked),
+                MenuEntry::Submenu { title, .. } => (Some(title.clone()), false),
                 MenuEntry::Separator => (None, false),
             })
             .collect()

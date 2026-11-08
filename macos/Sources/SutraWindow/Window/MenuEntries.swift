@@ -1,9 +1,9 @@
 import SutraCore
 import SwiftUI
 
-/// A right-click menu made of the core's lines. A card's menu starts with opening its folder in the
-/// editor chosen in Settings, which the window offers itself, since it knows which editors this
-/// Mac has.
+/// A right-click menu made of the core's lines, a submenu made the same way. A card's menu starts
+/// with opening its folder in the editor chosen in Settings, which the window offers itself, since
+/// it knows which editors this Mac has.
 struct MenuEntries: View {
     let entries: [MenuEntry]
     let dashboard: DashboardModel
@@ -30,6 +30,10 @@ struct MenuEntries: View {
                 }
             case .separator:
                 Divider()
+            case .submenu(let title, let entries):
+                Menu(title) {
+                    MenuEntries(entries: entries, dashboard: dashboard)
+                }
             }
         }
     }

@@ -119,7 +119,10 @@ struct ListViewTests {
 
     /// The open line of `key`, going by `name`.
     private static func open(_ key: LineKey, _ name: String) -> Line {
-        Line(key: key, name: name, tooltip: "", total: "212 GB", menu: [], fold: .open)
+        Line(
+            key: key, name: name, tooltip: "", total: "212 GB", cleansWhenIdle: nil, menu: [],
+            fold: .open
+        )
     }
 
     /// The line of `key`, going by `name`, folded shut over a robot at work.
@@ -127,7 +130,10 @@ struct ListViewTests {
         let fold = LineFold.folded(
             sessions: [robot], subagents: [], waiting: false, lozenges: [], moreLozenges: nil
         )
-        return Line(key: key, name: name, tooltip: "", total: "212 GB", menu: [], fold: fold)
+        return Line(
+            key: key, name: name, tooltip: "", total: "212 GB", cleansWhenIdle: nil, menu: [],
+            fold: fold
+        )
     }
 
     /// The `index`th worktree of the open checkout's line: on a long branch, or every ninth

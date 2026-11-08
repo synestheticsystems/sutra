@@ -3,9 +3,9 @@
 //! line to its cards, each row with its place in the group's tree (see `Place`); and the row
 //! standing for the quiet groups.
 
-use super::{docker, elsewhere, how_many, line, what_makes_one_quiet};
+use super::{LineChoices, docker, elsewhere, how_many, line, what_makes_one_quiet};
 use crate::dashboard::contents::card::{self, CardContext, agents};
-use crate::dashboard::listing::{Folds, Group, Listing, Node, Row};
+use crate::dashboard::listing::{Group, Listing, Node, Row};
 use crate::dashboard::{Card, DockerCard, ElsewhereLine, Line, LineFold, LineKey, format};
 use crate::map::Snapshot;
 
@@ -70,18 +70,24 @@ pub struct Place {
     pub first: bool,
 }
 
-/// The rows of `row`, one of the listing's.
-pub(super) fn of(row: &Row, listing: &Listing, folds: &Folds, cards: &CardContext) -> Vec<ListRow> {
+/// The rows of `row`, one of the listing's, its lines folded and cleaning as the user chose
+/// (`chosen`).
+pub(super) fn of(
+    row: &Row,
+    listing: &Listing,
+    chosen: LineChoices,
+    cards: &CardContext,
+) -> Vec<ListRow> {
     match row {
         Row::Group(group) => Flattening {
             map: listing.snapshot,
-            folds,
+            chosen,
             cards,
             rows: Vec::new(),
         }
         .group(group),
         Row::Docker(docker) => {
-            let folded = folds.is_folded(&LineKey::DOCKER);
+            let folded = chosen.folds.is_folded(&LineKey::DOCKER);
             let line = ListRow::Line {
                 line: Box::new(docker::line(docker, folded, cards)),
                 place: Place {
@@ -110,7 +116,7 @@ pub(super) fn of(row: &Row, listing: &Listing, folds: &Folds, cards: &CardContex
 /// The rows of one group as they are laid out, a line's after it.
 struct Flattening<'a> {
     map: &'a Snapshot,
-    folds: &'a Folds,
+    chosen: LineChoices<'a>,
     cards: &'a CardContext<'a>,
     rows: Vec<ListRow>,
 }
@@ -118,7 +124,7 @@ struct Flattening<'a> {
 impl Flattening<'_> {
     /// The rows of `group`: its line, then, while it is open, what hangs from it.
     fn group(mut self, group: &Group) -> Vec<ListRow> {
-        let open = !self.folds.is_folded(&LineKey::group(group.key));
+        let open = !self.chosen.folds.is_folded(&LineKey::group(group.key));
         let fold = if open {
             LineFold::Open
         } else {
@@ -128,7 +134,8 @@ impl Flattening<'_> {
             });
             line::folded(&group.cards(), elsewhere, self.cards)
         };
-        let line = line::group_line(group, fold, self.cards);
+        let idle_days = self.chosen.clean_when_idle.days_for(group.key);
+        let line = line::group_line(group, fold, idle_days, self.cards);
         let place = Place {
             depth: 0,
             first: false,
@@ -165,9 +172,8 @@ impl Flattening<'_> {
                     place,
                 }),
                 Node::Checkout(checkout) => {
-                    let open = !self
-                        .folds
-                        .is_folded(&LineKey::checkout(&checkout.project.path));
+                    let open =
+                        !(self.chosen.folds).is_folded(&LineKey::checkout(&checkout.project.path));
                     let fold = if open {
                         LineFold::Open
                     } else {

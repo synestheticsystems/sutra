@@ -289,7 +289,10 @@ impl State {
                 &self.roots,
                 self.lost_grant.as_ref(),
                 self.engine_stopped,
-                &self.settings.folds,
+                list::LineChoices {
+                    folds: &self.settings.folds,
+                    clean_when_idle: &self.settings.clean_when_idle,
+                },
                 &cards,
             ),
             footer: map.and_then(|map| footer::footer(map, &self.home)),

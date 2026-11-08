@@ -11,7 +11,7 @@ mod chosen;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::dashboard) use chosen::CleanWhenIdle;
+pub(in crate::dashboard) use chosen::{CleanWhenIdle, when_idle_choices, when_idle_mark};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};

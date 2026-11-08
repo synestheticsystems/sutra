@@ -1,5 +1,5 @@
 //! What the user chose from each group's line: how many days its build folders may sit idle before
-//! Sutra cleans them, kept by the line.
+//! Sutra cleans them, kept by the line, and the choices and the mark the line shows.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::DAY;
 use crate::dashboard::LineKey;
+use crate::dashboard::cleaning::words;
 use crate::dashboard::listing::{self, ByLine};
 use crate::map::{GroupKey, Snapshot};
 
@@ -56,6 +57,29 @@ impl CleanWhenIdle {
             .filter_map(|group| Some((group.clone(), DAY * self.days_for(group)?)))
             .collect()
     }
+}
+
+/// A time a group's line offers, with the words its menu shows.
+pub(in crate::dashboard) struct WhenIdleChoice {
+    /// How many days the group's build folders may sit idle; `None` for never.
+    pub(in crate::dashboard) days: Option<u32>,
+    pub(in crate::dashboard) label: String,
+}
+
+/// What a group's line offers: never to clean its build folders by itself, then each time.
+pub(in crate::dashboard) fn when_idle_choices() -> Vec<WhenIdleChoice> {
+    std::iter::once(None)
+        .chain(DAYS_CHOICES.map(Some))
+        .map(|days| WhenIdleChoice {
+            days,
+            label: words::when_idle_choice(days.map(|days| DAY * days)),
+        })
+        .collect()
+}
+
+/// What the mark on the line of a group says, whose build folders are cleaned once idle `days`.
+pub(in crate::dashboard) fn when_idle_mark(days: u32) -> String {
+    words::when_idle_mark(DAY * days)
 }
 
 #[cfg(test)]

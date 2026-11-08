@@ -13,6 +13,12 @@ pub enum MenuEntry {
         action: MenuAction,
     },
     Separator,
+    /// A line that opens a menu of its own, `entries`, as a choice among several does, so they
+    /// keep out of the way of what the menu is mostly for.
+    Submenu {
+        title: String,
+        entries: Vec<MenuEntry>,
+    },
 }
 
 /// What a menu line does: the window's own platform services, or something the dashboard does.

@@ -19,10 +19,19 @@ pub(in crate::dashboard) use line::offered_cleans;
 use std::path::PathBuf;
 
 use super::card::CardContext;
+use crate::dashboard::cleaning::CleanWhenIdle;
 use crate::dashboard::listing::{FOCUS_RECENT, Folds, Listing};
 use crate::dashboard::{SortOrder, format};
 use crate::map::LARGE_FOLDER_BYTES;
 use crate::map::grant::GrantError;
+
+/// What the user chose for the list's lines that outlasts the run: which are folded shut, and how
+/// long each group's build folders may sit idle before Sutra cleans them.
+#[derive(Clone, Copy)]
+pub(in crate::dashboard) struct LineChoices<'a> {
+    pub(in crate::dashboard) folds: &'a Folds,
+    pub(in crate::dashboard) clean_when_idle: &'a CleanWhenIdle,
+}
 
 /// The list, or what stands in its place.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
@@ -48,15 +57,15 @@ pub enum List {
 
 /// The list, from `listing`, `None` until the first map arrives, and the filter field's text.
 /// `roots` are the folders watched, empty while the store edition has none granted, and
-/// `lost_grant` why the one granted on an earlier launch could not be reopened. `folds` says which
-/// lines are folded shut.
+/// `lost_grant` why the one granted on an earlier launch could not be reopened. `chosen` says
+/// which lines are folded shut, and which groups Sutra cleans once idle.
 pub(in crate::dashboard) fn list(
     listing: Option<&Listing>,
     filter: Option<&str>,
     roots: &[PathBuf],
     lost_grant: Option<&GrantError>,
     engine_stopped: bool,
-    folds: &Folds,
+    chosen: LineChoices,
     cards: &CardContext,
 ) -> List {
     if roots.is_empty() {
@@ -75,7 +84,7 @@ pub(in crate::dashboard) fn list(
             rows: listing
                 .rows
                 .iter()
-                .flat_map(|row| rows::of(row, listing, folds, cards))
+                .flat_map(|row| rows::of(row, listing, chosen, cards))
                 .collect(),
         },
     }
@@ -160,13 +169,17 @@ mod tests {
         };
         let listing = Listing::new(map, arrangement, &cleaning, now());
         let roots = [PathBuf::from("/code")];
+        let chosen = LineChoices {
+            folds,
+            clean_when_idle: &CleanWhenIdle::default(),
+        };
         list(
             Some(&listing),
             arrangement.filter(),
             &roots,
             None,
             false,
-            folds,
+            chosen,
             &cards,
         )
     }
@@ -343,17 +356,20 @@ mod tests {
             now: now(),
         };
         let roots = [PathBuf::from("/code")];
-        let none = Folds::default();
+        let none = LineChoices {
+            folds: &Folds::default(),
+            clean_when_idle: &CleanWhenIdle::default(),
+        };
         assert_eq!(
-            list(None, None, &roots, None, false, &none, &cards),
+            list(None, None, &roots, None, false, none, &cards),
             List::Scanning
         );
         assert!(matches!(
-            list(None, None, &roots, None, true, &none, &cards),
+            list(None, None, &roots, None, true, none, &cards),
             List::Empty { message } if message.starts_with("The scanner stopped before its first")
         ));
         assert!(matches!(
-            list(None, None, &[], None, false, &none, &cards),
+            list(None, None, &[], None, false, none, &cards),
             List::NoFolder { lost: None, .. }
         ));
     }

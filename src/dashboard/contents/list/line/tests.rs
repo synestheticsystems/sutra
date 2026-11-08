@@ -1,9 +1,11 @@
 //! A line as the window receives it: what it names and says of what it holds, its total and the
-//! clean it offers, and what it shows folded shut.
+//! clean it offers, on a group's the choice of cleaning by itself once idle and the mark of it,
+//! and what it shows folded shut.
 
 use std::path::Path;
 
 use super::*;
+use crate::dashboard::cleaning::CleanWhenIdle;
 use crate::dashboard::cleaning::tests::{cleaning, deleted};
 use crate::dashboard::contents::list;
 use crate::dashboard::listing::fixtures::{
@@ -29,6 +31,15 @@ fn context<'a>(cleaning: &'a Cleaning, notifier: &'a Notifier) -> CardContext<'a
 
 /// The rows the Activity sort lists for `map`, the lines in `open` opened.
 pub(in crate::dashboard::contents) fn rows_of(map: &Snapshot, open: &[LineKey]) -> Vec<ListRow> {
+    rows_cleaning_when_idle(map, open, &CleanWhenIdle::default())
+}
+
+/// The rows `rows_of` lists, with the groups `clean_when_idle` chose cleaned once idle.
+fn rows_cleaning_when_idle(
+    map: &Snapshot,
+    open: &[LineKey],
+    clean_when_idle: &CleanWhenIdle,
+) -> Vec<ListRow> {
     let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
     let mut folds = Folds::default();
     for line in open {
@@ -36,13 +47,17 @@ pub(in crate::dashboard::contents) fn rows_of(map: &Snapshot, open: &[LineKey]) 
     }
     let listing = Listing::new(map, &Arrangement::default(), &cleaning, now());
     let roots = [std::path::PathBuf::from("/code")];
+    let chosen = list::LineChoices {
+        folds: &folds,
+        clean_when_idle,
+    };
     let shown = list::list(
         Some(&listing),
         None,
         &roots,
         None,
         false,
-        &folds,
+        chosen,
         &context(&cleaning, &notifier),
     );
     let crate::dashboard::List::Rows { rows } = shown else {
@@ -384,8 +399,8 @@ fn a_line_offers_to_clean_what_it_holds_and_nothing_in_a_folder_it_cannot_read()
     };
 
     let readable = map(measured(30_000_000_000), FolderAccess::Readable);
-    let [MenuEntry::Item { title, action, .. }] = &menu(&readable)[..] else {
-        panic!("one item");
+    let [MenuEntry::Item { title, action, .. }, ..] = &menu(&readable)[..] else {
+        panic!("the clean first");
     };
     assert_eq!(
         title, "Clean Build Folders (90 GB)",
@@ -398,16 +413,16 @@ fn a_line_offers_to_clean_what_it_holds_and_nothing_in_a_folder_it_cannot_read()
         }
     );
     let sizing = map(Measurement::Measuring, FolderAccess::Readable);
-    let [MenuEntry::Item { title, .. }] = &menu(&sizing)[..] else {
-        panic!("one item");
+    let [MenuEntry::Item { title, .. }, ..] = &menu(&sizing)[..] else {
+        panic!("the clean first");
     };
     assert_eq!(
         title, "Clean Build Folders (\u{2265}60 GB)",
         "one not sized yet"
     );
     let sealed = map(measured(30_000_000_000), FolderAccess::Denied);
-    let [MenuEntry::Item { title, .. }] = &menu(&sealed)[..] else {
-        panic!("one item");
+    let [MenuEntry::Item { title, .. }, ..] = &menu(&sealed)[..] else {
+        panic!("the clean first");
     };
     assert_eq!(
         title, "Clean Build Folders (60 GB)",
@@ -444,4 +459,94 @@ fn a_lines_total_falls_with_what_a_clean_leaves_as_its_cards_trays_do() {
         ..project_at("/code/app")
     };
     assert_eq!(total_of(&[&app], &cards).as_deref(), Some("1 GB"));
+}
+
+/// A map of `github.com/me/app`'s clones, one with a copy made from it, so its group's line holds
+/// a checkout's line.
+fn app_with_a_copy() -> Snapshot {
+    snapshot(
+        vec![
+            app("app", &[], project("", 1)),
+            app("app-wt", &["/code/app"], project("", 1)),
+            app("app-2", &[], project("", 30)),
+        ],
+        vec![],
+    )
+}
+
+/// The titles of a submenu's entries, each checked or not.
+fn choices(entries: &[MenuEntry]) -> Vec<(&str, bool)> {
+    let each = entries.iter().map(|entry| match entry {
+        MenuEntry::Item { title, checked, .. } => (title.as_str(), *checked),
+        entry => panic!("only choices: {entry:?}"),
+    });
+    each.collect()
+}
+
+#[test]
+fn a_groups_line_offers_how_long_its_build_folders_may_sit_idle_with_the_choice_made_checked() {
+    let map = app_with_a_copy();
+    let app_group = crate::map::GroupKey::Upstream("github.com/me/app".to_string());
+    let mut chosen = CleanWhenIdle::default();
+    assert!(chosen.choose(&app_group, Some(3), &map));
+    let rows = rows_cleaning_when_idle(&map, &[app_line()], &chosen);
+    let [(group, _), (checkout, _)] = &lines(rows)[..] else {
+        panic!("the group's line and its checkout's");
+    };
+
+    let [MenuEntry::Submenu { title, entries }] = &group.menu[..] else {
+        panic!("only the choice, with nothing to clean: {:?}", group.menu);
+    };
+    assert_eq!(title, "Clean When Idle");
+    assert_eq!(
+        choices(entries),
+        [
+            ("Never", false),
+            ("For a Day", false),
+            ("For 3 Days", true),
+            ("For a Week", false),
+            ("For 2 Weeks", false),
+        ]
+    );
+    let MenuEntry::Item { action, .. } = &entries[0] else {
+        panic!("a choice");
+    };
+    assert_eq!(
+        *action,
+        MenuAction::Dashboard {
+            action: Action::CleanWhenIdle {
+                group: GroupKind::Upstream {
+                    remote: "github.com/me/app".to_string()
+                },
+                days: None,
+            }
+        }
+    );
+    assert!(
+        checkout.menu.is_empty(),
+        "a group's choice, not a checkout's"
+    );
+}
+
+#[test]
+fn a_line_whose_group_cleans_itself_once_idle_says_so_and_another_says_nothing() {
+    let map = app_with_a_copy();
+    let app_group = crate::map::GroupKey::Upstream("github.com/me/app".to_string());
+    let marks = |chosen: &CleanWhenIdle| -> Vec<Option<String>> {
+        let rows = rows_cleaning_when_idle(&map, &[app_line()], chosen);
+        let lines = lines(rows).into_iter();
+        lines.map(|(line, _)| line.cleans_when_idle).collect()
+    };
+
+    assert_eq!(marks(&CleanWhenIdle::default()), [None, None]);
+    let mut chosen = CleanWhenIdle::default();
+    assert!(chosen.choose(&app_group, Some(7), &map));
+    assert_eq!(
+        marks(&chosen),
+        [
+            Some("Cleans its build folders once they've sat idle for a week".to_string()),
+            None
+        ],
+        "the group's line alone"
+    );
 }
