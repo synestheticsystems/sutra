@@ -274,7 +274,12 @@ fn a_folded_line_shows_two_of_the_servers_up_in_what_it_holds_and_counts_the_res
     };
     let shown: Vec<(&str, Option<&str>)> = lozenges
         .iter()
-        .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
+        .map(|on_line| {
+            (
+                on_line.lozenge.name.as_str(),
+                on_line.lozenge.port.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         shown,
@@ -282,20 +287,27 @@ fn a_folded_line_shows_two_of_the_servers_up_in_what_it_holds_and_counts_the_res
         "up or on its way, in the cards' order; not the stopped worker"
     );
     assert_eq!(
-        lozenges[0].tooltip, "web in /code/app\nready",
+        lozenges[0].lozenge.tooltip, "web in /code/app\nready",
         "the folder it serves in, which the folded line does not show, then its card's tip"
     );
     assert_eq!(
-        lozenges[1].link.as_deref(),
+        lozenges[1].lozenge.link.as_deref(),
         Some("http://localhost:8787"),
         "a click opens the port, as on its card"
     );
+    let counted = |label: &str, tooltip: &str| MoreLozenges {
+        label: label.to_string(),
+        tooltip: tooltip.to_string(),
+    };
+    assert_eq!(*more_lozenges, Some(counted("+1", "docs :4000")));
+    let giving_way: Vec<&MoreLozenges> = lozenges.iter().map(|l| &l.gives_way_to).collect();
     assert_eq!(
-        *more_lozenges,
-        Some(MoreLozenges {
-            label: "+1".to_string(),
-            tooltip: "docs :4000".to_string(),
-        })
+        giving_way,
+        [
+            &counted("+3", "web :5173\napi :8787\ndocs :4000"),
+            &counted("+2", "api :8787\ndocs :4000"),
+        ],
+        "each counts itself and every lozenge after it, should the line need its room"
     );
 }
 
@@ -325,12 +337,17 @@ fn a_folded_line_shows_its_cards_processes_and_containers_and_a_container_on_two
     };
     let shown: Vec<(&str, Option<&str>)> = lozenges
         .iter()
-        .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
+        .map(|on_line| {
+            (
+                on_line.lozenge.name.as_str(),
+                on_line.lozenge.port.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(shown, [("node", Some(":5177")), ("postgres", None)]);
     assert_eq!(*more_lozenges, None, "the container on both cards, once");
     assert_eq!(
-        lozenges[1].tooltip,
+        lozenges[1].lozenge.tooltip,
         "postgres in /code/app and /code/app-2\nContainer app-db-1, of postgres:17, publishing \
          no TCP port\n/code/app"
     );

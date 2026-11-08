@@ -3,7 +3,8 @@
 //! before every subagent; it throbs while one of the sessions waits on the user; and the first
 //! servers up or on their way in them stand after its total, with a count of the rest. Each of
 //! those lozenges opens its port on a click, as on its card, and names in its tip the folder it
-//! serves in, which the folded line no longer shows.
+//! serves in, which the folded line no longer shows. Where the line is short of room, its lozenges
+//! give way to the count, the last first, before its name is cut.
 
 use std::path::Path;
 
@@ -29,10 +30,20 @@ pub enum LineFold {
         /// holds, dev-runner units, ports processes listen on and containers alike, in the cards'
         /// order, so folding a line shut never hides that a server runs under it. Each opens its
         /// port as on its card, and its tip names the folders it serves in first.
-        lozenges: Vec<Lozenge>,
+        lozenges: Vec<LineLozenge>,
         /// The lozenges up or on their way past those two; `None` while there are none.
         more_lozenges: Option<MoreLozenges>,
     },
+}
+
+/// A lozenge a folded line draws after its total.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct LineLozenge {
+    pub lozenge: Lozenge,
+    /// What counts this lozenge and every one after it, drawn or not, in their place: a line too
+    /// short for its name whole gives its lozenges way to the count, the last first, and only once
+    /// the count stands alone does the name give way.
+    pub gives_way_to: MoreLozenges,
 }
 
 /// The lozenges a folded line counts past the ones it draws.
@@ -85,7 +96,10 @@ const LOZENGES_ON_A_FOLDED_LINE: usize = 2;
 /// The lozenges up or on their way in `cards`, in the cards' order (see `lozenges::on_cards`), as a
 /// folded line shows them (see `on_the_line`): the first `LOZENGES_ON_A_FOLDED_LINE` of them, and
 /// what counts the rest.
-fn live_lozenges(cards: &[&Project], ctx: &CardContext) -> (Vec<Lozenge>, Option<MoreLozenges>) {
+fn live_lozenges(
+    cards: &[&Project],
+    ctx: &CardContext,
+) -> (Vec<LineLozenge>, Option<MoreLozenges>) {
     let placed = lozenges::on_cards(cards, ctx).into_iter();
     let live = placed
         .filter(|placed| matches!(placed.lozenge.look, LozengeLook::Up | LozengeLook::Starting));
@@ -112,20 +126,32 @@ fn on_the_line(placed: Placed, home: &Path) -> Lozenge {
     }
 }
 
-/// The first `LOZENGES_ON_A_FOLDED_LINE` of `lozenges`, and what counts the rest.
+/// The first `LOZENGES_ON_A_FOLDED_LINE` of `lozenges`, each with what counts it and those after
+/// it should it give way, and what counts the rest.
 pub(in crate::dashboard::contents) fn first_few(
-    mut lozenges: Vec<Lozenge>,
-) -> (Vec<Lozenge>, Option<MoreLozenges>) {
-    let rest = lozenges.split_off(LOZENGES_ON_A_FOLDED_LINE.min(lozenges.len()));
-    let more = (!rest.is_empty()).then(|| {
-        let named = rest.iter().map(|lozenge| match &lozenge.port {
+    lozenges: Vec<Lozenge>,
+) -> (Vec<LineLozenge>, Option<MoreLozenges>) {
+    let named: Vec<String> = lozenges
+        .iter()
+        .map(|lozenge| match &lozenge.port {
             Some(port) => format!("{} {port}", lozenge.name),
             None => lozenge.name.clone(),
-        });
-        MoreLozenges {
-            label: format!("+{}", rest.len()),
-            tooltip: named.collect::<Vec<_>>().join("\n"),
-        }
+        })
+        .collect();
+    let drawn = LOZENGES_ON_A_FOLDED_LINE.min(lozenges.len());
+    let more = (drawn < named.len()).then(|| counting(&named[drawn..]));
+    let first = lozenges.into_iter().take(drawn).enumerate();
+    let line_lozenges = first.map(|(index, lozenge)| LineLozenge {
+        lozenge,
+        gives_way_to: counting(&named[index..]),
     });
-    (lozenges, more)
+    (line_lozenges.collect(), more)
+}
+
+/// What counts the lozenges `named`, each as `api :8787` reads.
+fn counting(named: &[String]) -> MoreLozenges {
+    MoreLozenges {
+        label: format!("+{}", named.len()),
+        tooltip: named.join("\n"),
+    }
 }

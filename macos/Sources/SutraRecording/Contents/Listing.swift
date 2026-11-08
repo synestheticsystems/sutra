@@ -65,19 +65,30 @@ struct Arrangement: Equatable {
 
     /// What a line folded shut shows of `cards` at `moment`: their robots, the throb while one
     /// waits, and the first two of their servers, every unit of the invented work being up, each
-    /// naming its card's folder in its tip, with the rest counted.
+    /// naming its card's folder in its tip and counting itself and those after it should the line
+    /// need its room, with the rest counted.
     private func folded(_ cards: [Project], at moment: TimeInterval) -> LineFold {
         let units = cards.flatMap { card in card.units.map { (unit: $0, folder: card.path) } }
-        let rest = units.dropFirst(2)
+        let counting = { (from: Int) -> MoreLozenges in
+            let counted = units[from...]
+            return MoreLozenges(
+                label: "+\(counted.count)",
+                tooltip: counted.map { "\($0.unit.name) :\($0.unit.port)" }
+                    .joined(separator: "\n")
+            )
+        }
+        let drawn = min(2, units.count)
         return .folded(
             sessions: cards.flatMap { $0.sessionBadges(at: moment) },
             subagents: cards.flatMap { $0.subagentBadges(at: moment) },
             waiting: cards.contains { $0.waiting(at: moment) },
-            lozenges: units.prefix(2).map { $0.unit.lozenge(onALineOver: $0.folder) },
-            moreLozenges: rest.isEmpty ? nil : MoreLozenges(
-                label: "+\(rest.count)",
-                tooltip: rest.map { "\($0.unit.name) :\($0.unit.port)" }.joined(separator: "\n")
-            )
+            lozenges: (0..<drawn).map { index in
+                LineLozenge(
+                    lozenge: units[index].unit.lozenge(onALineOver: units[index].folder),
+                    givesWayTo: counting(index)
+                )
+            },
+            moreLozenges: drawn < units.count ? counting(drawn) : nil
         )
     }
 

@@ -319,7 +319,7 @@ mod tests {
         else {
             panic!("folded: {:?}", folded.fold);
         };
-        let names: Vec<&str> = lozenges.iter().map(|l| l.name.as_str()).collect();
+        let names: Vec<&str> = lozenges.iter().map(|l| l.lozenge.name.as_str()).collect();
         assert_eq!(names, ["redis", "minio"]);
         assert_eq!(
             more_lozenges.as_ref().map(|more| more.label.as_str()),

@@ -48,11 +48,13 @@ struct LineRow: View {
     /// The line itself: the chevron, pointing at the rows while they show, the name and the total,
     /// a button that folds or opens the line; folded, the servers running in its cards after them,
     /// `lozenges` drawn as their cards draw them, each opening its port, and `moreLozenges`
-    /// counted. A click anywhere else on the line folds or opens it too.
+    /// counted. Short of room, the lozenges give way to the count, the last first, and only once
+    /// the count stands alone is the name cut, in its middle (see `TitleAndLozenges`). A click
+    /// anywhere else on the line folds or opens it too.
     private func header(
-        open: Bool, lozenges: [Lozenge] = [], moreLozenges: MoreLozenges? = nil
+        open: Bool, lozenges: [LineLozenge] = [], moreLozenges: MoreLozenges? = nil
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        TitleAndLozenges {
             Button(action: toggle) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Chevron(open: open)
@@ -62,7 +64,7 @@ struct LineRow: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let total = line.total {
-                            Text(total)
+                            Text(total).fixedSize()
                         }
                         if let cleansWhenIdle = line.cleansWhenIdle {
                             // A mark rather than words, quieter than the total beside it: its tip
@@ -80,12 +82,19 @@ struct LineRow: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(.isHeader)
             .accessibilityValue(open ? "Open" : "Folded")
-            ForEach(Array(lozenges.enumerated()), id: \.offset) { _, lozenge in
-                LozengeView(lozenge: lozenge)
+            .linePiece(.title)
+            ForEach(Array(lozenges.enumerated()), id: \.offset) { index, onLine in
+                LozengeView(lozenge: onLine.lozenge)
+                    .linePiece(.lozenge(index))
+                // Seen and not read: VoiceOver reads every lozenge, drawn or not, and the count
+                // of those past them.
+                count(onLine.givesWayTo)
+                    .accessibilityHidden(true)
+                    .linePiece(.count(after: index))
             }
             if let moreLozenges {
-                Text(moreLozenges.label)
-                    .hoverTip(moreLozenges.tooltip)
+                count(moreLozenges)
+                    .linePiece(.count(after: lozenges.count))
             }
         }
         .font(.callout)
@@ -96,6 +105,12 @@ struct LineRow: View {
         .onTapGesture(perform: toggle)
         .hoverTip(line.tooltip)
         .contextMenu { MenuEntries(entries: line.menu, dashboard: dashboard) }
+    }
+
+    /// The count of the lozenges `more` holds, naming them in its tip.
+    private func count(_ more: MoreLozenges) -> some View {
+        Text(more.label)
+            .hoverTip(more.tooltip)
     }
 
     private func toggle() {

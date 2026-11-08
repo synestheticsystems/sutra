@@ -47,7 +47,7 @@ struct ScriptedCoreTests {
         }
         #expect(sessions.count == 3 && subagents.count == 2 && !waiting)
         // The site its main worktree serves stays in sight on the line.
-        #expect(lozenges.map(\.name) == ["web"] && more == nil)
+        #expect(lozenges.map(\.lozenge.name) == ["web"] && more == nil)
         core.perform(action: .toggleFold(line: Scenario.cedarWebLine))
         #expect(shown(core.contents()) == takeOpening)
         #expect(window.changes == 2)
