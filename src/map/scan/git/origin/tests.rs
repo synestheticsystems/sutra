@@ -300,6 +300,45 @@ fn a_scratch_folder_with_no_git_goes_by_the_one_folder_in_it_holding_one_and_no_
 }
 
 #[test]
+fn in_scratch_only_a_chain_that_ends_at_a_remote_counts_a_folders_own_or_its_one_checkouts() {
+    let fixture = TempDir::new("origin-scratch-remote");
+    let notes = fixture.repo("home/notes");
+    let clone_of_notes = |into: &str| {
+        let (from, into) = (notes.to_str().unwrap(), fixture.path(into));
+        git(
+            fixture.root(),
+            &["clone", "-q", from, into.to_str().unwrap()],
+        );
+        into
+    };
+    let made_there = fixture.repo("scratch/git-check");
+    let copy = clone_of_notes("scratch/notes-copy");
+    clone_of_notes("scratch/task/notes");
+    let work = fixture.repo("scratch/work");
+    cloned_from_host(&fixture, "scratch/work/app", "https://github.com/me/app");
+    let lineage = |folder: &Path| lineage_of_scratch_folder(folder, &anywhere);
+
+    assert_eq!(lineage(&made_there), (None, vec![]), "made there");
+    assert_eq!(
+        lineage(&copy),
+        (None, vec![]),
+        "cloned from a repository with no remote"
+    );
+    assert_eq!(
+        lineage(&fixture.path("scratch/task")),
+        (None, vec![]),
+        "holding such a clone"
+    );
+    let (held, failures) = lineage(&work);
+    assert_eq!(
+        held.and_then(|held| held.remote).as_deref(),
+        Some("github.com/me/app"),
+        "a repository with no remote, holding one clone of a host"
+    );
+    assert_eq!(failures, []);
+}
+
+#[test]
 fn a_url_is_keyed_without_its_scheme_user_port_or_git_and_with_its_host_in_lowercase() {
     for (url, key) in [
         ("https://github.com/owner/repo.git", "github.com/owner/repo"),

@@ -13,9 +13,9 @@ pub struct Provenance {
     pub group: GroupKey,
     /// The projects the engine tracks that it was made from, nearest first: the checkout a linked
     /// worktree or a clone was made from, and what that one was made from in turn, which for a
-    /// scratch folder holding one checkout are that checkout's; or for any other scratch folder with
-    /// no git, the checkout its session started in when that is in its group. Its card hangs from
-    /// the nearest of them listed beside it.
+    /// scratch folder holding one checkout are that checkout's; or for any other scratch folder
+    /// whose git, if any, names no remote, the checkout its session started in when that is in its
+    /// group. Its card hangs from the nearest of them listed beside it.
     pub made_from: Vec<PathBuf>,
 }
 
@@ -26,13 +26,15 @@ pub enum GroupKey {
     /// `github.com/owner/repo` reads.
     Upstream(String),
     /// A repository with no remote anywhere in its chain, by the folder at the chain's root: a
-    /// checkout, or a bare repository.
+    /// checkout, or a bare repository. One in a session's scratch keys none, as it is the session's
+    /// own work and stands with the session's checkout.
     LocalRepository(PathBuf),
     /// A folder with no git, by the package it builds, where no one group's checkouts build a
     /// package of that name.
     Package(String),
     /// None of those: a folder with no git and no package, which is no scratch folder, or whose
-    /// session started where no one project holds.
+    /// session started where no one project holds. A scratch folder whose git names no remote
+    /// counts as one with no git.
     Other,
 }
 

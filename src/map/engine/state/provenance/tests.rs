@@ -433,3 +433,37 @@ fn a_scratch_folder_whose_one_clone_cannot_be_read_joins_its_sessions_checkout_a
         "and says what it could not read"
     );
 }
+
+#[test]
+fn a_scratch_folder_that_is_a_repository_with_no_remote_joins_its_sessions_checkout() {
+    let fixture = TempDir::new("engine-provenance-scratch-repository");
+    let (_, app, scratchpad) = alice_and_a_session_in_app(&fixture);
+    let made_there = fixture.repo(&format!("{scratchpad}/git-check"));
+    let leftover = fixture.repo(&format!("{scratchpad}/leftover"));
+    // What is left of a repository whose files were cleaned away, its `.git` without a config, as
+    // some in Daniel's scratch are (2026-11-07).
+    std::fs::remove_file(leftover.join(".git/config")).unwrap();
+    let notes = fixture.repo("home/code/notes");
+    let mut state = state_over(&fixture);
+
+    state.rediscover(None);
+
+    let sessions = Provenance {
+        group: upstream("github.com/me/app"),
+        made_from: vec![app],
+    };
+    assert_eq!(provenance_on(&state, &made_there), sessions, "made there");
+    assert_eq!(
+        provenance_on(&state, &leftover),
+        sessions,
+        "left over there"
+    );
+    assert_eq!(
+        provenance_on(&state, &notes),
+        Provenance {
+            group: GroupKey::LocalRepository(notes.clone()),
+            made_from: vec![],
+        },
+        "a repository at home is a project of its own"
+    );
+}

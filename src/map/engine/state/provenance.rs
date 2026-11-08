@@ -1,10 +1,12 @@
 //! Where each project on the map came from (see `Provenance`). Each project's own files are read
 //! with it, a checkout's git files for its lineage and the packages it builds, a folder's manifests
-//! for its package (`Origin`), and a scratch folder with no git of its own takes the lineage of the
-//! one checkout directly inside it; then the map as a whole decides what they alone cannot. In
-//! order, a project's group is keyed by:
+//! for its package (`Origin`); then the map as a whole decides what they alone cannot. In a
+//! session's scratch only a chain of origins that ends at a remote counts, a scratch folder's own
+//! or that of the one checkout directly inside it, and a scratch folder with neither is taken for
+//! one with no git (see `scan::lineage_of_scratch_folder`). In order, a project's group is keyed by:
 //!   - the remote its checkout's chain of origins ends at;
-//!   - for a repository with no remote anywhere in that chain, the folder at the chain's root;
+//!   - outside the scratch, for a repository with no remote anywhere in that chain, the folder at
+//!     the chain's root, as a repository kept at home is a project of its own;
 //!   - for a folder with no git, the package it builds: in the group of the checkouts that build a
 //!     package of that name when they all stand in one, else in a group of the package's own;
 //!   - for a scratch folder with none of those, the group of the checkout its session started in,
@@ -35,8 +37,9 @@ pub(super) enum Origin {
         lineage: Lineage,
         builds: Vec<String>,
     },
-    /// A folder with no git: the package it builds, when it builds one and roots no workspace. A
-    /// folder Sutra cannot read says nothing, and is taken for one with neither.
+    /// A folder with no git, or a scratch folder whose git names no remote: the package it builds,
+    /// when it builds one and roots no workspace. A folder Sutra cannot read says nothing, and is
+    /// taken for one with neither.
     Folder { package: Option<String> },
 }
 
@@ -77,8 +80,9 @@ impl Origin {
         Origin::of_lineage_or_package(folder, lineage, unread)
     }
 
-    /// Where `folder`, a session's scratch folder, came from: it may be a checkout git made, a
-    /// folder holding one alone (see `scan::lineage_of_scratch_folder`), or a folder with no git.
+    /// Where `folder`, a session's scratch folder, came from: a checkout when its chain of origins,
+    /// or that of the one checkout it holds, ends at a remote (see `scan::lineage_of_scratch_folder`),
+    /// and otherwise a folder with no git.
     pub(super) fn of_scratch_folder(
         folder: &Path,
         access: FolderAccess,
