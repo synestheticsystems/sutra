@@ -217,6 +217,54 @@ fn a_chain_stops_where_sutra_may_not_follow_without_reading_there() {
 }
 
 #[test]
+fn a_worktree_of_a_repository_where_sutra_may_not_follow_stops_its_chain_without_reading_there() {
+    let fixture = TempDir::new("origin-kept-out-worktree");
+    let private = cloned_from_host(&fixture, "Desktop/app", "https://github.com/me/app");
+    let add_worktree = |folder: &Path| {
+        let branch = folder.file_name().unwrap().to_str().unwrap();
+        let folder = folder.to_str().unwrap();
+        git(&private, &["worktree", "add", "-q", "-b", branch, folder]);
+    };
+    let top = fixture.path("scratch/top");
+    add_worktree(&top);
+    add_worktree(&fixture.path("scratch/task/held"));
+    git(
+        fixture.root(),
+        &["clone", "-q", top.to_str().unwrap(), "scratch/copy"],
+    );
+    // Sealed, so a read in it would fail and say so.
+    fixture.restrict(&private.join(".git"), 0o000);
+    let desktop = fixture.path("Desktop");
+    let outside_desktop = |path: &Path| !path.starts_with(&desktop);
+    let ends_at = |made_from: Vec<PathBuf>| Lineage {
+        made_from,
+        remote: None,
+    };
+
+    assert_eq!(
+        lineage_of_folder(&top, &outside_desktop),
+        (Some(ends_at(vec![private.clone()])), vec![]),
+        "a worktree of it"
+    );
+    assert_eq!(
+        lineage_of_scratch_folder(&top, &outside_desktop),
+        (None, vec![]),
+        "a scratch folder that is one, its chain ending at no remote"
+    );
+    assert_eq!(
+        lineage_of_scratch_folder(&fixture.path("scratch/task"), &outside_desktop),
+        (None, vec![]),
+        "a scratch folder holding one"
+    );
+    let copy = repo_info(&fixture.path("scratch/copy")).expect("a worktree");
+    assert_eq!(
+        lineage(&copy, &outside_desktop),
+        (ends_at(vec![top, private]), vec![]),
+        "a clone of one"
+    );
+}
+
+#[test]
 fn a_chain_through_a_repository_that_cannot_be_read_names_it_among_the_failures() {
     let fixture = TempDir::new("origin-sealed");
     let sealed = cloned_from_host(&fixture, "sealed/app", "https://github.com/me/app");

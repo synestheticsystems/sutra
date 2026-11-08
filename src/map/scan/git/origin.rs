@@ -5,8 +5,9 @@
 //! worktree or a bare repository, until a remote names a host. A bare repository with no remote,
 //! as Cargo's git cache keeps one, came from what it last fetched. In a session's scratch only a
 //! chain that ends at a remote counts, and a scratch folder whose own does not goes by the one
-//! checkout directly inside it. Only files and folders are read: no git runs, and nothing is
-//! written.
+//! checkout directly inside it. Only files and folders are read, none where Sutra may not follow,
+//! not even a linked worktree's admin folder there: a chain ends at what lies there, unread. No git
+//! runs, and nothing is written.
 
 use std::collections::HashSet;
 use std::fs;
@@ -55,7 +56,8 @@ pub fn lineage_of_folder(
     folder: &Path,
     may_follow: &(dyn Fn(&Path) -> bool + Sync),
 ) -> (Option<Lineage>, Vec<Failure>) {
-    lineage_of_checkout(folder, Repository::checked_out_at(folder), may_follow)
+    let checked_out = Repository::checked_out_at(folder, may_follow);
+    lineage_of_checkout(folder, checked_out, may_follow)
 }
 
 /// The lineage of `folder`, a session's scratch folder, by which the list groups its card: its own
@@ -71,7 +73,7 @@ pub fn lineage_of_scratch_folder(
     folder: &Path,
     may_follow: &(dyn Fn(&Path) -> bool + Sync),
 ) -> (Option<Lineage>, Vec<Failure>) {
-    let (own, mut failures) = match Repository::checked_out_at(folder) {
+    let (own, mut failures) = match Repository::checked_out_at(folder, may_follow) {
         // A `.git` that could not be read is git all the same, so no checkout inside speaks for it.
         Err(err) => return (None, vec![(folder.join(".git"), err.kind())]),
         checked_out => lineage_of_checkout(folder, checked_out, may_follow),
@@ -162,7 +164,8 @@ fn holds_git(entry: &fs::DirEntry) -> io::Result<bool> {
 }
 
 /// The lineage of a repository whose shared git dir is `common_dir`, made from `made_from` so far:
-/// the folder its `origin` names, and on to what that one was made from.
+/// the folder its `origin` names, and on to what that one was made from. A shared git dir where
+/// Sutra may not follow is not read, and the chain ends at it.
 fn follow(
     mut common_dir: PathBuf,
     mut made_from: Vec<PathBuf>,
@@ -171,6 +174,9 @@ fn follow(
     let mut failures = Vec::new();
     let mut followed = HashSet::from([common_dir.clone()]);
     let remote = loop {
+        if !may_follow(&common_dir) {
+            break None;
+        }
         let config = common_dir.join("config");
         let url = match fs::read_to_string(&config) {
             Ok(text) => origin_url(&text),
@@ -199,7 +205,7 @@ fn follow(
             made_from.push(path);
             break None;
         }
-        match Repository::named_by_remote(&path) {
+        match Repository::named_by_remote(&path, may_follow) {
             Ok(repository) => {
                 if followed.len() == LONGEST_CHAIN
                     || !followed.insert(repository.common_dir.clone())
@@ -227,20 +233,35 @@ struct Repository {
     /// The checkout or bare repository: a worktree's folder, or a bare repository's own.
     folder: PathBuf,
     /// When `folder` is a linked worktree, its repository's main worktree, or the bare repository
-    /// it was added to, which it was made from in turn.
+    /// it was added to, which it was made from in turn; and when its git dir lies where Sutra may
+    /// not follow, the repository that git dir belongs to, unread, where its chain ends.
     main: Option<PathBuf>,
     /// The git dir the repository's worktrees share, whose `config` names its own origin.
     common_dir: PathBuf,
 }
 
 impl Repository {
-    /// The repository `folder` checks out, by its `.git`: `None` when it has none.
-    fn checked_out_at(folder: &Path) -> io::Result<Option<Repository>> {
+    /// The repository `folder` checks out, by its `.git`: `None` when it has none. A git dir its
+    /// `.git` file names where Sutra may not follow is not touched, not even to read a linked
+    /// worktree's `commondir`, as a read there could raise the privacy prompt: the repository is
+    /// told from the path alone (see `common_dir_by_layout`), and the chain ends at it.
+    fn checked_out_at(
+        folder: &Path,
+        may_follow: &(dyn Fn(&Path) -> bool + Sync),
+    ) -> io::Result<Option<Repository>> {
         let git_dir = match git_dir_of(folder) {
             Ok(git_dir) => git_dir,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
         };
+        if !may_follow(&git_dir) {
+            let common_dir = common_dir_by_layout(&git_dir);
+            return Ok(Some(Repository {
+                folder: fs::canonicalize(folder)?,
+                main: Some(repository_folder(&common_dir).to_path_buf()),
+                common_dir,
+            }));
+        }
         let linked = linked_common_dir(&git_dir)?;
         let main = linked
             .as_deref()
@@ -256,9 +277,12 @@ impl Repository {
 
     /// The repository at `path`, which a remote names: a checkout, or a git dir itself, as a bare
     /// repository is, or a worktree's `.git`.
-    fn named_by_remote(path: &Path) -> io::Result<Repository> {
+    fn named_by_remote(
+        path: &Path,
+        may_follow: &(dyn Fn(&Path) -> bool + Sync),
+    ) -> io::Result<Repository> {
         let path = fs::canonicalize(path)?;
-        if let Some(checkout) = Repository::checked_out_at(&path)? {
+        if let Some(checkout) = Repository::checked_out_at(&path, may_follow)? {
             return Ok(checkout);
         }
         // Every git dir holds a `HEAD`; a folder without one is no repository.
@@ -269,6 +293,19 @@ impl Repository {
             common_dir: path,
         })
     }
+}
+
+/// The git dir a repository's worktrees share, told from the path of `git_dir`, one of its git dirs
+/// Sutra may not read: git keeps a linked worktree's in the shared one, at
+/// `<common dir>/worktrees/<name>`, and any other git dir is shared already.
+fn common_dir_by_layout(git_dir: &Path) -> PathBuf {
+    let worktrees = git_dir
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"));
+    worktrees
+        .and_then(Path::parent)
+        .unwrap_or(git_dir)
+        .to_path_buf()
 }
 
 /// The folder the repository whose shared git dir is `common_dir` goes by, as `RepoInfo::folder`
