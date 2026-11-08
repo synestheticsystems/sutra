@@ -1,9 +1,10 @@
 import os
 
 /// A stand-in for macOS's services that opens, copies and changes nothing, so no click in a window
-/// drawn from invented contents reaches the Mac it runs on. Its Finder is macOS's own, so a card's
-/// button for opening its folder draws as it does in the app, but it knows no editors: which
-/// editors a Mac has is that Mac's own business. It logs each service it declines.
+/// drawn from invented contents reaches the Mac it runs on. Its Finder and Terminal are macOS's
+/// own, so a card's buttons for opening its folder draw as they do in the app, but it knows no
+/// editors and no other terminals: which a Mac has is that Mac's own business. It logs each
+/// service it declines.
 public struct NativeStandIn: NativeServices {
     private nonisolated static let log = Logger(
         subsystem: "systems.synesthetic.sutra",
@@ -44,6 +45,11 @@ public struct NativeStandIn: NativeServices {
 
     public var editors: [Native.FolderApp] {
         []
+    }
+
+    /// Terminal alone, which macOS's own list starts with.
+    public var terminals: [Native.FolderApp] {
+        Array(Native().terminals.prefix(1))
     }
 
     public var opensAtLogin: Bool {

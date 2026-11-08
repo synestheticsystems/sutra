@@ -34,6 +34,10 @@ public protocol NativeServices {
     /// The editors on this Mac that open a folder as a project, in the order Settings lists them.
     var editors: [Native.FolderApp] { get }
 
+    /// The terminals on this Mac that open a window or tab whose shell starts in a folder, in the
+    /// order Settings lists them: Terminal first.
+    var terminals: [Native.FolderApp] { get }
+
     /// Whether Sutra opens when the user logs in.
     var opensAtLogin: Bool { get }
 

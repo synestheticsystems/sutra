@@ -47,6 +47,7 @@ struct DashboardModelTests {
         func open(_ folder: String, in app: Native.FolderApp) { asked.append("open \(folder)") }
         var finder: Native.FolderApp? { nil }
         var editors: [Native.FolderApp] { [] }
+        var terminals: [Native.FolderApp] { [] }
         var opensAtLogin: Bool { false }
         func setOpensAtLogin(_ open: Bool) -> Bool { false }
     }

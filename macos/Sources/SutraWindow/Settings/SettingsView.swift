@@ -1,17 +1,18 @@
 import SutraCore
 import SwiftUI
 
-/// The Settings window. The window keeps two settings itself: whether Sutra opens at login, which
-/// macOS keeps for it, and the editor a card's folder opens in. The core keeps the rest: how much
-/// free space Sutra keeps by cleaning by itself, and which of the folders macOS guards it watches.
-/// Each of the core's controls sends the user's choice to the core and shows what the core holds,
-/// so a choice the core asks about first shows only once the user agrees; the question shows here,
-/// over this window.
+/// The Settings window. The window keeps three settings itself: whether Sutra opens at login, which
+/// macOS keeps for it, and the editor and the terminal a card's folder opens in. The core keeps the
+/// rest: how much free space Sutra keeps by cleaning by itself, and which of the folders macOS
+/// guards it watches. Each of the core's controls sends the user's choice to the core and shows
+/// what the core holds, so a choice the core asks about first shows only once the user agrees; the
+/// question shows here, over this window.
 public struct SettingsView: View {
     private let dashboard: DashboardModel
 
     @Environment(\.controlActiveState) private var activeState
     @AppStorage(Native.editorChoiceKey) private var chosenEditor = ""
+    @AppStorage(Native.terminalChoiceKey) private var chosenTerminal = ""
     @State private var opensAtLogin: Bool
     /// Flipped with each choice sent, which draws the controls again from what the core holds. A
     /// pop-up or a switch shows the user's choice as soon as it is made, and would go on showing it
@@ -37,6 +38,16 @@ public struct SettingsView: View {
                 )) {
                     ForEach(dashboard.native.editors, id: \.bundleIdentifier) { editor in
                         Text(editor.name).tag(editor.bundleIdentifier)
+                    }
+                }
+            }
+            if !dashboard.native.terminals.isEmpty {
+                Picker("Terminal", selection: Binding(
+                    get: { dashboard.native.terminal(chosen: chosenTerminal)?.bundleIdentifier ?? "" },
+                    set: { chosenTerminal = $0 }
+                )) {
+                    ForEach(dashboard.native.terminals, id: \.bundleIdentifier) { terminal in
+                        Text(terminal.name).tag(terminal.bundleIdentifier)
                     }
                 }
             }
