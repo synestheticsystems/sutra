@@ -256,7 +256,15 @@ impl Cleaning {
         let env = CargoEnv::of_this_process(home);
         let preparing = self.threads.run(
             "sutra-clean-prepare",
-            move || clean::prepare_idle(&map, now, OFFER_QUIET_AT_LEAST, &being_cleaned, &env),
+            move || {
+                clean::prepare_idle(
+                    &map,
+                    now,
+                    |_| Some(OFFER_QUIET_AT_LEAST),
+                    &being_cleaned,
+                    &env,
+                )
+            },
             Report::IdlePrepared,
         );
         if let Err(err) = preparing {
@@ -771,6 +779,7 @@ mod tests {
             clicked: target.clone(),
             project_name: "app".to_string(),
             project_path: project,
+            quiet_at_least: OFFER_QUIET_AT_LEAST,
             prepared: prepared_at(&target),
         };
         let mut cleaning = cleaning();

@@ -505,6 +505,7 @@ pub(super) mod tests {
             clicked: clicked.to_path_buf(),
             project_name: project_at(project).name,
             project_path: project.to_path_buf(),
+            quiet_at_least: OFFER_QUIET_AT_LEAST,
             prepared: prepared_of(folders),
         }
     }

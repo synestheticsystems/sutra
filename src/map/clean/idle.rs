@@ -19,6 +19,8 @@ pub struct IdleFolder<'a> {
     pub project: &'a Project,
     pub dir: &'a ArtifactDir,
     pub bytes: u64,
+    /// How long its project had to have been quiet for it to count as idle.
+    pub quiet_at_least: Duration,
 }
 
 /// Whether something is at work in `project` now: an agent, other than a job that has finished, a
@@ -65,9 +67,20 @@ pub fn can_tell_what_is_at_work(map: &Snapshot) -> bool {
         .any(|problem| problem.source.tells_what_is_at_work())
 }
 
-/// Every Cargo build folder worth cleaning in a project that is idle, longest quiet first, and the
-/// largest first among those quiet as long. None while `map` cannot say what is at work.
+/// Every Cargo build folder worth cleaning in a project that is idle, quiet for `at_least`,
+/// longest quiet first, and the largest first among those quiet as long. None while `map` cannot
+/// say what is at work.
 pub fn idle_folders(map: &Snapshot, now: SystemTime, at_least: Duration) -> Vec<IdleFolder<'_>> {
+    idle_folders_by(map, now, |_| Some(at_least))
+}
+
+/// `idle_folders`, with each project idle once quiet for as long as `quiet_at_least` says of it,
+/// and its folders left out where it says nothing.
+fn idle_folders_by(
+    map: &Snapshot,
+    now: SystemTime,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
+) -> Vec<IdleFolder<'_>> {
     if !can_tell_what_is_at_work(map) {
         return Vec::new();
     }
@@ -75,8 +88,11 @@ pub fn idle_folders(map: &Snapshot, now: SystemTime, at_least: Duration) -> Vec<
         .projects
         .iter()
         .filter(|project| project.access == FolderAccess::Readable)
-        .filter(|project| is_idle(project, now, at_least))
-        .flat_map(|project| {
+        .filter_map(|project| {
+            let at_least = quiet_at_least(project)?;
+            is_idle(project, now, at_least).then_some((project, at_least))
+        })
+        .flat_map(|(project, quiet_at_least)| {
             project
                 .artifacts
                 .iter()
@@ -87,6 +103,7 @@ pub fn idle_folders(map: &Snapshot, now: SystemTime, at_least: Duration) -> Vec<
                         project,
                         dir,
                         bytes,
+                        quiet_at_least,
                     })
                 })
         })
@@ -145,6 +162,9 @@ pub struct IdleClean {
     pub clicked: PathBuf,
     pub project_name: String,
     pub project_path: PathBuf,
+    /// How long the project had to have been quiet, as it must still have been when the clean's
+    /// turn comes (see `is_still_idle`).
+    pub quiet_at_least: Duration,
     pub prepared: Prepared,
 }
 
@@ -170,22 +190,29 @@ pub struct IdleCleans {
     pub left_out: Vec<LeftOut>,
 }
 
-/// Work out the clean of every folder idle for `at_least`, but for those already being cleaned.
+/// Work out the clean of every idle folder, each project idle once quiet for as long as
+/// `quiet_at_least` says of it, and left out where it says nothing, but for the folders already
+/// being cleaned. A sharer of a folder must have been quiet as long as the folder's own project.
+/// What every project's build deletes is read only once some folder is idle.
 pub fn prepare_idle(
     map: &Snapshot,
     now: SystemTime,
-    at_least: Duration,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
     being_cleaned: &HashSet<PathBuf>,
     env: &CargoEnv,
 ) -> IdleCleans {
-    let builds = Builds::of(map, env);
     let mut found = IdleCleans::default();
-    let idle = idle_folders(map, now, at_least);
-    let idle = idle
-        .iter()
-        .filter(|folder| !being_cleaned.contains(&folder.dir.path));
+    let idle: Vec<IdleFolder> = idle_folders_by(map, now, quiet_at_least)
+        .into_iter()
+        .filter(|folder| !being_cleaned.contains(&folder.dir.path))
+        .collect();
+    if idle.is_empty() {
+        return found;
+    }
+    let builds = Builds::of(map, env);
     for folder in idle {
         let project = folder.project;
+        let at_least = folder.quiet_at_least;
         let left_out = |why| LeftOut {
             project_name: project.name.clone(),
             why,
@@ -199,6 +226,7 @@ pub fn prepare_idle(
                         clicked: folder.dir.path.clone(),
                         project_name: project.name.clone(),
                         project_path: project.path.clone(),
+                        quiet_at_least: at_least,
                         prepared,
                     }),
                 }
@@ -495,7 +523,7 @@ mod tests {
         let found = prepare_idle(
             &map,
             now(),
-            THREE_DAYS,
+            |_| Some(THREE_DAYS),
             &being_cleaned,
             &fixture.cargo_env(),
         );
@@ -526,6 +554,64 @@ mod tests {
     }
 
     #[test]
+    fn each_project_is_idle_by_its_own_time_and_one_given_none_is_left_alone() {
+        let fixture = TempDir::new("idle-prepare-own-time");
+        let map = snapshot_of(vec![
+            idle_package(&fixture, "week"),
+            idle_package(&fixture, "fortnight"),
+            idle_package(&fixture, "never"),
+        ]);
+        let quiet_at_least = |project: &Project| match project.name.as_str() {
+            "week" => Some(Duration::from_secs(7 * DAY)),
+            "fortnight" => Some(Duration::from_secs(14 * DAY)),
+            _ => None,
+        };
+
+        let found = prepare_idle(
+            &map,
+            now(),
+            quiet_at_least,
+            &HashSet::new(),
+            &fixture.cargo_env(),
+        );
+
+        assert_eq!(cleaned_folders(&found), [fixture.path("week/target")]);
+        assert_eq!(found.cleans[0].quiet_at_least, Duration::from_secs(7 * DAY));
+        assert!(found.left_out.is_empty(), "{:?}", found.left_out);
+    }
+
+    #[test]
+    fn a_sharer_must_have_been_quiet_as_long_as_the_folders_own_project() {
+        let fixture = TempDir::new("idle-shared-own-time");
+        let (app, other) = app_and_a_package_building_in_it(&fixture);
+        let quiet_two_days = Project {
+            last_activity: Some(at((1_000 - 2) * DAY)),
+            ..other
+        };
+        let map = snapshot_of(vec![app, quiet_two_days]);
+        // The sharer's own time plays no part: `other` is given none.
+        let app_after = |days: u64| {
+            move |project: &Project| {
+                (project.name == "app").then_some(Duration::from_secs(days * DAY))
+            }
+        };
+        let env = fixture.cargo_env();
+
+        let after_a_day = prepare_idle(&map, now(), app_after(1), &HashSet::new(), &env);
+        assert_eq!(cleaned_folders(&after_a_day), [fixture.path("app/target")]);
+
+        let after_three_days = prepare_idle(&map, now(), app_after(3), &HashSet::new(), &env);
+        assert!(after_three_days.cleans.is_empty());
+        assert_eq!(
+            after_three_days.left_out,
+            [LeftOut {
+                project_name: "app".to_string(),
+                why: Why::SharedWith("other".to_string()),
+            }]
+        );
+    }
+
+    #[test]
     fn a_folder_an_idle_project_shares_is_cleaned_and_names_it() {
         let fixture = TempDir::new("idle-shared-idle");
         let (app, other) = app_and_a_package_building_in_it(&fixture);
@@ -533,7 +619,7 @@ mod tests {
         let found = prepare_idle(
             &snapshot_of(vec![app, other]),
             now(),
-            THREE_DAYS,
+            |_| Some(THREE_DAYS),
             &HashSet::new(),
             &fixture.cargo_env(),
         );
@@ -566,7 +652,7 @@ mod tests {
             prepare_idle(
                 &snapshot_of(vec![root.clone(), member.clone()]),
                 now(),
-                THREE_DAYS,
+                |_| Some(THREE_DAYS),
                 &HashSet::new(),
                 &fixture.cargo_env(),
             )
@@ -608,7 +694,7 @@ mod tests {
             prepare_idle(
                 &snapshot_of(vec![app.clone(), sealed.clone()]),
                 now(),
-                THREE_DAYS,
+                |_| Some(THREE_DAYS),
                 &HashSet::new(),
                 &fixture.cargo_env(),
             )
@@ -634,7 +720,7 @@ mod tests {
         let found = prepare_idle(
             &quiet,
             now(),
-            THREE_DAYS,
+            |_| Some(THREE_DAYS),
             &HashSet::new(),
             &fixture.cargo_env(),
         );
@@ -723,7 +809,7 @@ mod tests {
             let found = prepare_idle(
                 &snapshot_of(vec![app.clone(), sharer]),
                 now(),
-                THREE_DAYS,
+                |_| Some(THREE_DAYS),
                 &HashSet::new(),
                 &fixture.cargo_env(),
             );
@@ -784,7 +870,7 @@ mod tests {
         let env = fixture.cargo_env();
         let prepared_with = |builder: &Project| {
             let map = snapshot_of(vec![app.clone(), builder.clone()]);
-            prepare_idle(&map, now(), THREE_DAYS, &HashSet::new(), &env)
+            prepare_idle(&map, now(), |_| Some(THREE_DAYS), &HashSet::new(), &env)
         };
 
         let found = prepared_with(&live);
@@ -832,7 +918,7 @@ mod tests {
         let found = prepare_idle(
             &before,
             now(),
-            THREE_DAYS,
+            |_| Some(THREE_DAYS),
             &HashSet::new(),
             &fixture.cargo_env(),
         );

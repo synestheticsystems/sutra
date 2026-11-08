@@ -182,6 +182,7 @@ mod tests {
             clicked: PathBuf::from(target),
             project_name: name.to_string(),
             project_path: PathBuf::from(format!("/code/{name}")),
+            quiet_at_least: Duration::from_secs(3 * 24 * 60 * 60),
             prepared: crate::map::clean::Prepared::for_test(
                 plan,
                 vec![Some(usage(bytes))],
