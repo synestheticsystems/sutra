@@ -7,7 +7,7 @@ use std::time::SystemTime;
 
 use super::docker::Container;
 use super::processes::ListeningProcess;
-use super::{AgentSession, Measurement, PrivateFolder, SubagentWithParent};
+use super::{AgentSession, Measurement, PrivateFolder, Provenance, SubagentWithParent};
 use crate::model::Environment;
 
 /// How much disk a folder must hold to matter for its size alone: a project this large stays in
@@ -28,6 +28,8 @@ pub struct Project {
     /// `Some` for a scratch folder: a folder in the space where a Claude Code session keeps what it
     /// throws away.
     pub scratch: Option<ScratchSpace>,
+    /// Where it came from: the group its card stands in, and what it was made from.
+    pub provenance: Provenance,
     pub last_activity: Option<SystemTime>,
     pub activity_source: Option<ActivitySource>,
     pub agents: Vec<AgentSession>,
@@ -206,6 +208,9 @@ pub struct ScratchSpace {
     /// The last part of the folder the session started in, as Claude Code's name for that folder
     /// still shows it on the disk, as `greyorange-foundry` reads.
     pub started_in: String,
+    /// The folder the session started in, while the disk still shows all of it: the checkout a
+    /// scratch folder that nothing else places is grouped with (see `Provenance`).
+    pub started_in_folder: Option<PathBuf>,
     /// The session while it runs. It counts on the card of the folder it works in alone, and while
     /// it runs, it may build in any folder of its scratch.
     pub session: Option<AgentSession>,
@@ -347,6 +352,7 @@ mod tests {
             session_folder: PathBuf::from(session),
             session_id: "e26ca359-da00".to_string(),
             started_in: "foundry".to_string(),
+            started_in_folder: None,
             session: None,
             session_name: None,
         };
@@ -366,6 +372,7 @@ mod tests {
                 session_folder: PathBuf::from(session),
                 session_id: "e26ca359".to_string(),
                 started_in: "me".to_string(),
+                started_in_folder: None,
                 session: None,
                 session_name: None,
             }),

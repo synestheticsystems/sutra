@@ -271,6 +271,7 @@ mod tests {
                 session_folder: PathBuf::from(session),
                 session_id: "d5fa0639-441e-4722-b044-080d70c0b04f".to_string(),
                 started_in: "sk".to_string(),
+                started_in_folder: None,
                 session: running,
                 session_name: Some("Simulator review".to_string()),
             }),

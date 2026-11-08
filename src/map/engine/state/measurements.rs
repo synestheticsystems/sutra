@@ -184,7 +184,6 @@ impl State {
 
 #[cfg(test)]
 mod tests {
-    use super::super::new_project;
     use super::super::tracked::Tracked;
     use super::*;
     use crate::map::ScanOptions;
@@ -204,7 +203,8 @@ mod tests {
         let mut state = State::new(&roots, &ScanOptions::default());
         for (n, path) in paths.iter().enumerate() {
             let path = PathBuf::from(path);
-            let mut project = new_project(path.clone(), None, None, FolderAccess::Readable);
+            let mut tracked = Tracked::bare(path.clone(), FolderAccess::Readable);
+            let project = &mut tracked.project;
             // Later paths are more recently active.
             project.last_activity = Some(at(n as u64));
             project.artifacts = artifacts
@@ -213,15 +213,6 @@ mod tests {
                 .filter(|artifact| artifact.parent() == Some(&path))
                 .map(|artifact| cargo_target(artifact, Measurement::Pending))
                 .collect();
-            let tracked = Tracked {
-                project,
-                git_activity: None,
-                observed: None,
-                agent_activity: None,
-                environments: None,
-                inode: None,
-                unlisted: Vec::new(),
-            };
             state.projects.insert(path, tracked);
         }
         state.reindex();

@@ -6,6 +6,7 @@ mod containers;
 mod listening;
 mod measurements;
 mod placement;
+mod provenance;
 mod scratch;
 mod tracked;
 
@@ -14,6 +15,7 @@ use std::fs;
 use std::mem;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use rayon::prelude::*;
@@ -24,9 +26,9 @@ use crate::map::docker::{self, Container};
 use crate::map::grant::Roots;
 use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
-    ActivitySource, AgentSession, FolderAccess, KeptOutBy, Measurement, PrivateFolder, Project,
-    RepoInfo, ScanOptions, ScanStats, ScratchSpace, Snapshot, Source, SourceProblem,
-    SubagentWithParent, agents, devrunner, processes, scan,
+    ActivitySource, AgentSession, Ancestry, FolderAccess, KeptOutBy, Measurement, PrivateFolder,
+    Project, Provenance, RepoInfo, ScanOptions, ScanStats, ScratchSpace, Snapshot, Source,
+    SourceProblem, SubagentWithParent, agents, devrunner, processes, scan,
 };
 use placement::{Place, Placed};
 use scratch::earns_a_card;
@@ -50,6 +52,8 @@ pub(super) struct State {
     /// Every project the engine tracks, the scratch folders that have no card among them (see
     /// `scratch::earns_a_card`), which the snapshot leaves out.
     projects: BTreeMap<PathBuf, Tracked>,
+    /// What those projects came from, as `trace_provenance` last worked it out.
+    ancestry: Arc<Ancestry>,
     unplaced_agents: Vec<AgentSession>,
     unplaced_subagents: Vec<SubagentWithParent>,
     /// What Docker is, as its reader last found it.
@@ -89,6 +93,7 @@ impl State {
             docker_sockets: roots.docker.clone(),
             sandboxed: roots.sandboxed,
             projects: BTreeMap::new(),
+            ancestry: Arc::default(),
             unplaced_agents: Vec::new(),
             unplaced_subagents: Vec::new(),
             docker: docker::Reading::Away,
@@ -216,13 +221,15 @@ impl State {
         let discovery = scan::discover(&self.boundary);
         let mut previous = mem::take(&mut self.projects);
         let boundary = &self.boundary;
+        let reach = OriginReach::of(boundary, self.sandboxed, &self.roots);
+        let may_follow = |folder: &Path| reach.may_follow(folder);
         // Each worktree's search for build folders is metadata I/O like the walk before it.
         let mut projects: BTreeMap<PathBuf, Tracked> = scan::on_discovery_threads(|| {
             discovery
                 .worktrees
                 .into_par_iter()
                 .map(|worktree| {
-                    let tracked = Tracked::worktree(worktree, boundary);
+                    let tracked = Tracked::worktree(worktree, boundary, &may_follow);
                     (tracked.project.path.clone(), tracked)
                 })
                 .collect()
@@ -239,7 +246,7 @@ impl State {
             .into_iter()
             .filter(|(_, before)| before.project.repo.is_none() && before.project.scratch.is_none())
             .map(|(path, before)| {
-                let mut tracked = Tracked::plain(path.clone(), boundary);
+                let mut tracked = Tracked::plain(path.clone(), boundary, &may_follow);
                 tracked.carry_over(before);
                 (path, tracked)
             });
@@ -255,6 +262,7 @@ impl State {
         for tracked in self.projects.values_mut() {
             tracked.recompute_activity();
         }
+        self.trace_provenance();
         self.reindex();
         self.scan = ScanStats {
             dirs_visited: discovery.stats.dirs_visited,
@@ -269,6 +277,7 @@ impl State {
         let (changed, reshaped) = self.place_environments(observed_at);
         if reshaped {
             self.leave_build_folders_to_nested_projects();
+            self.trace_provenance();
             self.reindex();
         }
         changed
@@ -302,8 +311,10 @@ impl State {
         for (path, tracked) in &mut self.projects {
             changed |= tracked.replace_environments(by_dir.remove(path), observed_at);
         }
+        let reach = OriginReach::of(&self.boundary, self.sandboxed, &self.roots);
+        let may_follow = |folder: &Path| reach.may_follow(folder);
         for (dir, environments) in by_dir {
-            let mut tracked = Tracked::plain(dir.clone(), &self.boundary);
+            let mut tracked = Tracked::plain(dir.clone(), &self.boundary, &may_follow);
             tracked.replace_environments(Some(environments), observed_at);
             self.projects.insert(dir, tracked);
             reshaped = true;
@@ -429,10 +440,14 @@ impl State {
         earns_a_card(&tracked.project)
     }
 
-    /// Report what discovery could not read: what the last rediscovery could not, and the folders
-    /// in each scratch folder that its last search could not list. Returns whether that changed.
+    /// Report what discovery could not read: what the last rediscovery could not, the folders in
+    /// each scratch folder that its last search could not list, and the files that would have said
+    /// where a project came from. Returns whether that changed.
     fn report_unread(&mut self) -> bool {
-        let unlisted = self.projects.values().flat_map(|tracked| &tracked.unlisted);
+        let unlisted = self
+            .projects
+            .values()
+            .flat_map(|tracked| tracked.unlisted.iter().chain(&tracked.origin_unread));
         let searches = SourceProblem::per_kind(Source::Scan, unlisted.cloned().collect());
         let unread = [self.unread_by_rediscovery.clone(), searches].concat();
         self.report_problems(&[Source::Scan], unread)
@@ -480,6 +495,7 @@ impl State {
             unplaced_subagents: self.unplaced_subagents.clone(),
             docker: self.docker_on_the_map(),
             problems: self.problems.clone(),
+            ancestry: Arc::clone(&self.ancestry),
             scan: self.scan.clone(),
             generated_at: SystemTime::now(),
         }
@@ -492,12 +508,14 @@ impl State {
 }
 
 /// A project at `path`: a worktree of `repo`, a session's scratch folder (`scratch`), or a plain
-/// folder when neither, with nothing found or measured in it yet (see `Tracked::searched`).
+/// folder when neither, with nothing found or measured in it yet (see `Tracked::searched`), come
+/// from where its own files say, `provenance`, until the map traces it among the rest.
 fn new_project(
     path: PathBuf,
     repo: Option<RepoInfo>,
     scratch: Option<ScratchSpace>,
     access: FolderAccess,
+    provenance: Provenance,
 ) -> Project {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
@@ -508,6 +526,7 @@ fn new_project(
         name,
         repo,
         scratch,
+        provenance,
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),
@@ -549,6 +568,33 @@ fn holder<'a>(projects: &'a BTreeMap<PathBuf, Tracked>, folder: &Path) -> Option
     held.next().map(|(path, _)| path.as_path())
 }
 
+/// Where Sutra may follow a checkout's origin (see `provenance::Origin`): wherever the boundary
+/// lets it read, and in the store edition only inside the folder granted, as the sandbox lets it
+/// read nothing else and a read there would only fail.
+#[derive(Clone, Copy)]
+struct OriginReach<'a> {
+    boundary: &'a Boundary,
+    /// In the store edition, the folder granted.
+    grant: Option<&'a [PathBuf]>,
+}
+
+impl<'a> OriginReach<'a> {
+    fn of(boundary: &'a Boundary, sandboxed: bool, roots: &'a [PathBuf]) -> OriginReach<'a> {
+        OriginReach {
+            boundary,
+            grant: sandboxed.then_some(roots),
+        }
+    }
+
+    /// Whether Sutra may follow an origin into `folder`.
+    fn may_follow(self, folder: &Path) -> bool {
+        let granted = self
+            .grant
+            .is_none_or(|roots| roots.iter().any(|root| folder.starts_with(root)));
+        self.boundary.may_read(folder) && granted
+    }
+}
+
 fn canonical(path: &Path) -> PathBuf {
     // A root that cannot be resolved (outside the grant) is kept as given; discovery then
     // counts it as unreadable.
@@ -567,15 +613,7 @@ mod tests {
     use crate::map::test_support::TempDir;
 
     fn tracked(path: &str) -> Tracked {
-        Tracked {
-            project: new_project(PathBuf::from(path), None, None, FolderAccess::Missing),
-            git_activity: None,
-            observed: None,
-            agent_activity: None,
-            environments: None,
-            inode: None,
-            unlisted: Vec::new(),
-        }
+        Tracked::bare(PathBuf::from(path), FolderAccess::Missing)
     }
 
     #[test]
@@ -864,6 +902,7 @@ mod tests {
                 session_folder: PathBuf::from(session),
                 session_id: "e26ca359".to_string(),
                 started_in: "app".to_string(),
+                started_in_folder: None,
                 session: None,
                 session_name: None,
             });

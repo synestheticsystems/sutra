@@ -9,7 +9,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::clean::CargoEnv;
@@ -17,8 +17,8 @@ use super::docker::Container;
 use super::processes::ListeningProcess;
 use super::scan::Boundary;
 use super::{
-    AgentSession, AgentStatus, ArtifactDir, ArtifactKind, DirUsage, FolderAccess, Harness,
-    Measurement, Project, ScanOptions, ScanStats, Snapshot, Subagent,
+    AgentSession, AgentStatus, ArtifactDir, ArtifactKind, DirUsage, FolderAccess, GroupKey,
+    Harness, Measurement, Project, Provenance, ScanOptions, ScanStats, Snapshot, Subagent,
 };
 use crate::model::{EnvSources, Environment};
 
@@ -278,6 +278,10 @@ pub(crate) fn project_at(path: impl Into<PathBuf>) -> Project {
         path,
         repo: None,
         scratch: None,
+        provenance: Provenance {
+            group: GroupKey::Other,
+            made_from: Vec::new(),
+        },
         last_activity: None,
         activity_source: None,
         agents: Vec::new(),
@@ -387,6 +391,7 @@ pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
         unplaced_subagents: Vec::new(),
         docker: None,
         problems: Vec::new(),
+        ancestry: Arc::default(),
         scan: ScanStats::default(),
         generated_at: UNIX_EPOCH,
     }

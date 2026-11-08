@@ -63,7 +63,7 @@ mod tests {
     /// The map's projects at `paths`, none of them on disk.
     fn projects(paths: &[&Path]) -> BTreeMap<PathBuf, Tracked> {
         let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
-        let tracked = |path: &&Path| Tracked::plain(path.to_path_buf(), &boundary);
+        let tracked = |path: &&Path| Tracked::plain(path.to_path_buf(), &boundary, &|_| true);
         let paths = paths.iter();
         paths
             .map(|path| (path.to_path_buf(), tracked(path)))

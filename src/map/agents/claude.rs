@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-pub(crate) use self::session_files::working_directory_name;
+pub(crate) use self::session_files::{WorkingDirectory, working_directory};
 use self::session_files::{session_folder, session_transcript};
 pub use self::session_model::SessionModels;
 pub(crate) use self::session_name::recorded_session_name;

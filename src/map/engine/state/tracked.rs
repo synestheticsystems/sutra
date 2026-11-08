@@ -3,11 +3,12 @@
 
 use std::io;
 use std::mem;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::artifacts::{artifact_dirs, keep_measurements};
 use super::new_project;
+use super::provenance::Origin;
 use crate::map::devrunner::FolderEnvironments;
 use crate::map::scan::{self, Boundary, ScratchFolder, Worktree};
 use crate::map::{ActivitySource, FolderAccess, Project, ScratchSpace};
@@ -35,23 +36,41 @@ pub(super) struct Tracked {
     /// For a scratch folder, the folders in it that its last search for build folders could not
     /// list, and why, where a build folder may have gone unfound (see `scratch`).
     pub(super) unlisted: Vec<(PathBuf, io::ErrorKind)>,
+    /// What its own files say of where it came from, read with it (see `provenance`).
+    pub(super) origin: Origin,
+    /// The files that reading `origin` could not read, and why.
+    pub(super) origin_unread: Vec<(PathBuf, io::ErrorKind)>,
 }
 
+/// Whether Sutra may follow a checkout's origin to a folder (see `State::origin_reach`).
+pub(super) type MayFollow<'a> = &'a (dyn Fn(&Path) -> bool + Sync);
+
 impl Tracked {
-    pub(super) fn worktree(worktree: Worktree, boundary: &Boundary) -> Tracked {
+    pub(super) fn worktree(
+        worktree: Worktree,
+        boundary: &Boundary,
+        may_follow: MayFollow,
+    ) -> Tracked {
         let git_activity = scan::git_activity(&worktree.repo);
-        let project = new_project(worktree.path, Some(worktree.repo), None, worktree.access);
+        let (path, access) = (worktree.path, worktree.access);
+        let (origin, origin_unread) =
+            Origin::of_worktree(&path, &worktree.repo, access, may_follow);
+        let provenance = origin.own_provenance(&path);
+        let project = new_project(path, Some(worktree.repo), None, access, provenance);
         Tracked {
             git_activity,
-            ..Tracked::searched(project, None, boundary)
+            ..Tracked::searched(project, None, (origin, origin_unread), boundary)
         }
     }
 
     /// A folder only environments name. Like a registered worktree, one that is gone, outside the
     /// grant or in a private folder Sutra stays out of stays on the map, unreadable.
-    pub(super) fn plain(folder: PathBuf, boundary: &Boundary) -> Tracked {
+    pub(super) fn plain(folder: PathBuf, boundary: &Boundary, may_follow: MayFollow) -> Tracked {
         let access = scan::folder_access(&folder, boundary);
-        Tracked::searched(new_project(folder, None, None, access), None, boundary)
+        let (origin, origin_unread) = Origin::of_folder(&folder, access, may_follow);
+        let provenance = origin.own_provenance(&folder);
+        let project = new_project(folder, None, None, access, provenance);
+        Tracked::searched(project, None, (origin, origin_unread), boundary)
     }
 
     /// The scratch folder `listed` in `space`, its build folders found anywhere in it, itself
@@ -60,16 +79,29 @@ impl Tracked {
         listed: ScratchFolder,
         space: ScratchSpace,
         boundary: &Boundary,
+        may_follow: MayFollow,
     ) -> Tracked {
         let access = scan::folder_access(&listed.path, boundary);
-        let project = new_project(listed.path, None, Some(space), access);
-        Tracked::searched(project, Some(listed.inode), boundary)
+        let (origin, origin_unread) = Origin::of_folder(&listed.path, access, may_follow);
+        let provenance = origin.own_provenance(&listed.path);
+        let project = new_project(listed.path, None, Some(space), access, provenance);
+        Tracked::searched(
+            project,
+            Some(listed.inode),
+            (origin, origin_unread),
+            boundary,
+        )
     }
 
-    /// `project`, new to the map, its build folders found where its access lets Sutra look. An
-    /// unreadable folder is not entered: it may be a private folder whose first read raises the
-    /// privacy prompt.
-    fn searched(mut project: Project, inode: Option<u64>, boundary: &Boundary) -> Tracked {
+    /// `project`, new to the map, its build folders found where its access lets Sutra look, with
+    /// where it came from as its own files tell, `origin`. An unreadable folder is not entered: it
+    /// may be a private folder whose first read raises the privacy prompt.
+    fn searched(
+        mut project: Project,
+        inode: Option<u64>,
+        (origin, origin_unread): (Origin, Vec<(PathBuf, io::ErrorKind)>),
+        boundary: &Boundary,
+    ) -> Tracked {
         let (artifacts, unlisted) = match project.access {
             FolderAccess::Readable => artifact_dirs(&project, boundary),
             _ => (Vec::new(), Vec::new()),
@@ -83,7 +115,18 @@ impl Tracked {
             environments: None,
             inode,
             unlisted,
+            origin,
+            origin_unread,
         }
+    }
+
+    /// Read where the folder came from again, as a scratch folder kept on the map may have become
+    /// a clone since, or ceased to be one.
+    pub(super) fn read_origin_again(&mut self, may_follow: MayFollow) {
+        let project = &self.project;
+        let (origin, unread) = Origin::of_folder(&project.path, project.access, may_follow);
+        self.origin = origin;
+        self.origin_unread = unread;
     }
 
     /// Keep what discovery cannot see from the project as it was before the rediscovery: the
@@ -201,26 +244,34 @@ fn environment_started(env: &Environment) -> Option<SystemTime> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::map::test_support::{agent_session, at, environment_at, subagent_at_work};
-    use crate::map::{AgentSession, AgentStatus, Subagent, SubagentWithParent};
-
-    fn tracked() -> Tracked {
+impl Tracked {
+    /// The folder at `path`, with `access`, as the map tracks a folder it has read nothing of: no
+    /// git or package to say where it came from, no activity, environment or build folder.
+    pub(super) fn bare(path: PathBuf, access: FolderAccess) -> Tracked {
+        let origin = Origin::Folder { package: None };
+        let provenance = origin.own_provenance(&path);
         Tracked {
-            project: new_project(
-                PathBuf::from("/code/app"),
-                None,
-                None,
-                FolderAccess::Missing,
-            ),
+            project: new_project(path, None, None, access, provenance),
             git_activity: None,
             observed: None,
             agent_activity: None,
             environments: None,
             inode: None,
             unlisted: Vec::new(),
+            origin,
+            origin_unread: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::map::test_support::{agent_session, at, environment_at, subagent_at_work};
+    use crate::map::{AgentSession, AgentStatus, Subagent, SubagentWithParent};
+
+    fn tracked() -> Tracked {
+        Tracked::bare(PathBuf::from("/code/app"), FolderAccess::Missing)
     }
 
     fn agent(last_activity: u64) -> AgentSession {

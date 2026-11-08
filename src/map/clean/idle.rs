@@ -364,6 +364,7 @@ mod tests {
                 session_folder: PathBuf::from("/private/tmp/claude-501/-code-app").join(name),
                 session_id: name.to_string(),
                 started_in: "app".to_string(),
+                started_in_folder: None,
                 session,
                 session_name: None,
             }),
@@ -759,6 +760,7 @@ mod tests {
             session_folder,
             session_id: "e26ca359".to_string(),
             started_in: "foundry".to_string(),
+            started_in_folder: None,
             session,
             session_name: None,
         };

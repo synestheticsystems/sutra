@@ -69,12 +69,23 @@ pub(super) fn folder_name(cwd: &str) -> String {
         .collect()
 }
 
-/// The name of the working directory Claude Code derived the folder name `derived` from (see
-/// `folder_name`), as far as the disk still shows it where Sutra may look. Several paths derive one
-/// name, as every character but a letter or a digit becomes `-`, so each step down from `/` takes
-/// the longest folder whose name derives the next part. Where none does, because the directory has
-/// gone since or lies where Sutra may not look, the rest of `derived` is the best name left.
-pub(crate) fn working_directory_name(derived: &str, boundary: &Boundary) -> String {
+/// The working directory Claude Code derived a folder name from (see `folder_name`), as far as the
+/// disk still shows it where Sutra may look.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkingDirectory {
+    /// Its last part, as `greyorange-foundry` reads; past the folders still there, the rest of the
+    /// derived name, the best name left.
+    pub(crate) name: String,
+    /// The directory itself, when the disk still shows all of it.
+    pub(crate) folder: Option<PathBuf>,
+}
+
+/// The working directory Claude Code derived the folder name `derived` from. Several paths derive
+/// one name, as every character but a letter or a digit becomes `-`, so each step down from `/`
+/// takes the longest folder whose name derives the next part. Where none does, because the
+/// directory has gone since or lies where Sutra may not look, the directory is not known, and the
+/// rest of `derived` is the best name left for it.
+pub(crate) fn working_directory(derived: &str, boundary: &Boundary) -> WorkingDirectory {
     let mut folder = PathBuf::from("/");
     let mut rest = derived;
     while let Some(below) = rest.strip_prefix('-') {
@@ -87,15 +98,22 @@ pub(crate) fn working_directory_name(derived: &str, boundary: &Boundary) -> Stri
         folder.push(name);
         rest = after;
     }
-    let name = match rest {
-        "" => folder
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned()),
-        rest => Some(rest.trim_start_matches('-').to_string()),
+    let (name, folder) = match rest {
+        "" => (
+            folder
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+            Some(folder),
+        ),
+        rest => (Some(rest.trim_start_matches('-').to_string()), None),
     };
-    // Only the root folder has no name of its own.
-    name.filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "/".to_string())
+    WorkingDirectory {
+        // Only the root folder has no name of its own.
+        name: name
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "/".to_string()),
+        folder,
+    }
 }
 
 /// The folder in `folder` with the longest name that derives the start of `rest` up to a `-` or its
@@ -143,10 +161,30 @@ mod tests {
         }
     }
 
+    /// The working directory whose derived folder name is that of `cwd`.
+    fn read_back(fixture: &TempDir, cwd: &Path) -> WorkingDirectory {
+        let boundary = fixture.boundary(&ScanOptions::default());
+        working_directory(&folder_name(cwd.to_str().unwrap()), &boundary)
+    }
+
     /// The name of the working directory whose derived folder name is that of `cwd`.
     fn named_back(fixture: &TempDir, cwd: &Path) -> String {
-        let boundary = fixture.boundary(&ScanOptions::default());
-        working_directory_name(&folder_name(cwd.to_str().unwrap()), &boundary)
+        read_back(fixture, cwd).name
+    }
+
+    #[test]
+    fn a_working_directory_still_there_whole_is_known_by_its_folder_and_one_gone_is_not() {
+        let fixture = TempDir::new("session-files-folder-back");
+        let foundry = fixture.dir("vt/greyorange/greyorange-foundry");
+        assert_eq!(read_back(&fixture, &foundry).folder, Some(foundry.clone()));
+        let gone = foundry.join("wt");
+        assert_eq!(
+            read_back(&fixture, &gone),
+            WorkingDirectory {
+                name: "wt".to_string(),
+                folder: None
+            }
+        );
     }
 
     #[test]

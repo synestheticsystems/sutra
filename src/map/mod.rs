@@ -16,6 +16,9 @@
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
+//! Each row also says where the project came from (see `provenance`): the upstream its group on the
+//! list is keyed by, and the projects it was made from.
+//!
 //! The same code serves both editions. The direct build scans the real home folder and Claude
 //! Code's scratch root; the Mac App Store build scans the folder the user granted through an open
 //! panel (see `grant`). Inside the sandbox `$HOME` points at the app's container, so every path
@@ -30,6 +33,7 @@ pub mod engine;
 pub mod grant;
 pub mod processes;
 mod project;
+mod provenance;
 pub mod scan;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -37,6 +41,7 @@ pub(crate) mod test_support;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +55,7 @@ pub use project::{
     ActivitySource, ArtifactDir, ArtifactKind, FolderAccess, FolderSize, KeptOutBy,
     LARGE_FOLDER_BYTES, Project, RepoInfo, ScratchSpace,
 };
+pub use provenance::{Ancestry, GroupKey, Provenance};
 
 /// A home folder macOS guards with a privacy prompt the first time an app reads anything inside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -119,6 +125,10 @@ pub struct Snapshot {
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.
     pub problems: Vec<SourceProblem>,
+    /// What every project the engine tracks came from, those without a card among them, as the
+    /// projects' own provenance says it. Worked out as projects join or leave the map, and shared
+    /// by every snapshot until then.
+    pub ancestry: Arc<Ancestry>,
     pub scan: ScanStats,
     pub generated_at: SystemTime,
 }
@@ -216,8 +226,8 @@ impl SourceProblem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Source {
     /// Discovery: a folder the walk could not list, a worktree whose git state it could not read,
-    /// or the transcript of a session that left scratch behind, which names the session once it
-    /// has ended.
+    /// the transcript of a session that left scratch behind, which names the session once it has
+    /// ended, or a file that would have said where a project came from.
     Scan,
     /// The dev-runner registry, `~/.dev-runner/`, which could not be listed at all.
     Registry,

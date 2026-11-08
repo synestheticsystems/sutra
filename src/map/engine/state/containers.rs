@@ -113,7 +113,7 @@ mod tests {
         let mut state = State::new(&roots, &ScanOptions::default());
         let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
         for path in paths {
-            let tracked = Tracked::plain(PathBuf::from(path), &boundary);
+            let tracked = Tracked::plain(PathBuf::from(path), &boundary, &|_| true);
             state.projects.insert(PathBuf::from(path), tracked);
         }
         state
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(names(&state.snapshot().docker.unwrap().containers), ["web"]);
 
         let boundary = Boundary::new(&[], Path::new("/"), &ScanOptions::default());
-        let site = Tracked::plain(PathBuf::from("/code/site"), &boundary);
+        let site = Tracked::plain(PathBuf::from("/code/site"), &boundary, &|_| true);
         state.projects.insert(PathBuf::from("/code/site"), site);
 
         assert!(state.place_containers());

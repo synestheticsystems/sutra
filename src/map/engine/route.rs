@@ -313,6 +313,7 @@ mod tests {
                 session_folder: p(SESSION_FOLDER),
                 session_id: "e26ca359".to_string(),
                 started_in: "app".to_string(),
+                started_in_folder: None,
                 session: None,
                 session_name: None,
             }),

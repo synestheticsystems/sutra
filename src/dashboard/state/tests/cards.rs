@@ -59,6 +59,7 @@ fn cleaning_build_folders_from_a_sessions_line_starts_each_one_of_its_scratch_a_
                 session_folder,
                 session_id: session_id.to_string(),
                 started_in: "app".to_string(),
+                started_in_folder: None,
                 session: None,
                 session_name: None,
             }),

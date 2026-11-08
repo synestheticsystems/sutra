@@ -310,6 +310,7 @@ mod tests {
             session_folder: PathBuf::from(session),
             session_id: "e26ca359".to_string(),
             started_in: "foundry".to_string(),
+            started_in_folder: None,
             session_name: owner.label.clone(),
             session: Some(owner),
         });

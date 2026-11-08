@@ -291,6 +291,7 @@ pub(super) mod fixtures {
             session_folder,
             session_id: session_id.to_string(),
             started_in: "app".to_string(),
+            started_in_folder: None,
             session: None,
             session_name: None,
         };

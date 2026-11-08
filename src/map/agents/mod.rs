@@ -10,7 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 pub(crate) use claude::{TestCall, write_test_subagent_acting, write_test_subagent_at_work};
-pub(crate) use claude::{is_subagent_transcript, recorded_session_name, working_directory_name};
+pub(crate) use claude::{
+    WorkingDirectory, is_subagent_transcript, recorded_session_name, working_directory,
+};
 pub use session::{
     AgentSession, AgentStatus, Harness, ParentSession, SessionHost, Subagent, SubagentWithParent,
 };

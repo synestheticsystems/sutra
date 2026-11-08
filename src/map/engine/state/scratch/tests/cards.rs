@@ -12,6 +12,7 @@ fn scratch(artifacts: &[&str], own_files: Measurement) -> Project {
             session_folder: session,
             session_id: "e26ca359".to_string(),
             started_in: "me".to_string(),
+            started_in_folder: None,
             session: None,
             session_name: None,
         }),

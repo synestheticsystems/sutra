@@ -26,8 +26,9 @@ use std::time::SystemTime;
 
 use rayon::prelude::*;
 
-use super::State;
 use super::tracked::Tracked;
+use super::{OriginReach, State};
+use crate::map::agents::WorkingDirectory;
 use crate::map::scan::{self, ScratchFolder, SessionFolder};
 use crate::map::{
     ActivitySource, AgentSession, DirUsage, FolderAccess, Harness, LARGE_FOLDER_BYTES, Project,
@@ -59,8 +60,10 @@ impl State {
             })
             .collect();
         let is_worktree = |folder: &Path| worktrees.contains_key(folder);
-        let TrackedFolders { mut kept, searched } =
-            self.track_scratch_folders(found, previous, is_worktree);
+        // The map traces every project's provenance once the rediscovery is done, whatever changed.
+        let TrackedFolders {
+            mut kept, searched, ..
+        } = self.track_scratch_folders(found, previous, is_worktree);
         kept.extend(searched);
         let unlisted: Vec<PathBuf> = previous
             .iter()
@@ -144,15 +147,19 @@ impl State {
             let tracked = self.projects.get(folder);
             tracked.is_some_and(|tracked| tracked.project.repo.is_some())
         };
-        let TrackedFolders { kept, searched } =
-            self.track_scratch_folders(vec![(session_folder, folders)], &mut previous, is_worktree);
+        let TrackedFolders {
+            kept,
+            searched,
+            origins_changed,
+        } = self.track_scratch_folders(vec![(session_folder, folders)], &mut previous, is_worktree);
         // What the listing did not name is left in `previous`, and goes.
-        let changed = !searched.is_empty() || !previous.is_empty();
+        let changed = !searched.is_empty() || !previous.is_empty() || origins_changed;
         self.projects.extend(kept.into_iter().chain(searched));
         if changed {
             self.leave_build_folders_to_nested_projects();
             let sessions: Vec<AgentSession> = self.sessions_on_the_map().cloned().collect();
             self.find_scratch_sessions(&sessions);
+            self.trace_provenance();
             self.reindex();
             self.report_unread();
         }
@@ -161,11 +168,11 @@ impl State {
 
     /// Track the scratch folders `found`, listed by the session folder holding them: one tracked
     /// already is taken from `previous` whole, with the build folders last found in it, while it is
-    /// still the folder searched and Sutra's access to it is unchanged; one new to the map, or
-    /// another folder in the place of one on it, is searched through, on discovery's threads, in
-    /// the space its session's folders on the map share, with what the map knows of the session, or
-    /// in a new one. A folder `is_worktree` names stays the worktree it is, as git's claim on it
-    /// comes first.
+    /// still the folder searched and Sutra's access to it is unchanged, and where it came from read
+    /// again, as it may have become a clone since; one new to the map, or another folder in the
+    /// place of one on it, is searched through, on discovery's threads, in the space its session's
+    /// folders on the map share, with what the map knows of the session, or in a new one. A folder
+    /// `is_worktree` names stays the worktree it is, as git's claim on it comes first.
     fn track_scratch_folders(
         &self,
         found: Vec<(SessionFolder, Vec<ScratchFolder>)>,
@@ -174,8 +181,8 @@ impl State {
     ) -> TrackedFolders {
         let mut kept: Vec<(PathBuf, Tracked)> = Vec::new();
         let mut new = Vec::new();
-        // The sessions started in one folder share its name, which is worked out once.
-        let mut started_in: HashMap<String, String> = HashMap::new();
+        // The sessions started in one folder share where they started, which is worked out once.
+        let mut started_in: HashMap<String, WorkingDirectory> = HashMap::new();
         for (session, folders) in found {
             let first_kept = kept.len();
             let mut new_here = Vec::new();
@@ -204,35 +211,51 @@ impl State {
             new.extend(new_here.into_iter().map(|listed| (listed, space.clone())));
         }
         let boundary = &self.boundary;
-        // Each search is metadata I/O like discovery's walk.
-        let searched = scan::on_discovery_threads(|| {
-            new.into_par_iter()
-                .map(|(listed, space)| {
-                    (
-                        listed.path.clone(),
-                        Tracked::scratch(listed, space, boundary),
-                    )
+        let reach = OriginReach::of(boundary, self.sandboxed, &self.roots);
+        let may_follow = |folder: &Path| reach.may_follow(folder);
+        // Each search is metadata I/O like discovery's walk, and so is each reading of where a
+        // folder came from.
+        let (searched, origins_changed) = scan::on_discovery_threads(|| {
+            let origins_changed = kept
+                .par_iter_mut()
+                .map(|(_, tracked)| {
+                    let before = tracked.origin.clone();
+                    tracked.read_origin_again(&may_follow);
+                    tracked.origin != before
                 })
-                .collect()
+                .reduce(|| false, |one, other| one || other);
+            let searched = new
+                .into_par_iter()
+                .map(|(listed, space)| {
+                    let path = listed.path.clone();
+                    (path, Tracked::scratch(listed, space, boundary, &may_follow))
+                })
+                .collect();
+            (searched, origins_changed)
         });
-        TrackedFolders { kept, searched }
+        TrackedFolders {
+            kept,
+            searched,
+            origins_changed,
+        }
     }
 
     /// The scratch space of the session whose folder is `session`, before the session is found
-    /// running (see `find_scratch_sessions`). `names` holds the name of each folder sessions started
-    /// in, by Claude Code's name for it, as worked out so far.
+    /// running (see `find_scratch_sessions`). `started_in` holds where the sessions started, by
+    /// Claude Code's name for the folder, as worked out so far.
     fn space_of(
         &self,
         session: &SessionFolder,
-        names: &mut HashMap<String, String>,
+        started_in: &mut HashMap<String, WorkingDirectory>,
     ) -> ScratchSpace {
-        let started_in = names.entry(session.project_key.clone()).or_insert_with(|| {
-            agents::working_directory_name(&session.project_key, &self.boundary)
-        });
+        let started_in = started_in
+            .entry(session.project_key.clone())
+            .or_insert_with(|| agents::working_directory(&session.project_key, &self.boundary));
         ScratchSpace {
             session_folder: session.path.clone(),
             session_id: session.session_id.clone(),
-            started_in: started_in.clone(),
+            started_in: started_in.name.clone(),
+            started_in_folder: started_in.folder.clone(),
             // Found with the session's other agents (see `State::refresh_agents`).
             session: None,
             // Found with the session, or in its transcript (see `name_sessions`).
@@ -361,6 +384,8 @@ struct TrackedFolders {
     kept: Vec<(PathBuf, Tracked)>,
     /// Those searched through anew.
     searched: Vec<(PathBuf, Tracked)>,
+    /// Where one of those kept came from has changed since the map read it last.
+    origins_changed: bool,
 }
 
 /// Whether `project` has a card on the map. A scratch folder earns one while something works in it
