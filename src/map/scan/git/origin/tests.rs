@@ -1,6 +1,6 @@
 //! Lineages read from repositories git itself made: clones of a host, of a local checkout, of a
-//! linked worktree and of a bare repository, and chains that end at a folder gone, kept out of or
-//! sealed, or that loop.
+//! linked worktree and of a bare repository, Cargo's git cache among them, and chains that end at a
+//! folder gone, kept out of or sealed, or that loop.
 
 use super::*;
 use crate::map::scan::repo_info;
@@ -100,10 +100,10 @@ fn a_clone_of_a_linked_worktree_was_made_from_it_and_from_its_main_worktree() {
 }
 
 #[test]
-fn a_clone_of_a_bare_repository_is_followed_through_it_as_cargos_git_cache_keeps_one() {
+fn a_clone_of_a_bare_repository_is_followed_through_it_to_its_remote() {
     let fixture = TempDir::new("origin-bare");
     fixture.repo("seed");
-    let db = fixture.path("home/.cargo/git/db/ankurah-1a2b");
+    let db = fixture.path("home/repos/ankurah.git");
     git(
         fixture.root(),
         &["clone", "-q", "--bare", "seed", db.to_str().unwrap()],
@@ -128,6 +128,41 @@ fn a_clone_of_a_bare_repository_is_followed_through_it_as_cargos_git_cache_keeps
         Some("github.com/ankurah/ankurah")
     );
     assert_eq!(failures, []);
+}
+
+#[test]
+fn a_bare_repository_with_no_remote_was_made_from_what_it_fetched_as_cargos_git_cache_is() {
+    let fixture = TempDir::new("origin-cargo");
+    fixture.repo("seed");
+    let db = fixture.path("home/.cargo/git/db/world-proto-31e1");
+    git(
+        fixture.root(),
+        &["clone", "-q", "--bare", "seed", db.to_str().unwrap()],
+    );
+    git(&db, &["remote", "remove", "origin"]);
+    // As Cargo writes it, each fetched commit followed by the URL it came from.
+    fixture.write(
+        "home/.cargo/git/db/world-proto-31e1/FETCH_HEAD",
+        "cd4923516827d79fbac742179a4193627dafa43b\t\t'cd4923516827d79fbac742179a4193627dafa43b' \
+         of https://github.com/greyorange/world-proto.git\n",
+    );
+    let file_url = format!("file://{}", db.display());
+    git(fixture.root(), &["clone", "-q", &file_url, "scratch/proto"]);
+
+    let (lineage, failures) = lineage_at(&fixture.path("scratch/proto"));
+
+    assert_eq!(lineage.made_from, std::slice::from_ref(&db));
+    assert_eq!(
+        lineage.remote.as_deref(),
+        Some("github.com/greyorange/world-proto")
+    );
+    assert_eq!(failures, []);
+    fs::remove_file(db.join("FETCH_HEAD")).unwrap();
+    let (unfetched, _) = lineage_at(&fixture.path("scratch/proto"));
+    assert_eq!(
+        unfetched.remote, None,
+        "a bare repository that fetched nothing"
+    );
 }
 
 #[test]

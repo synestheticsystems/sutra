@@ -2,8 +2,9 @@
 //! by, and hangs it from. A linked worktree was made from its repository's main worktree, or from
 //! the bare repository it was added to; a repository, from what its `origin` remote names. When
 //! that is a folder on this Mac, a clone of a local checkout, the folder is followed in turn, a
-//! worktree or a bare repository as Cargo's git cache keeps them, until a remote names a host. Only
-//! files are read: no git runs, and nothing is written.
+//! worktree or a bare repository, until a remote names a host. A bare repository with no remote,
+//! as Cargo's git cache keeps one, came from what it last fetched. Only files are read: no git
+//! runs, and nothing is written.
 
 use std::collections::HashSet;
 use std::fs;
@@ -85,6 +86,14 @@ fn follow(
                 failures.push((config, err.kind()));
                 None
             }
+        };
+        let is_bare = repository_folder(&common_dir) == common_dir;
+        let url = match url {
+            None if is_bare => fetched_from(&common_dir).unwrap_or_else(|err| {
+                failures.push((common_dir.join("FETCH_HEAD"), err.kind()));
+                None
+            }),
+            url => url,
         };
         let Some(url) = url else {
             break None;
@@ -175,6 +184,20 @@ fn repository_folder(common_dir: &Path) -> &Path {
         Some(name) if name == ".git" => common_dir.parent().unwrap_or(common_dir),
         _ => common_dir,
     }
+}
+
+/// The URL the repository whose git dir is `git_dir` last fetched from, as its `FETCH_HEAD`
+/// records it, each line ending `of` and the URL: `None` while it has fetched nothing. Cargo's git
+/// cache keeps a bare repository for each dependency it fetches from git, with no remote but this.
+fn fetched_from(git_dir: &Path) -> io::Result<Option<String>> {
+    let text = match fs::read_to_string(git_dir.join("FETCH_HEAD")) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let first = text.lines().next().unwrap_or_default();
+    let url = first.rsplit_once(" of ").map(|(_, url)| url.trim());
+    Ok(url.filter(|url| !url.is_empty()).map(str::to_string))
 }
 
 /// The folder `url`, a remote's URL, names on this Mac: an absolute path, a `file://` URL, or a
