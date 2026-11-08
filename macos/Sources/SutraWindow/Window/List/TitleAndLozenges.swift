@@ -9,7 +9,9 @@ import SwiftUI
 /// of width moves pieces and never changes which views a row holds: a row of a lazy list that
 /// changes them while it is laid out asks the list for another pass, and a row offered two widths
 /// in turn can keep the list from settling. For the same reason the line stands as tall as its
-/// tallest piece, drawn or not, so its height never changes with the room either.
+/// tallest piece, drawn or not, so its height never changes with the room either. A piece crossing
+/// between out of sight and drawn would slide the whole way were the change animated, and no
+/// change to the line's room or its servers is.
 struct TitleAndLozenges: Layout {
     /// The room between the pieces.
     static let spacing: CGFloat = 8
