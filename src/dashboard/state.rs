@@ -24,9 +24,9 @@ use nix::unistd::Pid;
 use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
 use super::disk_space::{Volume, VolumeUnread};
-use super::listing::{Arrangement, Listing};
+use super::listing::{self, Arrangement, Listing};
 use super::live::Event;
-use super::{Action, LineKey, PrivateFolderSwitch, Settings, WindowContents, format};
+use super::{Action, GroupKind, LineKey, PrivateFolderSwitch, Settings, WindowContents, format};
 use crate::map::grant::{self, GrantError, Roots};
 use crate::map::{ArtifactDir, PrivateFolder, Project, Snapshot, clean};
 use crate::notifications::Notifier;
@@ -134,6 +134,7 @@ impl State {
             Action::CleanBuildFolders { line } => self.clean_line(&line, now),
             Action::CleanIdle => self.clean_idle(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
+            Action::CleanWhenIdle { group, days } => self.clean_when_idle(group, days),
             Action::SetSort { order } => {
                 if let Some(map) = &self.snapshot {
                     self.arrangement.set_sort(order, map, &self.cleaning, now);
@@ -212,6 +213,9 @@ impl State {
         self.read_disk();
         if let Some(map) = self.live_map().cloned() {
             self.cleaning.keep_free_space(&map, at, now, &self.home);
+            let chosen = &self.settings.clean_when_idle;
+            self.cleaning
+                .clean_when_idle(&map, chosen, at, now, &self.home);
             self.pass_on_clean_news();
         }
     }
@@ -320,8 +324,12 @@ impl State {
             .snapshot
             .as_ref()
             .is_none_or(|shown| !Arc::ptr_eq(&shown.ancestry, &snapshot.ancestry));
-        if ancestry_changed && self.settings.folds.forget_gone(&snapshot) {
-            self.save_settings();
+        if ancestry_changed {
+            let folds_gone = self.settings.folds.forget_gone(&snapshot);
+            let choices_gone = self.settings.clean_when_idle.forget_gone(&snapshot);
+            if folds_gone || choices_gone {
+                self.save_settings();
+            }
         }
         self.snapshot = Some(snapshot);
     }
@@ -416,6 +424,23 @@ impl State {
         self.cleaning.set_keep_free_floor(floor);
         self.settings.keep_free_bytes = floor;
         self.save_settings();
+    }
+
+    /// The user chose from the line of `group` to clean its build folders once they have sat idle
+    /// for `days`, or with `None`, not to: keep that for the next run, and clean as it says from
+    /// now on. A group the map no longer holds, as the line was a while old, changes nothing.
+    fn clean_when_idle(&mut self, group: GroupKind, days: Option<u32>) {
+        let Some(map) = self.snapshot.clone() else {
+            return;
+        };
+        let line = LineKey::Group { kind: group };
+        let Some(group) = listing::groups(&map).find(|key| LineKey::group(key) == line) else {
+            return;
+        };
+        if self.settings.clean_when_idle.choose(group, days, &map) {
+            self.save_settings();
+            self.cleaning.when_idle_changed(group);
+        }
     }
 
     fn save_settings(&mut self) {

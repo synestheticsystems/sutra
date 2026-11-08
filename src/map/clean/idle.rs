@@ -172,6 +172,8 @@ pub struct IdleClean {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeftOut {
     pub project_name: String,
+    /// The build folder on the map left out.
+    pub folder: PathBuf,
     pub why: Why,
 }
 
@@ -191,20 +193,21 @@ pub struct IdleCleans {
 }
 
 /// Work out the clean of every idle folder, each project idle once quiet for as long as
-/// `quiet_at_least` says of it, and left out where it says nothing, but for the folders already
-/// being cleaned. A sharer of a folder must have been quiet as long as the folder's own project.
-/// What every project's build deletes is read only once some folder is idle.
+/// `quiet_at_least` says of it, and left out where it says nothing, but for the folders in
+/// `left_alone`, such as those already being cleaned. A sharer of a folder must have been quiet as
+/// long as the folder's own project. What every project's build deletes is read only once some
+/// folder is idle.
 pub fn prepare_idle(
     map: &Snapshot,
     now: SystemTime,
     quiet_at_least: impl Fn(&Project) -> Option<Duration>,
-    being_cleaned: &HashSet<PathBuf>,
+    left_alone: &HashSet<PathBuf>,
     env: &CargoEnv,
 ) -> IdleCleans {
     let mut found = IdleCleans::default();
     let idle: Vec<IdleFolder> = idle_folders_by(map, now, quiet_at_least)
         .into_iter()
-        .filter(|folder| !being_cleaned.contains(&folder.dir.path))
+        .filter(|folder| !left_alone.contains(&folder.dir.path))
         .collect();
     if idle.is_empty() {
         return found;
@@ -215,6 +218,7 @@ pub fn prepare_idle(
         let at_least = folder.quiet_at_least;
         let left_out = |why| LeftOut {
             project_name: project.name.clone(),
+            folder: folder.dir.path.clone(),
             why,
         };
         match prepare_among(&folder.dir.path, &project.path, map, env, &builds) {
@@ -533,6 +537,7 @@ mod tests {
             found.left_out,
             [LeftOut {
                 project_name: "three".to_string(),
+                folder: fixture.path("three/target"),
                 why: Why::Refused(PrepareError::Locks(CleanError::BuildRunning { lock: busy })),
             }]
         );
@@ -606,6 +611,7 @@ mod tests {
             after_three_days.left_out,
             [LeftOut {
                 project_name: "app".to_string(),
+                folder: fixture.path("app/target"),
                 why: Why::SharedWith("other".to_string()),
             }]
         );
@@ -675,6 +681,7 @@ mod tests {
             found.left_out,
             [LeftOut {
                 project_name: "ws".to_string(),
+                folder: fixture.path("ws/target"),
                 why: Why::SharedWith("member".to_string()),
             }]
         );
@@ -819,6 +826,7 @@ mod tests {
                 found.left_out,
                 [LeftOut {
                     project_name: "app".to_string(),
+                    folder: fixture.path("app/target"),
                     why: Why::SharedWith("other".to_string()),
                 }]
             );
@@ -879,6 +887,7 @@ mod tests {
             found.left_out,
             [LeftOut {
                 project_name: "app".to_string(),
+                folder: fixture.path("app/target"),
                 why: Why::SharedWith(live.name.clone()),
             }]
         );

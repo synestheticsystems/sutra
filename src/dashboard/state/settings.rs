@@ -1,5 +1,6 @@
 //! What the user set that outlasts a run: the free space to keep, which of the folders macOS
-//! guards to watch, and which lines on the list the user opened or folded shut again.
+//! guards to watch, which lines on the list the user opened or folded shut again, and how long
+//! each group's build folders may sit idle before Sutra cleans them.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::dashboard::cleaning::CleanWhenIdle;
 use crate::dashboard::listing::Folds;
 use crate::home;
 use crate::map::{PrivateFolder, ScanOptions};
@@ -26,6 +28,9 @@ pub(super) struct SavedSettings {
     pub(super) watched_private_folders: BTreeSet<PrivateFolder>,
     /// The lines the user opened or folded shut again, none at first.
     pub(super) folds: Folds,
+    /// The groups whose build folders Sutra cleans once idle, and how long each may sit first;
+    /// none at first.
+    pub(super) clean_when_idle: CleanWhenIdle,
 }
 
 impl Default for SavedSettings {
@@ -36,6 +41,7 @@ impl Default for SavedSettings {
             keep_free_bytes: None,
             watched_private_folders: BTreeSet::from([PrivateFolder::Documents]),
             folds: Folds::default(),
+            clean_when_idle: CleanWhenIdle::default(),
         }
     }
 }
@@ -136,13 +142,17 @@ mod tests {
                 PrivateFolder::Downloads,
             ]),
             folds: Folds::default(),
+            clean_when_idle: CleanWhenIdle::default(),
         };
         settings.folds.toggle(&app(), &map());
+        let app_group = GroupKey::Upstream("github.com/me/app".to_string());
+        settings.clean_when_idle.choose(&app_group, Some(3), &map());
 
         settings.save(Some(&path)).unwrap();
 
         let read_back = SavedSettings::load(Some(&path)).unwrap();
         assert_eq!(read_back, settings);
+        assert_eq!(read_back.clean_when_idle.days_for(&app_group), Some(3));
         assert!(!read_back.folds.is_folded(&app()), "opened");
     }
 

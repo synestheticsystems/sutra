@@ -27,6 +27,7 @@ pub(super) use focus::FOCUS_RECENT;
 pub(super) use folds::Folds;
 pub(super) use group::{Checkout, Group, Naming, Node};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -36,10 +37,24 @@ use self::hold::{Hold, Order, Section};
 use self::scratch_rows::has_a_row;
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::{LineKey, SortOrder};
-use crate::map::{AgentSession, Docker, Project, Snapshot, SubagentWithParent};
+use crate::map::{AgentSession, Docker, GroupKey, Project, Snapshot, SubagentWithParent};
 
 /// What Docker's card and its group's line go by, as the Name sort and the filter read it too.
 pub(super) const DOCKER: &str = "Docker";
+
+/// Every group the engine knows on `map`: each one its projects stand in, listed or not, and
+/// Other, whose line may stand for the agents working elsewhere alone.
+pub(super) fn groups(map: &Snapshot) -> impl Iterator<Item = &GroupKey> {
+    static OTHER: GroupKey = GroupKey::Other;
+    map.ancestry.groups.iter().chain([&OTHER])
+}
+
+/// What each group on `map` goes by, unique among them all, as its line reads with every project
+/// listed: what a word about a group away from the list, as the banner after its cleans, calls it.
+pub(super) fn group_names(map: &Snapshot) -> HashMap<&GroupKey, String> {
+    let projects: Vec<&Project> = map.projects.iter().collect();
+    group::names_of(&projects, map.docker.is_some())
+}
 
 /// One row of the list.
 pub(super) enum Row<'a> {

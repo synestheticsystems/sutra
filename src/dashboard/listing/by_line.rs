@@ -28,6 +28,11 @@ impl<T: PartialEq> ByLine<T> {
         self.0.get(&saved_as(line))
     }
 
+    /// Whether no line has a choice made for it.
+    pub(in crate::dashboard) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Keep `choice` for the line of `line`, or with `None` let the one made go. A line whose key
     /// `map` no longer knows changes nothing, as it belonged to an older map, and the next would
     /// forget the choice anyway. Returns whether the choices changed.

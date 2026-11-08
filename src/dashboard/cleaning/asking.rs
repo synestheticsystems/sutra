@@ -246,13 +246,7 @@ impl Cleaning {
         }
         // The toolbar's offer leaves out each folder whose card shows a clean of its own, and so
         // does the question that follows it.
-        let being_cleaned: HashSet<PathBuf> = self
-            .folders
-            .keys()
-            .chain(self.preparing.keys())
-            .chain(self.questions.folders())
-            .cloned()
-            .collect();
+        let being_cleaned = self.being_cleaned();
         let env = CargoEnv::of_this_process(home);
         let preparing = self.threads.run(
             "sutra-clean-prepare",
@@ -324,6 +318,17 @@ impl Cleaning {
             self.queue(clean.clicked, clean.prepared, by);
         }
         self.start_next(map, now, home);
+    }
+
+    /// Every folder whose card shows a clean of its own: being cleaned or not yet measured since,
+    /// worked out for a click, or asked about. A clean of the idle folders that Sutra or the user
+    /// starts leaves them out, as their own clean decides them.
+    pub(super) fn being_cleaned(&self) -> HashSet<PathBuf> {
+        (self.folders.keys())
+            .chain(self.preparing.keys())
+            .chain(self.questions.folders())
+            .cloned()
+            .collect()
     }
 }
 

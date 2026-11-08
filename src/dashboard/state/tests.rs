@@ -7,6 +7,7 @@ mod folds;
 mod gauge;
 mod maps;
 mod settings;
+mod when_idle;
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};

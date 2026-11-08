@@ -1,15 +1,19 @@
 //! Cleaning build folders: the threads that work out what a clean deletes and do the deleting,
 //! several cleans at once when their folders lie apart, the questions when a clean does more than
 //! its click says, and what the card shows about each folder until the map has measured it again.
+//! Sutra cleans by itself too: to keep free space (`auto`), and a group's folders once idle as long
+//! as the user chose (`when_idle`).
 
 mod asking;
 mod auto;
 mod queue;
 mod threads;
+mod when_idle;
 mod words;
 
 pub(super) use auto::{free_bytes, keep_free_choices};
 pub(super) use threads::{CleanOutcome, Report, Threads};
+pub(super) use when_idle::CleanWhenIdle;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -21,6 +25,7 @@ use crate::map::{ArtifactDir, Project, Snapshot};
 use asking::{Clicked, OpenQuestions};
 use auto::KeepingFree;
 use queue::{By, Running, Waiting};
+use when_idle::WhenIdle;
 
 /// How long a project must have been quiet for the toolbar to offer its build folders. A folder is
 /// rebuilt when its project is next used, and on Daniel's Mac (2026-11-04) three days separates what
@@ -50,11 +55,12 @@ pub(super) struct Cleaning {
     stopped: Vec<(String, String)>,
     /// Alerts for the user, for the dashboard to show in turn.
     alerts: Vec<Alert>,
-    /// Banners about cleans nobody asked for, for the notifier to send.
+    /// Banners about cleans Sutra made by itself, for the notifier to send.
     banners: Vec<(String, String)>,
     /// Folders a clean just deleted from, for the engine to measure again.
     measure_again: Vec<PathBuf>,
     keeping_free: KeepingFree,
+    when_idle: WhenIdle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +120,7 @@ impl Cleaning {
             banners: Vec::new(),
             measure_again: Vec::new(),
             keeping_free: KeepingFree::with_floor(keep_free),
+            when_idle: WhenIdle::default(),
         }
     }
 
@@ -160,6 +167,7 @@ impl Cleaning {
             || !self.preparing.is_empty()
             || self.preparing_idle
             || self.preparing_unasked
+            || self.when_idle.preparing
     }
 
     /// The alerts waiting to be shown.
@@ -201,6 +209,7 @@ impl Cleaning {
                 project,
                 prepared,
             } => self.clean_unasked(clicked, project, prepared, map, now, home),
+            Report::WhenIdlePrepared(found) => self.when_idle_prepared(found, map, now, home),
             Report::Cleaned { target, outcome } => self.finished(&target, outcome, map, now, home),
         }
     }

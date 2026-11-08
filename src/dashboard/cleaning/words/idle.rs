@@ -271,12 +271,14 @@ mod tests {
         let left_out = [
             LeftOut {
                 project_name: "busy".to_string(),
+                folder: PathBuf::from("/code/busy/target"),
                 why: Why::Refused(PrepareError::Locks(CleanError::BuildRunning {
                     lock: PathBuf::from("/code/busy/target/debug/.cargo-lock"),
                 })),
             },
             LeftOut {
                 project_name: "tied".to_string(),
+                folder: PathBuf::from("/code/tied/target"),
                 why: Why::SharedWith("working".to_string()),
             },
         ];
@@ -299,6 +301,7 @@ mod tests {
         );
         let left_out = [LeftOut {
             project_name: "busy".to_string(),
+            folder: PathBuf::from("/code/busy/target"),
             why: Why::Refused(PrepareError::Locks(CleanError::BuildRunning {
                 lock: PathBuf::from("/x"),
             })),

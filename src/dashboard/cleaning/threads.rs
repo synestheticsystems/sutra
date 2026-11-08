@@ -47,6 +47,8 @@ pub(in crate::dashboard) enum Report {
         project: PathBuf,
         prepared: Option<Result<Prepared, PrepareError>>,
     },
+    /// The cleans of every build folder idle as long as its group's time.
+    WhenIdlePrepared(Option<IdleCleans>),
     /// The clean started from `target` ended.
     Cleaned {
         target: PathBuf,

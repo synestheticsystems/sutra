@@ -4,12 +4,12 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::{CleanOutcome, Cleaning, OFFER_QUIET_AT_LEAST, Report, Stage, auto, overlap, words};
 use crate::dashboard::state::Alert;
-use crate::map::Snapshot;
 use crate::map::clean::{self, Prepared, Progress};
+use crate::map::{GroupKey, Snapshot};
 
 /// Who wanted a clean, which decides how its end is told and what must still hold when its turn
 /// comes.
@@ -26,6 +26,15 @@ pub(super) enum By {
     /// question waiting for the user asks about, and the project at `project` is still idle when
     /// its turn comes. Nobody is waiting, so a banner tells of its end.
     Sutra { project: PathBuf },
+    /// Sutra chose it as the user chose for `group`, to clean its build folders once idle for
+    /// `quiet_at_least`, so it goes only if the project at `project` still is, and it keeps clear
+    /// of the folders a question waiting for the user asks about. A banner tells of a failure, and
+    /// another of what the group's cleans gave back once all have ended.
+    WhenIdle {
+        project: PathBuf,
+        group: GroupKey,
+        quiet_at_least: Duration,
+    },
 }
 
 /// How many cleans may delete at once: those the user starts one after another each show moving,
@@ -105,13 +114,24 @@ impl Cleaning {
                 }
                 may_go
             }
+            // Should it not go, the next look finds it again while it stays idle.
+            By::WhenIdle {
+                project,
+                quiet_at_least,
+                ..
+            } => {
+                still_idle(project, *quiet_at_least)
+                    && (self.questions)
+                        .asked_about_in(&waiting.clicked, &waiting.prepared)
+                        .is_none()
+            }
         }
     }
 
     /// Start the cleans waiting that may still go, each on a thread of its own, as many as may run
     /// at once. One that may not goes back to showing its size: its card shows why. One whose
     /// folders a running clean has too waits its turn, as the two would refuse each other at the
-    /// folder's locks.
+    /// folder's locks. A group whose cleans have all ended then says what went.
     pub(super) fn start_next(&mut self, map: Option<&Snapshot>, now: SystemTime, home: &Path) {
         let mut held_back = VecDeque::new();
         while self.running.len() < CLEANS_AT_ONCE {
@@ -135,6 +155,7 @@ impl Cleaning {
         if self.running.is_empty() && self.waiting.is_empty() {
             self.tell_what_stopped();
         }
+        self.end_rounds();
     }
 
     /// Whether `waiting` deletes a folder a running clean deletes, or one inside or around it.
@@ -195,7 +216,7 @@ impl Cleaning {
     /// Show `folders`' sizes again on their cards, all but those a clean still waiting or running
     /// will delete: two cards can ask for a folder two projects build in, and the clean that goes
     /// on keeps its folder showing as being cleaned.
-    fn show_sizes_again<'a>(&mut self, folders: impl IntoIterator<Item = &'a Path>) {
+    pub(super) fn show_sizes_again<'a>(&mut self, folders: impl IntoIterator<Item = &'a Path>) {
         for folder in folders {
             let waits = self
                 .waiting
@@ -243,11 +264,15 @@ impl Cleaning {
         self.measure_again.extend(running.folders.iter().cloned());
         let failure = match outcome {
             CleanOutcome::Cleaned(cleaned) => {
-                if matches!(running.by, By::Sutra { .. }) {
-                    let floor = self.keeping_free.floor.unwrap_or_default();
-                    self.banners
-                        .push(words::made_room(target, &cleaned, floor, home));
-                    self.keeping_free.check_soon();
+                match &running.by {
+                    By::User | By::UserForIdle { .. } => {}
+                    By::Sutra { .. } => {
+                        let floor = self.keeping_free.floor.unwrap_or_default();
+                        self.banners
+                            .push(words::made_room(target, &cleaned, floor, home));
+                        self.keeping_free.check_soon();
+                    }
+                    By::WhenIdle { group, .. } => self.cleaned_when_idle(group, &cleaned),
                 }
                 for freed in cleaned.folders {
                     let stage = Stage::Deleted {
@@ -276,6 +301,7 @@ impl Cleaning {
                 self.keeping_free.pass_over(target.to_path_buf(), now);
                 self.keeping_free.check_soon();
             }
+            By::WhenIdle { .. } => self.failed_when_idle(target, stopped, now),
         }
         self.start_next(map, now, home);
     }
