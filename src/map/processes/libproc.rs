@@ -172,6 +172,9 @@ pub(super) fn listening_sockets(pid: u32, room: &mut Descriptors) -> BTreeSet<So
 /// say.
 fn descriptors_of(pid: u32, room: &mut Descriptors) -> Option<&[libc::proc_fdinfo]> {
     let fds = &mut room.0;
+    // The records of the process read before are of no use here, and `reserve` below counts the
+    // room it adds from the length.
+    fds.clear();
     loop {
         let bytes = (fds.capacity() * size_of::<libc::proc_fdinfo>()) as c_int;
         // SAFETY: `fds` has room for `bytes`, and holds as many records as libproc wrote.
@@ -193,7 +196,7 @@ fn descriptors_of(pid: u32, room: &mut Descriptors) -> Option<&[libc::proc_fdinf
             unsafe { fds.set_len(count) };
             return Some(fds);
         }
-        fds.reserve(fds.capacity());
+        fds.reserve(2 * fds.capacity());
     }
 }
 
@@ -367,5 +370,51 @@ mod tests {
         assert_eq!(text(&chars), Some(&b"node"[..]));
         let unterminated: Vec<c_char> = b"node".iter().map(|&byte| byte as c_char).collect();
         assert_eq!(text(&unterminated), None);
+    }
+
+    /// Lets this test process hold `count` descriptors, where a shell allowed its children fewer.
+    fn allow_descriptors(count: libc::rlim_t) {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `limit` is a whole `rlimit`, written by the first call and read by the second.
+        unsafe {
+            assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit), 0);
+            if limit.rlim_cur < count {
+                limit.rlim_cur = count.min(limit.rlim_max);
+                assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &limit), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_table_of_more_descriptors_than_the_room_first_made_is_listed_whole() {
+        use std::fs::File;
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        allow_descriptors(1024);
+        // More than the room starts with, and then a listener, which a table cut short leaves out.
+        let room = Descriptors::default();
+        let held: Vec<File> = (0..room.0.capacity() + 50)
+            .map(|_| File::open("/dev/null").unwrap())
+            .collect();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+
+        // On a thread of its own: room that never grew would be offered again without end.
+        let (tell, told) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut room = room;
+            let _ = tell.send(listening_sockets(std::process::id(), &mut room));
+        });
+        let sockets = told
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the table is listed");
+
+        assert!(sockets.contains(&address), "{sockets:?}");
+        drop(held);
     }
 }
