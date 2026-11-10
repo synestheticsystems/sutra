@@ -1,10 +1,12 @@
 //! What serves in a project, a lozenge each, as `(web :3000) (node :5177) (postgres :36684)` reads:
 //! its dev-runner units, as its environment lists them (see `units`), then the ports its processes
 //! listen on (see `processes`), then those its Docker containers publish (see `containers`). Each
-//! port shows once, the first time: a port a unit shows is not shown again, as the unit says more.
-//! The look says the state, and a lozenge with a port opens it in the browser on a click. A folded
-//! line shows the lozenges of the cards it holds, so whatever serves in a card shows there too, the
-//! same rule holding across them all: each port once, and a container on several of them once.
+//! port shows once, the first time: a port a unit shows is not shown again, as the unit says more,
+//! and once its environment has stopped, a container on the card serving the port makes it look up
+//! (see `units::served`). The look says the state, and a lozenge with a port opens it in the
+//! browser on a click. A folded line shows the lozenges of the cards it holds, so whatever serves
+//! in a card shows there too, the same rule holding across them all: each port once, and a
+//! container on several of them once.
 
 pub(in crate::dashboard::contents) mod containers;
 mod processes;
@@ -88,7 +90,8 @@ pub(in crate::dashboard::contents) fn on_cards<'p>(
             cards: vec![card],
         };
         if let Some(env) = &card.environment {
-            placed.extend(units::lozenges(env, ctx.notifier).into_iter().map(alone));
+            let units = units::lozenges(env, &card.containers, ctx.notifier);
+            placed.extend(units.into_iter().map(alone));
         }
         let listening = processes::lozenges(&card.listening, &shown, ctx.home);
         placed.extend(listening.into_iter().map(alone));
@@ -166,6 +169,73 @@ mod tests {
         assert_eq!(
             reach(&everywhere),
             "Listening on the network, at 127.0.0.1 and ::"
+        );
+    }
+
+    #[test]
+    fn once_its_environment_stops_a_units_port_a_container_still_serves_looks_up_in_its_place() {
+        let database = Container {
+            id: "5069".to_string(),
+            name: "studio-pg-506941ffb3bf9f57".to_string(),
+            image: "postgres:17".to_string(),
+            compose_folder: None,
+            bound: Vec::new(),
+            ports: vec![PublishedPort {
+                port: 31224,
+                to: 5432,
+                addresses: BTreeSet::from([IpAddr::from(Ipv4Addr::LOCALHOST)]),
+                udp: false,
+            }],
+            started: None,
+        };
+        let environment = |pid, alive| Environment {
+            pid,
+            alive,
+            units: vec![
+                UnitStatus::parse("postgres", "building"),
+                UnitStatus::parse("api", "ready"),
+            ],
+            ports: HashMap::from([("postgres".to_string(), 31224), ("api".to_string(), 24470)]),
+            ..environment_at("/code/studio-ownership")
+        };
+        let card = |environment| Project {
+            environment: Some(environment),
+            containers: vec![database.clone()],
+            ..project_at("/code/studio-ownership")
+        };
+        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
+        let ctx = CardContext {
+            notifier: &notifier,
+            cleaning: &cleaning,
+            home: Path::new("/Users/dev"),
+            now: now(),
+        };
+        let shown = |project: &Project| -> Vec<(Option<String>, Option<String>, LozengeLook)> {
+            let lozenges = lozenges(project, &ctx).into_iter();
+            lozenges.map(|l| (l.name, l.port, l.look)).collect()
+        };
+        let lozenge =
+            |name: &str, port: &str, look| (Some(name.to_string()), Some(port.to_string()), look);
+
+        let stopped = card(environment(27523, false));
+
+        assert_eq!(
+            shown(&stopped),
+            [
+                lozenge("postgres", ":31224", LozengeLook::Up),
+                lozenge("api", ":24470", LozengeLook::Still),
+            ],
+            "the container's port once, by the unit's name"
+        );
+        assert_eq!(
+            lozenges(&stopped, &ctx)[0].tooltip,
+            "Container studio-pg-506941ffb3bf9f57, of postgres:17, serves :31224\n\
+             The environment that started postgres has stopped; process 27523 is not running"
+        );
+        assert_eq!(
+            shown(&card(environment(4242, true)))[0],
+            lozenge("postgres", ":31224", LozengeLook::Starting),
+            "while it runs, the unit says what it is doing"
         );
     }
 

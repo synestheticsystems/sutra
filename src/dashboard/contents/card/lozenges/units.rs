@@ -1,20 +1,30 @@
 //! A project's dev-runner units, one lozenge each, as `(web :3000) (api :8787) Compiling` reads.
 //! The look says the state; a unit with a port opens in the browser on a click. Beside a lozenge
 //! stands what a unit in trouble or under way says of itself, and a mark for each announcement
-//! switched off; the words for the rest are in its tooltip.
+//! switched off; the words for the rest are in its tooltip. Once the environment has stopped, a
+//! unit whose port a container on the card still publishes looks up: the port is open, and a
+//! still lozenge over it would say the opposite (see `served`).
 
 use super::{Lozenge, LozengeLook, link};
+use crate::map::docker::Container;
 use crate::model::{Environment, State, UnitStatus};
 use crate::notifications::Notifier;
 
-/// The lozenges of `env`'s units, in the order it lists them.
-pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<Lozenge> {
+/// The lozenges of `env`'s units, in the order it lists them, with `containers`, those on the
+/// card, serving their ports once `env` has stopped.
+pub(super) fn lozenges(
+    env: &Environment,
+    containers: &[Container],
+    notifier: &Notifier,
+) -> Vec<Lozenge> {
     let stopped = env.has_stopped();
     env.units
         .iter()
         .map(|unit| {
             let port = env.port_for(&unit.name);
-            Lozenge {
+            let serving = port.filter(|_| stopped);
+            let serving = serving.and_then(|port| Some((port, publishing(containers, port)?)));
+            let lozenge = Lozenge {
                 name: Some(unit.name.clone()),
                 port: port.map(|port| format!(":{port}")),
                 look: look(&unit.state, stopped),
@@ -23,9 +33,41 @@ pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<Lozenge> {
                 notifications_off: notifier.is_unit_notifications_off(&env.id, &unit.name),
                 tooltip: unit_tooltip(unit, stopped.then_some(env.pid)),
                 link: port.map(link),
+            };
+            match serving {
+                Some((port, container)) => served(lozenge, &unit.name, port, container, env.pid),
+                None => lozenge,
             }
         })
         .collect()
+}
+
+/// The container among `containers` that publishes `port` over TCP, if one does.
+fn publishing(containers: &[Container], port: u16) -> Option<&Container> {
+    let mut publishing = containers.iter();
+    publishing.find(|container| {
+        let mut tcp = container.ports.iter().filter(|published| !published.udp);
+        tcp.any(|published| published.port == port)
+    })
+}
+
+/// `lozenge`, unit `unit`'s, as it stands for `container`, which serves its `port` after the
+/// environment that started the unit, run by `pid`, has stopped: up, as the port is open, with
+/// nothing the unit last said beside it, and a tip that says which container serves the port and
+/// that the environment has stopped. It keeps the unit's name, which the project gave the port.
+fn served(lozenge: Lozenge, unit: &str, port: u16, container: &Container, pid: u32) -> Lozenge {
+    let serves = format!(
+        "Container {}, of {}, serves :{port}",
+        container.name, container.image
+    );
+    let stopped =
+        format!("The environment that started {unit} has stopped; process {pid} is not running");
+    Lozenge {
+        look: LozengeLook::Up,
+        beside: None,
+        tooltip: format!("{serves}\n{stopped}"),
+        ..lozenge
+    }
 }
 
 /// Whether what a unit says of itself belongs on the card: it is under way or in trouble. A unit
@@ -130,7 +172,7 @@ mod tests {
         let mut notifier = Notifier::new(|_, _| {});
         notifier.toggle_unit_mute("env", "db");
 
-        let lozenges = lozenges(&env, &notifier);
+        let lozenges = lozenges(&env, &[], &notifier);
 
         assert_eq!(lozenges[0].port.as_deref(), Some(":3000"));
         assert_eq!(lozenges[0].link.as_deref(), Some("http://localhost:3000"));
