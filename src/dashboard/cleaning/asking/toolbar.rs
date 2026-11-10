@@ -17,8 +17,8 @@ use crate::map::clean::{self, AtRestClean, CargoEnv, IdleClean, LeftOut, Offered
 impl Cleaning {
     /// The user clicked the toolbar's clean. Work out the clean of every idle folder, and apart from
     /// them of every folder kept only by sessions at rest, on a thread of its own, as `map` shows
-    /// them: `asking_idle` takes it from there.
-    pub(in crate::dashboard) fn start_idle(
+    /// them: `asking_offered` takes it from there.
+    pub(in crate::dashboard) fn start_offer(
         &mut self,
         map: Arc<Snapshot>,
         now: SystemTime,
@@ -26,7 +26,7 @@ impl Cleaning {
     ) {
         // A second click while the first is worked out or asked about would only ask again.
         let asking = [Asked::CleanIdle, Asked::CleanAtRest];
-        if self.preparing_idle || asking.iter().any(|asked| self.questions.is_open(asked)) {
+        if self.preparing_offer || asking.iter().any(|asked| self.questions.is_open(asked)) {
             return;
         }
         // The toolbar's offer leaves out each folder whose card shows a clean of its own, and so
@@ -39,19 +39,19 @@ impl Cleaning {
             Report::OfferPrepared,
         );
         if let Err(err) = preparing {
-            let stopped = Alert::notice(words::IDLE_SEARCH_STOPPED, err.to_string());
+            let stopped = Alert::notice(words::SEARCH_STOPPED, err.to_string());
             self.alerts.push(stopped);
             return;
         }
-        self.preparing_idle = true;
+        self.preparing_offer = true;
     }
 
     /// What the toolbar's clean offers has been worked out, or its thread ended with no word
     /// (`None`). Ask about the idle folders, naming how many and how much, then apart about those
     /// kept only by sessions at rest; `answered_idle` and `answered_at_rest` take the answers. With
     /// nothing for either, say so, and why.
-    pub(in crate::dashboard::cleaning) fn asking_idle(&mut self, found: Option<Offered>) {
-        self.preparing_idle = false;
+    pub(in crate::dashboard::cleaning) fn asking_offered(&mut self, found: Option<Offered>) {
+        self.preparing_offer = false;
         let Some(Offered {
             mut idle,
             mut at_rest,
@@ -196,7 +196,7 @@ mod tests {
         let (mut cleaning, inbox) = reporting();
         cleaning.set_keep_free_floor(ALWAYS_SHORT);
 
-        cleaning.asking_idle(offered(vec![idle_clean(&[&asked])], Vec::new()));
+        cleaning.asking_offered(offered(vec![idle_clean(&[&asked])], Vec::new()));
         assert!(
             cleaning.state_of(&app.artifacts[0]).is_some(),
             "its card shows the wait"
@@ -247,7 +247,7 @@ mod tests {
         cleaning.asking(&asked, prepared, None, at(100), fixture.root());
         start(&mut cleaning, &worked_out_project);
 
-        cleaning.start_idle(Arc::clone(&map), at(100), fixture.root());
+        cleaning.start_offer(Arc::clone(&map), at(100), fixture.root());
         let found = loop {
             if let Report::OfferPrepared(found) = next_report(&inbox) {
                 break found.expect("the search finished");
@@ -275,7 +275,7 @@ mod tests {
         let apart = fixture.dir("apart/target");
         let resting = fixture.dir("resting/target");
         let resting_apart = fixture.dir("resting-apart/target");
-        cleaning.asking_idle(offered(
+        cleaning.asking_offered(offered(
             vec![
                 idle_clean(&[&target]),
                 idle_clean(&[&taking, &build_dir.join("debug")]),
@@ -300,7 +300,7 @@ mod tests {
         let (resting, resting_target) = idle_project(&fixture, "resting", 5 * WORTH_CLEANING_BYTES);
         let mut cleaning = cleaning();
 
-        cleaning.asking_idle(offered(
+        cleaning.asking_offered(offered(
             vec![idle_clean(&[&idle_target])],
             vec![at_rest_clean(&[&resting_target])],
         ));
@@ -346,7 +346,7 @@ mod tests {
         let mut asking_apart = cleaning();
         let mut asking_nothing = cleaning();
 
-        asking_apart.asking_idle(offered(Vec::new(), vec![at_rest_clean(&[&resting])]));
+        asking_apart.asking_offered(offered(Vec::new(), vec![at_rest_clean(&[&resting])]));
         assert_eq!(
             questions(&asking_apart.take_alerts()),
             [("at rest", vec![&resting])]
@@ -360,7 +360,7 @@ mod tests {
                 why: Why::SharedWith("working".to_string()),
             }],
         };
-        asking_nothing.asking_idle(Some(Offered {
+        asking_nothing.asking_offered(Some(Offered {
             idle: IdleCleans {
                 cleans: Vec::new(),
                 left_out: vec![busy],
@@ -393,14 +393,14 @@ mod tests {
             prepared: prepared_at(&target),
         };
         let mut cleaning = cleaning();
-        cleaning.asking_idle(offered(vec![clean.clone()], Vec::new()));
+        cleaning.asking_offered(offered(vec![clean.clone()], Vec::new()));
         assert_eq!(
             questions(&cleaning.take_alerts()),
             [("idle", vec![&target])]
         );
-        cleaning.start_idle(Arc::new(map.clone()), at(100), fixture.root());
+        cleaning.start_offer(Arc::new(map.clone()), at(100), fixture.root());
         assert!(
-            !cleaning.preparing_idle,
+            !cleaning.preparing_offer,
             "a second click waits for the answer"
         );
 
@@ -434,18 +434,18 @@ mod tests {
         let map = snapshot_of(vec![resting.clone()]);
         let (mut cleaning, inbox) = reporting();
 
-        cleaning.start_idle(Arc::new(map.clone()), now, fixture.root());
+        cleaning.start_offer(Arc::new(map.clone()), now, fixture.root());
         let found = loop {
             if let Report::OfferPrepared(found) = next_report(&inbox) {
                 break found;
             }
         };
-        cleaning.asking_idle(found);
+        cleaning.asking_offered(found);
         let alerts = cleaning.take_alerts();
         assert_eq!(questions(&alerts), [("at rest", vec![&target])]);
-        cleaning.start_idle(Arc::new(map.clone()), now, fixture.root());
+        cleaning.start_offer(Arc::new(map.clone()), now, fixture.root());
         assert!(
-            !cleaning.preparing_idle,
+            !cleaning.preparing_offer,
             "a second click waits for the second answer too"
         );
 
@@ -467,11 +467,11 @@ mod tests {
         let (resting, _) = resting_project(&fixture, now - DAY / 2);
         let (mut cleaning, inbox) = reporting();
 
-        cleaning.start_idle(Arc::new(snapshot_of(vec![resting])), now, fixture.root());
+        cleaning.start_offer(Arc::new(snapshot_of(vec![resting])), now, fixture.root());
         let Report::OfferPrepared(found) = next_report(&inbox) else {
             panic!("the toolbar's search reports");
         };
-        cleaning.asking_idle(found);
+        cleaning.asking_offered(found);
 
         let alerts = cleaning.take_alerts();
         let [Alert::Notice { title, .. }] = alerts.as_slice() else {

@@ -72,7 +72,7 @@ final class ScriptedCore: DashboardProtocol {
             // clean, mute, stop or answer, and no folder to grant or watch, and the filter field
             // is left out of the take. No card moves while a take plays, so the pointer has
             // nothing to hold still.
-            case .clean, .cleanBuildFolders, .cleanIdle, .keepFree, .cleanEveryGroupWhenIdle,
+            case .clean, .cleanBuildFolders, .cleanOffered, .keepFree, .cleanEveryGroupWhenIdle,
                  .cleanWhenIdle, .showFilter,
                  .filterChanged, .hideFilter, .pointerEnteredList, .pointerLeftList,
                  .toggleGlobalMute, .toggleGlobalNotifications, .toggleUnitMute,

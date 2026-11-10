@@ -49,8 +49,9 @@ pub(super) struct Cleaning {
     preparing: HashMap<PathBuf, Clicked>,
     /// The questions waiting for an answer, and the folders each would clean.
     questions: OpenQuestions,
-    /// The cleans of every idle folder are being worked out.
-    preparing_idle: bool,
+    /// What the toolbar's clean offers is being worked out: the cleans of every idle folder, and
+    /// of those kept only by sessions at rest.
+    preparing_offer: bool,
     /// A clean Sutra chose by itself is being worked out.
     preparing_unasked: bool,
     /// Cleans waiting their turn, behind `CLEANS_AT_ONCE` running or a running clean of the same
@@ -126,7 +127,7 @@ impl Cleaning {
             folders: HashMap::new(),
             preparing: HashMap::new(),
             questions: OpenQuestions::default(),
-            preparing_idle: false,
+            preparing_offer: false,
             preparing_unasked: false,
             waiting: VecDeque::new(),
             running: Vec::new(),
@@ -190,8 +191,8 @@ impl Cleaning {
 
     /// Whether a click on the toolbar's clean is still being worked out, which takes seconds when
     /// many large folders are searched for locks.
-    pub(super) fn is_preparing_idle(&self) -> bool {
-        self.preparing_idle
+    pub(super) fn is_preparing_offer(&self) -> bool {
+        self.preparing_offer
     }
 
     /// Whether a clean is being worked out, waits or runs. A question waiting for the user is no
@@ -200,7 +201,7 @@ impl Cleaning {
         !self.running.is_empty()
             || !self.waiting.is_empty()
             || !self.preparing.is_empty()
-            || self.preparing_idle
+            || self.preparing_offer
             || self.preparing_unasked
             || self.when_idle.preparing
     }
@@ -238,7 +239,7 @@ impl Cleaning {
                     self.asking(folder, prepared, map, now, home);
                 }
             }
-            Report::OfferPrepared(found) => self.asking_idle(found),
+            Report::OfferPrepared(found) => self.asking_offered(found),
             Report::UnaskedPrepared {
                 clicked,
                 project,
@@ -428,7 +429,7 @@ pub(super) mod tests {
     fn a_folder_being_deleted_shows_how_far_the_delete_has_come_while_a_question_asks_about_it() {
         let mut cleaning = deleting_two();
         let shared = Path::new("/cache/app");
-        cleaning.asking_idle(offered(vec![idle_clean(&[shared])], Vec::new()));
+        cleaning.asking_offered(offered(vec![idle_clean(&[shared])], Vec::new()));
         let dir = cargo_target(shared, crate::map::test_support::measured(5_000));
         assert_eq!(
             cleaning.state_of(&dir),

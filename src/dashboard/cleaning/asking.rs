@@ -513,7 +513,7 @@ mod tests {
         let asked = fixture.dir("cache/app");
         let map = Arc::new(snapshot_of(Vec::new()));
         let mut cleaning = cleaning();
-        cleaning.asking_idle(offered(vec![idle_clean(&[&asked])], Vec::new()));
+        cleaning.asking_offered(offered(vec![idle_clean(&[&asked])], Vec::new()));
         cleaning.take_alerts();
         // A click on Clean in the project `name`, whose clean takes `build_dir` with its target.
         let click = |cleaning: &mut Cleaning, name: &str, build_dir: &Path| {

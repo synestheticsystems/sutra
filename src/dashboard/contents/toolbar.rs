@@ -1,6 +1,6 @@
-//! The toolbar: the filter field while ⌘F shows it, the sort, the clean of idle build folders, the
-//! sound and notification toggles, in the store edition the folder Sutra watches, and the gauge of
-//! how full the disk is.
+//! The toolbar: the filter field while ⌘F shows it, the sort, the clean of idle build folders and
+//! of those sessions at rest keep, the sound and notification toggles, in the store edition the
+//! folder Sutra watches, and the gauge of how full the disk is.
 
 mod gauge;
 
@@ -22,7 +22,7 @@ pub struct Toolbar {
     pub sort: Option<SortControl>,
     /// The filter field's text while the field shows (⌘F).
     pub filter: Option<String>,
-    /// The clean of idle build folders.
+    /// The clean of idle build folders, and of those sessions at rest keep.
     pub clean: CleanControl,
     pub muted: bool,
     /// What the sound switch does: `Mute all sounds`, or `Unmute all sounds` while muted.
@@ -52,11 +52,12 @@ pub struct SortChoice {
     pub tooltip: String,
 }
 
-/// The toolbar's clean: a click cleans every idle build folder, a right click sets what Sutra keeps
-/// free.
+/// The toolbar's clean: a click asks about cleaning every idle build folder, then apart about those
+/// kept only by sessions at rest, and a right click sets what Sutra keeps free.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CleanControl {
-    /// Something idle is on offer, so a click does something; the icon fades while nothing is.
+    /// Something is on offer, idle or kept only by sessions at rest, so a click does something;
+    /// the icon fades while nothing is.
     pub offered: bool,
     /// A click's clean is being worked out, which takes seconds when many folders are searched
     /// for locks.
@@ -192,7 +193,7 @@ fn clean_menu(
             title,
             checked: false,
             action: MenuAction::Dashboard {
-                action: Action::CleanIdle,
+                action: Action::CleanOffered,
             },
         });
         menu.push(MenuEntry::Separator);
@@ -285,7 +286,7 @@ mod tests {
             } => action.clone(),
             entry => panic!("not the dashboard's: {entry:?}"),
         };
-        assert_eq!(action(&menu[0]), Action::CleanIdle);
+        assert_eq!(action(&menu[0]), Action::CleanOffered);
         assert_eq!(
             action(&menu[5]),
             Action::KeepFree {

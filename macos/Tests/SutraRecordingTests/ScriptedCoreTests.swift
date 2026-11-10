@@ -76,7 +76,7 @@ struct ScriptedCoreTests {
     @Test func whatTheScriptLeavesUndoneChangesNothing() {
         let before = core.contents()
         let undone: [Action] = [
-            .clean(folder: "/Demo/Projects/harbor-api/target"), .cleanIdle,
+            .clean(folder: "/Demo/Projects/harbor-api/target"), .cleanOffered,
             .keepFree(bytes: 25_000_000_000), .showFilter, .filterChanged(text: "cedar"),
             .hideFilter, .pointerEnteredList, .pointerLeftList, .toggleGlobalMute,
             .toggleGlobalNotifications, .toggleUnitMute(environment: "web", unit: "web"),

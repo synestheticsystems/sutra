@@ -630,7 +630,7 @@ mod tests {
         let map = snapshot_of(vec![project_at(project.clone())]);
         let mut cleaning = cleaning();
         cleaning.set_keep_free_floor(ALWAYS_SHORT);
-        cleaning.asking_idle(offered(vec![idle_clean(&[&asked])], Vec::new()));
+        cleaning.asking_offered(offered(vec![idle_clean(&[&asked])], Vec::new()));
         let may_start = |cleaning: &mut Cleaning, build_dir: &Path| {
             let waiting = Waiting {
                 clicked: target.clone(),

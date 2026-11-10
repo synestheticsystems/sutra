@@ -81,8 +81,8 @@ struct DashboardModelTests {
     }
 
     @Test func theCoresOwnMenuLinesGoToTheCore() {
-        model().choose(.dashboard(action: .cleanIdle))
-        #expect(core.performed == [.cleanIdle])
+        model().choose(.dashboard(action: .cleanOffered))
+        #expect(core.performed == [.cleanOffered])
         #expect(services.asked.isEmpty)
     }
 }

@@ -1,8 +1,9 @@
 import SutraCore
 import SwiftUI
 
-/// The window's toolbar, which holds what acts on Sutra as a whole: the clean of idle build
-/// folders, the help panel, the sound and notification switches, and the store edition's folder.
+/// The window's toolbar, which holds what acts on Sutra as a whole: the clean of build folders
+/// left idle or kept only by sessions at rest, the help panel, the sound and notification
+/// switches, and the store edition's folder.
 /// What acts on the list sits over the list, in the scope bar.
 struct WindowToolbar: ToolbarContent {
     let dashboard: DashboardModel
@@ -43,7 +44,7 @@ private struct CleanButton: View {
         let clean = dashboard.toolbar.clean
         Button {
             if clean.offered {
-                dashboard.perform(.cleanIdle)
+                dashboard.perform(.cleanOffered)
             }
         } label: {
             // At rest the icon keeps the toolbar's own colour, as its neighbours do.

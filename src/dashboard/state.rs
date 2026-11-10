@@ -132,7 +132,7 @@ impl State {
         match action {
             Action::Clean { folder } => self.clean(&folder),
             Action::CleanBuildFolders { line } => self.clean_line(&line, now),
-            Action::CleanIdle => self.clean_idle(now),
+            Action::CleanOffered => self.clean_offered(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
             Action::CleanEveryGroupWhenIdle { choice } => self.clean_every_group_when_idle(choice),
             Action::CleanWhenIdle { group, own } => self.clean_when_idle(group, own),
@@ -265,7 +265,7 @@ impl State {
             self.idle_offer(now),
             self.at_rest_offer(now),
             self.can_tell_what_is_idle(),
-            self.cleaning.is_preparing_idle(),
+            self.cleaning.is_preparing_offer(),
             self.cleaning.keep_free_floor(),
         );
         let floor = self.cleaning.keep_free_floor();
@@ -539,10 +539,11 @@ impl State {
             .start_each(&clicked, Arc::clone(&map), &self.home);
     }
 
-    /// The user chose the toolbar's clean of every idle build folder, at `now`.
-    fn clean_idle(&mut self, now: SystemTime) {
+    /// The user chose the toolbar's clean, at `now`, of what it offers: every idle build folder, and
+    /// apart the folders kept only by sessions at rest.
+    fn clean_offered(&mut self, now: SystemTime) {
         if let Some(map) = self.live_map().cloned() {
-            self.cleaning.start_idle(map, now, &self.home);
+            self.cleaning.start_offer(map, now, &self.home);
         }
     }
 

@@ -10,7 +10,7 @@ mod outcome;
 mod when_idle;
 
 pub(super) use at_rest::at_rest_question;
-pub(super) use idle::{IDLE_SEARCH_STOPPED, idle_question, nothing_to_clean, search_stopped};
+pub(super) use idle::{SEARCH_STOPPED, idle_question, nothing_to_clean, search_stopped};
 pub(super) use keep_free::{keep_free_choice, keep_free_question, made_room};
 pub(super) use outcome::{all_stopped, stopped};
 pub(super) use when_idle::{

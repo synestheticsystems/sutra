@@ -64,13 +64,12 @@ pub(in crate::dashboard::cleaning) fn idle_question(
 }
 
 /// The alert when the search behind the toolbar's clean cannot finish.
-pub(in crate::dashboard::cleaning) const IDLE_SEARCH_STOPPED: &str =
-    "Couldn't work out what to clean";
+pub(in crate::dashboard::cleaning) const SEARCH_STOPPED: &str = "Couldn't work out what to clean";
 
 /// The alert in place of the toolbar's questions when the search behind them ended with no word.
 pub(in crate::dashboard::cleaning) fn search_stopped() -> (String, String) {
     (
-        IDLE_SEARCH_STOPPED.to_string(),
+        SEARCH_STOPPED.to_string(),
         "The search stopped before it finished. Nothing was deleted.".to_string(),
     )
 }

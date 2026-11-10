@@ -17,8 +17,9 @@ pub enum Action {
     CleanBuildFolders {
         line: LineKey,
     },
-    /// Clean every idle build folder, after one question.
-    CleanIdle,
+    /// Clean what the toolbar's clean offers: every idle build folder, after one question, and
+    /// then the folders kept only by agent sessions at rest, after a question of their own.
+    CleanOffered,
     /// Keep this much free space from now on, cleaning by itself; `None` leaves cleaning to the
     /// user. Asks first when it turns cleaning on.
     KeepFree {

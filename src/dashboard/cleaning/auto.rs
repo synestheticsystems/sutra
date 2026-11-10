@@ -373,7 +373,7 @@ mod tests {
         reaching.sharing.projects = vec!["fwd".to_string()];
         cleaning.asking(&card, Some(Ok(reaching)), None, now(), home);
         let other = fixture.dir("other/target");
-        cleaning.asking_idle(offered(vec![idle_clean(&[&other])], Vec::new()));
+        cleaning.asking_offered(offered(vec![idle_clean(&[&other])], Vec::new()));
         assert_eq!(cleaning.take_alerts().len(), 2, "both questions are open");
 
         cleaning.keep_free_space(&map, Instant::now(), now(), home);
