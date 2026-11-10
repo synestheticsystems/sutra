@@ -84,7 +84,7 @@ pub(super) fn disk_bytes(project: &Project) -> u64 {
 /// `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as for a scratch folder
 /// whose session has ended.
 pub(super) fn docker_in_focus(docker: &Docker, sort: SortOrder) -> bool {
-    !docker.containers.is_empty()
+    docker.unaccounted().next().is_some()
         || match sort {
             SortOrder::Activity => false,
             SortOrder::Name | SortOrder::Disk => docker_bytes(docker) >= LARGE_FOLDER_BYTES,

@@ -10,9 +10,10 @@
 //!     and the subagents at work inside it, whichever session they work for;
 //!   - the user's processes that listen for TCP connections and run inside the project, as libproc
 //!     tells of them, in the direct edition alone (see `processes`);
-//!   - the Docker containers running for the project, as Docker's engine tells of them through its
-//!     socket, in the direct edition alone (see `docker`), which also keeps those for no project,
-//!     and Docker's disk use, for a card of Docker's own;
+//!   - the Docker containers running that the project accounts for, as Docker's engine tells of
+//!     them through its socket, in the direct edition alone (see `docker`), which also keeps every
+//!     container, with the projects accounting for it, and Docker's disk use, for a group of
+//!     Docker's own on the list;
 //!   - build artifacts (`target/`, `node_modules/`) and their deduplicated disk use, and the disk
 //!     use of the whole folder.
 //!
@@ -120,8 +121,8 @@ pub struct Snapshot {
     /// Subagents at work outside every known project, which holds none of the folders they may be
     /// said to work in (see `Subagent::folders`), whichever session they work for, by session.
     pub unplaced_subagents: Vec<SubagentWithParent>,
-    /// Docker, with the containers running in no project's folder, as its engine last said;
-    /// `None` while Docker is not here, or has said nothing yet (see `docker`).
+    /// Docker, with every container running and the projects accounting for each, as its engine
+    /// last said; `None` while Docker is not here, or has said nothing yet (see `docker`).
     pub docker: Option<Docker>,
     /// The sources that could not be read, ordered by source, so the map can say that what it
     /// shows from them is incomplete rather than empty.

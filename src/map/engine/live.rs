@@ -490,7 +490,8 @@ impl<'a> Engine<'a> {
             }
         }
         if reshaped {
-            // A project that joined may be one a container is for, and one that left may have been.
+            // A project that joined may account for a container, and one that left may have; and an
+            // environment read anew may name a port a container publishes.
             self.dirty |= self.state.place_containers();
             let on_map: HashSet<Job> = self.state.jobs_newest_first().into_iter().collect();
             self.sizing.forget_unless(|job| on_map.contains(job));

@@ -22,7 +22,7 @@ use rayon::prelude::*;
 
 use super::route::Index;
 use crate::map::devrunner::FolderEnvironments;
-use crate::map::docker::{self, Container};
+use crate::map::docker::{self, RunningContainer};
 use crate::map::grant::Roots;
 use crate::map::scan::{Boundary, MacOsAnswer};
 use crate::map::{
@@ -58,8 +58,9 @@ pub(super) struct State {
     unplaced_subagents: Vec<SubagentWithParent>,
     /// What Docker is, as its reader last found it.
     docker: docker::Reading,
-    /// The containers Docker said were running that are for no project on the map, by name.
-    unplaced_containers: Vec<Container>,
+    /// Every container Docker said was running, by name, with the projects on the map that account
+    /// for it (see `containers`).
+    running_containers: Vec<RunningContainer>,
     /// What each source reported when it was last read, ordered by source.
     problems: Vec<SourceProblem>,
     /// What the last rediscovery could not read, which the problems of `Source::Scan` hold with the
@@ -97,7 +98,7 @@ impl State {
             unplaced_agents: Vec::new(),
             unplaced_subagents: Vec::new(),
             docker: docker::Reading::Away,
-            unplaced_containers: Vec::new(),
+            running_containers: Vec::new(),
             problems: Vec::new(),
             unread_by_rediscovery: Vec::new(),
             state_folders: Vec::new(),
@@ -396,11 +397,15 @@ impl State {
     }
 
     /// Probe every process the environments name: one that crashed deletes no state file, so no
-    /// event announces it. Returns whether any folder's environment changed.
+    /// event announces it. Returns whether any folder's environment changed, which places the
+    /// containers again, as another environment may now speak for a folder and name other ports.
     pub(super) fn refresh_liveness(&mut self) -> bool {
         let mut changed = false;
         for tracked in self.projects.values_mut() {
             changed |= tracked.probe_environments();
+        }
+        if changed {
+            self.place_containers();
         }
         changed
     }

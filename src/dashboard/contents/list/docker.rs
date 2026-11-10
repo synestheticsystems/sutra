@@ -79,8 +79,7 @@ pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
 /// The card of `docker`.
 pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
     let newest = docker
-        .containers
-        .iter()
+        .unaccounted()
         .filter_map(|container| container.started)
         .max();
     DockerCard {
@@ -100,7 +99,7 @@ pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
 /// The lozenges of the containers on Docker's card, each running, by name.
 fn lozenges(docker: &Docker, ctx: &CardContext) -> Vec<Lozenge> {
     let none_shown = BTreeSet::new();
-    containers::lozenges(&docker.containers, CardOf::Docker, &none_shown, ctx.home)
+    containers::lozenges(docker.unaccounted(), CardOf::Docker, &none_shown, ctx.home)
 }
 
 /// One of Docker's stores, as its card names it.
@@ -179,7 +178,7 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::now;
-    use crate::map::docker::{Container, PublishedPort};
+    use crate::map::docker::{Container, PublishedPort, RunningContainer};
     use crate::notifications::Notifier;
 
     fn store(bytes: u64, count: u64, in_use: u64, reclaimable: u64) -> Store {
@@ -250,7 +249,10 @@ mod tests {
         };
         let docker = Docker {
             socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
-            containers: vec![pg],
+            running: vec![RunningContainer {
+                container: pg,
+                projects: Vec::new(),
+            }],
             disk: None,
         };
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
@@ -278,18 +280,21 @@ mod tests {
     #[test]
     fn dockers_line_totals_the_disk_docker_takes_shows_its_cards_containers_folded_and_cleans_nothing()
      {
-        let running = |name: &str| Container {
-            id: name.to_string(),
-            name: name.to_string(),
-            image: format!("{name}:1"),
-            compose_folder: None,
-            bound: Vec::new(),
-            ports: Vec::new(),
-            started: Some(now()),
+        let running = |name: &str| RunningContainer {
+            container: Container {
+                id: name.to_string(),
+                name: name.to_string(),
+                image: format!("{name}:1"),
+                compose_folder: None,
+                bound: Vec::new(),
+                ports: Vec::new(),
+                started: Some(now()),
+            },
+            projects: Vec::new(),
         };
         let docker = Docker {
             socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
-            containers: vec![running("redis"), running("minio"), running("nats")],
+            running: vec![running("redis"), running("minio"), running("nats")],
             disk: Some(disk()),
         };
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));

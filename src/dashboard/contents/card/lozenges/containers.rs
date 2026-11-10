@@ -22,14 +22,14 @@ pub(in crate::dashboard::contents) enum CardOf<'a> {
 
 /// The lozenges of `containers`, in their order, on the card `on`, leaving out each port in
 /// `shown`.
-pub(in crate::dashboard::contents) fn lozenges(
-    containers: &[Container],
+pub(in crate::dashboard::contents) fn lozenges<'c>(
+    containers: impl IntoIterator<Item = &'c Container>,
     on: CardOf,
     shown: &BTreeSet<u16>,
     home: &Path,
 ) -> Vec<Lozenge> {
     containers
-        .iter()
+        .into_iter()
         .flat_map(|container| of(container, on, shown, home))
         .collect()
 }

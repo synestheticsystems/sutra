@@ -43,7 +43,7 @@ impl Query {
 
     /// Whether the query matches Docker's card: its name, or a container's on it, or its image.
     pub(super) fn admits_docker(&self, docker: &Docker) -> bool {
-        let mut containers = docker.containers.iter();
+        let mut containers = docker.unaccounted();
         self.matches(DOCKER)
             || containers
                 .any(|container| self.matches(&container.name) || self.matches(&container.image))

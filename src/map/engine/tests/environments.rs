@@ -1,7 +1,10 @@
 //! Environments: the two conventions merged into one, which registration speaks for a folder, and
 //! what a folder's own state does when its registration goes.
 
+use std::collections::BTreeSet;
+
 use super::*;
+use crate::map::docker::{Container, PublishedPort, Reading, Seen};
 
 #[test]
 fn scan_once_merges_both_environment_conventions_and_lists_a_plain_folder() {
@@ -132,6 +135,58 @@ fn a_process_dying_is_noticed_with_no_state_file_read_and_is_no_activity() {
     assert_eq!(environment.units[0].state, State::Ready);
     let after = project(&state.snapshot(), &app).unwrap().last_activity;
     assert_eq!(after, activity);
+}
+
+#[test]
+fn a_container_on_a_port_only_a_registration_names_stands_on_its_folder_once_the_winner_dies() {
+    let fixture = TempDir::new("engine-liveness-container");
+    let app = fixture.dir("app");
+    // The registration names 3000 for its server; the folder's own state, 5173 for vite.
+    register(&fixture, "ab12", &app, std::process::id(), "server");
+    let winner = LiveProcess::start();
+    let winner_pid = winner.pid();
+    fixture.write(
+        "app/.dev-runner/meta",
+        format!("PID={winner_pid}\nSTARTED=200\nVITE_PORT=5173\n"),
+    );
+    let mut state = scanned(&fixture);
+    let database = Container {
+        id: "c1".to_string(),
+        name: "server-db".to_string(),
+        image: "postgres:17".to_string(),
+        compose_folder: None,
+        bound: Vec::new(),
+        ports: vec![PublishedPort {
+            port: 3000,
+            to: 5432,
+            addresses: BTreeSet::from(["127.0.0.1".parse().unwrap()]),
+            udp: false,
+        }],
+        started: None,
+    };
+    state.saw_docker(Seen {
+        reading: Reading::Said {
+            socket: PathBuf::from("/run/docker.sock"),
+            containers: vec![database],
+            disk: None,
+        },
+        problem: None,
+    });
+    let on_app = |state: &MapState| project(&state.snapshot(), &app).unwrap().containers.len();
+    assert_eq!(
+        on_app(&state),
+        0,
+        "the folder's own state speaks, naming 5173"
+    );
+
+    drop(winner);
+
+    assert!(state.refresh_liveness());
+    assert_eq!(
+        on_app(&state),
+        1,
+        "the registration speaks now, naming 3000"
+    );
 }
 
 #[test]

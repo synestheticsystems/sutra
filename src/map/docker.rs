@@ -1,7 +1,8 @@
 //! Docker, as its engine tells of it over its Unix socket: the containers running, the ports they
 //! publish and the folders they are for, and the disk Docker takes, its images, its containers,
-//! its volumes and its build cache apart. The map places each container on the project whose
-//! folder it is for, and keeps the rest, with the disk use, for a card of Docker's own.
+//! its volumes and its build cache apart. The map places each container on the projects that
+//! account for it (see `engine::state::containers`), and keeps every container, each with those
+//! projects, and the disk use, for a group of Docker's own on the list.
 //!
 //! Sutra only reads: every request is a GET (see `http`), and nothing here starts, stops or
 //! cleans anything. Nor does it ever keep Docker awake: Docker Desktop's Resource Saver stops the
@@ -109,16 +110,36 @@ pub struct Store {
     pub reclaimable: u64,
 }
 
-/// Docker on the map: the containers running in no project's folder, and its disk use, as the
-/// engine last said.
+/// Docker on the map: every container running, each with the projects that account for it, and
+/// its disk use, as the engine last said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Docker {
     /// The socket Docker is read through, which tells this Docker from another.
     pub socket: PathBuf,
-    /// The containers running in no project's folder, by name.
-    pub containers: Vec<Container>,
+    /// Every container running, by name, whether a project accounts for it or not.
+    pub running: Vec<RunningContainer>,
     /// `None` until the engine has said, as it is asked only while containers run.
     pub disk: Option<DockerDisk>,
+}
+
+impl Docker {
+    /// The containers running that no project accounts for, which show on no project's card, by
+    /// name.
+    pub fn unaccounted(&self) -> impl Iterator<Item = &Container> {
+        let unaccounted = self
+            .running
+            .iter()
+            .filter(|running| running.projects.is_empty());
+        unaccounted.map(|running| &running.container)
+    }
+}
+
+/// A container running, with the projects on the map that account for it, on whose cards it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningContainer {
+    pub container: Container,
+    /// The folders of the projects that account for it, by path; none when no project does.
+    pub projects: Vec<PathBuf>,
 }
 
 /// What the reader found of Docker, as the engine thread receives it.

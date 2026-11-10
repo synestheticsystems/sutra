@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use super::{Node, Row};
-use crate::map::docker::{Container, DockerDisk, Store};
+use crate::map::docker::{Container, DockerDisk, RunningContainer, Store};
 use crate::map::test_support::{agent_session, at, project_at, snapshot_of, subagent_at_work};
 use crate::map::{
     AgentSession, AgentStatus, Docker, GroupKey, Project, Provenance, RepoInfo, ScratchSpace,
@@ -158,8 +158,8 @@ pub(in crate::dashboard) fn subagent_in(cwd: &str) -> SubagentWithParent {
     SubagentWithParent::new(subagent, &agent("/code/app", AgentStatus::Idle))
 }
 
-/// Docker read at `/run/docker.sock`, running `containers` for no project, made `minutes_ago`
-/// each, and taking `bytes` on disk.
+/// Docker read at `/run/docker.sock`, running `containers` no project accounts for, each started
+/// `minutes_ago`, and taking `bytes` on disk.
 pub(in crate::dashboard) fn docker(containers: &[(&str, u64)], bytes: u64) -> Docker {
     let store = |bytes| Store {
         bytes,
@@ -167,18 +167,21 @@ pub(in crate::dashboard) fn docker(containers: &[(&str, u64)], bytes: u64) -> Do
         in_use: 1,
         reclaimable: 0,
     };
-    let container = |&(name, minutes_ago): &(&str, u64)| Container {
-        id: name.to_string(),
-        name: name.to_string(),
-        image: "postgres:17".to_string(),
-        compose_folder: None,
-        bound: Vec::new(),
-        ports: Vec::new(),
-        started: Some(now() - Duration::from_secs(minutes_ago * 60)),
+    let running = |&(name, minutes_ago): &(&str, u64)| RunningContainer {
+        container: Container {
+            id: name.to_string(),
+            name: name.to_string(),
+            image: "postgres:17".to_string(),
+            compose_folder: None,
+            bound: Vec::new(),
+            ports: Vec::new(),
+            started: Some(now() - Duration::from_secs(minutes_ago * 60)),
+        },
+        projects: Vec::new(),
     };
     Docker {
         socket: PathBuf::from("/run/docker.sock"),
-        containers: containers.iter().map(container).collect(),
+        running: containers.iter().map(running).collect(),
         disk: Some(DockerDisk {
             images: store(bytes),
             containers: store(0),

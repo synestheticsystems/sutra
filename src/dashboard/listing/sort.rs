@@ -117,8 +117,7 @@ fn activity_rank(group: &Group) -> (Reverse<Option<u64>>, String) {
 /// its card started, as a group by its newest work.
 fn docker_activity_rank(docker: &Docker) -> (Reverse<Option<u64>>, String) {
     let started = docker
-        .containers
-        .iter()
+        .unaccounted()
         .filter_map(|container| container.started);
     (Reverse(slice(started.max())), DOCKER.to_lowercase())
 }

@@ -41,8 +41,10 @@ pub struct Project {
     /// The user's processes listening for TCP connections that run in the folder, and in no project
     /// nested in it, in the order macOS lists them.
     pub listening: Vec<ListeningProcess>,
-    /// The Docker containers running for the folder, by name: those compose made there, else those
-    /// bind-mounting a folder of it, and in no project nested in it.
+    /// The Docker containers running that the folder accounts for, by name: those compose made
+    /// there, else those publishing a port its dev-runner environment names, else those
+    /// bind-mounting a folder of it, and in no project nested in it (see
+    /// `engine::state::containers`).
     pub containers: Vec<Container>,
     pub artifacts: Vec<ArtifactDir>,
     /// Everything in the folder but its build folders and the projects nested inside it, which
