@@ -54,8 +54,10 @@ use open_folder::Identity;
 
 pub use cargo_rules::{CargoEnv, CargoRefusal, IncludeProblem, Origin};
 pub use idle::{
-    IdleClean, IdleCleans, IdleFolder, LeftOut, WORTH_CLEANING_BYTES, Why,
-    can_tell_what_is_at_work, idle_folders, is_blocked_by_a_sharer, is_still_idle, prepare_idle,
+    AtRestClean, AtRestCleans, AtRestFolder, IdleClean, IdleCleans, IdleFolder, LeftOut,
+    OfferTimes, Offered, WORTH_CLEANING_BYTES, Why, at_rest_folders, can_tell_what_is_at_work,
+    idle_folders, is_blocked_by_a_sharer, is_still_at_rest, is_still_idle, prepare_idle,
+    prepare_offer,
 };
 pub use prepare::{PrepareError, Prepared, Sharing, prepare, prepare_each};
 pub use run::{CleanError, Cleaned, Freed, LockedPlan, Progress};

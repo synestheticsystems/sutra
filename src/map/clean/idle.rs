@@ -1,5 +1,11 @@
 //! Which build folders nobody is using, and the cleans of those that may go: what the window offers
-//! to clean in one go, and what it cleans by itself when the disk runs low.
+//! to clean in one go, and what it cleans by itself when the disk runs low. Apart from them, the
+//! window asks about the folders kept only by agent sessions at rest (`at_rest`), which nothing
+//! Sutra does by itself may clean.
+
+mod at_rest;
+
+pub use at_rest::{AtRestClean, AtRestCleans, AtRestFolder, at_rest_folders, is_still_at_rest};
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -7,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use super::prepare::{Builds, building_in, prepare_among};
 use super::{CargoEnv, PrepareError, Prepared};
-use crate::map::{ArtifactDir, ArtifactKind, FolderAccess, Project, Snapshot};
+use crate::map::{AgentSession, ArtifactDir, ArtifactKind, FolderAccess, Project, Snapshot};
 
 /// The least a build folder holds for a clean to be worth offering. A clean leaves a few empty lock
 /// files and a tag behind (see `run`), which must not go on offering themselves.
@@ -23,22 +29,33 @@ pub struct IdleFolder<'a> {
     pub quiet_at_least: Duration,
 }
 
-/// Whether something is at work in `project` now: an agent, other than a job that has finished, a
-/// subagent at work there, as in a worktree of its own, an environment whose process lives, a
-/// process listening for connections there, as a server run from its build folder does, a Docker
-/// container compose made there or that mounts a folder of it, either of which may run what was
-/// built there, or the session whose scratch folder it is, while the session runs. Such a session
-/// builds into its scratch whenever it likes, and a build's writes date no folder, so its scratch
-/// can look quiet between two of its builds. A container the project holds only as its environment
-/// names a port it publishes, such as a database left running once the environment stopped, runs
-/// nothing built there, and keeps nothing.
+/// Whether something is at work in `project` now: an agent, other than a job that has finished, or
+/// anything else (see `is_at_work_but_for_sessions`). A session keeps its project in use however
+/// long it has been at rest, as it may be waiting for the user's review of what it built.
 fn in_use(project: &Project) -> bool {
+    sessions_on(project).next().is_some() || is_at_work_but_for_sessions(project)
+}
+
+/// The agent sessions on `project`, but jobs that have finished, which nothing comes back to.
+fn sessions_on(project: &Project) -> impl Iterator<Item = &AgentSession> {
+    (project.agents.iter()).filter(|agent| !agent.is_finished_job())
+}
+
+/// Whether something other than an agent session on `project` is at work there now: a subagent at
+/// work there, as in a worktree of its own, an environment whose process lives, a process listening
+/// for connections there, as a server run from its build folder does, a Docker container compose
+/// made there or that mounts a folder of it, either of which may run what was built there, or the
+/// session whose scratch folder it is, while the session runs. Such a session builds into its
+/// scratch whenever it likes, and a build's writes date no folder, so its scratch can look quiet
+/// between two of its builds. A container the project holds only as its environment names a port
+/// it publishes, such as a database left running once the environment stopped, runs nothing built
+/// there, and keeps nothing.
+fn is_at_work_but_for_sessions(project: &Project) -> bool {
     let session_runs = project
         .scratch
         .as_ref()
         .is_some_and(|space| space.session.is_some());
-    project.agents.iter().any(|agent| !agent.is_finished_job())
-        || !project.subagents.is_empty()
+    !project.subagents.is_empty()
         || project.environment.as_ref().is_some_and(|env| env.alive)
         || !project.listening.is_empty()
         || (project.containers.iter()).any(|container| container.folder_in(&project.path).is_some())
@@ -105,19 +122,12 @@ fn idle_folders_by(
             is_idle(project, now, at_least).then_some((project, at_least))
         })
         .flat_map(|(project, quiet_at_least)| {
-            project
-                .artifacts
-                .iter()
-                .filter(|dir| dir.kind == ArtifactKind::CargoTarget)
-                .filter_map(move |dir| {
-                    let bytes = dir.measurement.usage()?.bytes;
-                    (bytes >= WORTH_CLEANING_BYTES).then_some(IdleFolder {
-                        project,
-                        dir,
-                        bytes,
-                        quiet_at_least,
-                    })
-                })
+            worth_cleaning(project).map(move |(dir, bytes)| IdleFolder {
+                project,
+                dir,
+                bytes,
+                quiet_at_least,
+            })
         })
         .collect();
     found.sort_by_key(|folder| {
@@ -127,6 +137,16 @@ fn idle_folders_by(
         )
     });
     found
+}
+
+/// Each of `project`'s Cargo build folders that holds enough to be worth cleaning, with what it
+/// holds.
+fn worth_cleaning(project: &Project) -> impl Iterator<Item = (&ArtifactDir, u64)> {
+    let cargo = (project.artifacts.iter()).filter(|dir| dir.kind == ArtifactKind::CargoTarget);
+    cargo.filter_map(|dir| {
+        let bytes = dir.measurement.usage()?.bytes;
+        (bytes >= WORTH_CLEANING_BYTES).then_some((dir, bytes))
+    })
 }
 
 /// The name of a project that shares `prepared`'s folders and is not idle, whose builds must not go
@@ -141,13 +161,27 @@ pub fn is_blocked_by_a_sharer(
     now: SystemTime,
     quiet_at_least: impl Fn(&Project) -> Option<Duration>,
 ) -> Option<String> {
+    let busy = sharer_keeping(prepared, project, map, |sharer| {
+        is_idle_by(sharer, now, &quiet_at_least)
+    })?;
+    Some(busy.name.clone())
+}
+
+/// A project sharing `prepared`'s folders whose builds `may_go` says must stay: one that shared
+/// them as the clean was worked out for the project at `project`, or one `map` shows building in
+/// them now.
+fn sharer_keeping<'a>(
+    prepared: &'a Prepared,
+    project: &'a Path,
+    map: &'a Snapshot,
+    may_go: impl Fn(&Project) -> bool,
+) -> Option<&'a Project> {
     let found_then = (prepared.sharing.project_folders.iter())
         .filter_map(|folder| map.projects.iter().find(|sharer| sharer.path == *folder));
     let building_now = building_in(prepared.plan(), project, map);
-    let busy = found_then
+    found_then
         .chain(building_now)
-        .find(|sharer| !is_idle_by(sharer, now, &quiet_at_least))?;
-    Some(busy.name.clone())
+        .find(|sharer| !may_go(sharer))
 }
 
 /// Whether `prepared`, worked out for a build folder of the idle project at `project`, may still go
@@ -218,39 +252,107 @@ pub fn prepare_idle(
     left_alone: &HashSet<PathBuf>,
     env: &CargoEnv,
 ) -> IdleCleans {
-    let mut found = IdleCleans::default();
-    let idle: Vec<IdleFolder> = idle_folders_by(map, now, &quiet_at_least)
-        .into_iter()
-        .filter(|folder| !left_alone.contains(&folder.dir.path))
-        .collect();
+    let mut idle = idle_folders_by(map, now, &quiet_at_least);
+    idle.retain(|folder| !left_alone.contains(&folder.dir.path));
     if idle.is_empty() {
-        return found;
+        return IdleCleans::default();
     }
     let builds = Builds::of(map, env);
+    prepare_idle_among(idle, map, now, quiet_at_least, env, &builds)
+}
+
+/// `prepare_idle` of the folders `idle`, among other cleans that share what `builds` worked out.
+fn prepare_idle_among(
+    idle: Vec<IdleFolder>,
+    map: &Snapshot,
+    now: SystemTime,
+    quiet_at_least: impl Fn(&Project) -> Option<Duration>,
+    env: &CargoEnv,
+    builds: &Builds,
+) -> IdleCleans {
+    let mut found = IdleCleans::default();
+    let may_share = |sharer: &Project| is_idle_by(sharer, now, &quiet_at_least);
     for folder in idle {
-        let project = folder.project;
-        let left_out = |why| LeftOut {
-            project_name: project.name.clone(),
-            folder: folder.dir.path.clone(),
-            why,
-        };
-        match prepare_among(&folder.dir.path, &project.path, map, env, &builds) {
-            Err(err) => found.left_out.push(left_out(Why::Refused(err))),
-            Ok(prepared) => {
-                match is_blocked_by_a_sharer(&prepared, &project.path, map, now, &quiet_at_least) {
-                    Some(sharer) => found.left_out.push(left_out(Why::SharedWith(sharer))),
-                    None => found.cleans.push(IdleClean {
-                        clicked: folder.dir.path.clone(),
-                        project_name: project.name.clone(),
-                        project_path: project.path.clone(),
-                        quiet_at_least: folder.quiet_at_least,
-                        prepared,
-                    }),
-                }
-            }
+        match prepare_unless_kept(folder.project, folder.dir, map, env, builds, may_share) {
+            Err(left_out) => found.left_out.push(left_out),
+            Ok(prepared) => found.cleans.push(IdleClean {
+                clicked: folder.dir.path.clone(),
+                project_name: folder.project.name.clone(),
+                project_path: folder.project.path.clone(),
+                quiet_at_least: folder.quiet_at_least,
+                prepared,
+            }),
         }
     }
     found
+}
+
+/// Work out the clean of `dir`, a build folder of `project`, among other cleans that share what
+/// `builds` worked out, or say why it is left out: Sutra will not clean it now, or a project
+/// sharing its folders keeps them, as `may_share` does not let its builds go.
+fn prepare_unless_kept(
+    project: &Project,
+    dir: &ArtifactDir,
+    map: &Snapshot,
+    env: &CargoEnv,
+    builds: &Builds,
+    may_share: impl Fn(&Project) -> bool,
+) -> Result<Prepared, LeftOut> {
+    let left_out = |why| LeftOut {
+        project_name: project.name.clone(),
+        folder: dir.path.clone(),
+        why,
+    };
+    let prepared = prepare_among(&dir.path, &project.path, map, env, builds)
+        .map_err(|err| left_out(Why::Refused(err)))?;
+    match sharer_keeping(&prepared, &project.path, map, may_share) {
+        Some(sharer) => Err(left_out(Why::SharedWith(sharer.name.clone()))),
+        None => Ok(prepared),
+    }
+}
+
+/// How long a project must have been left for the window to offer its build folders: quiet with
+/// nothing at work, for them to count as idle, and quiet with nothing at work but its sessions, each
+/// at rest as long, for them to count as kept only by sessions at rest (see `at_rest`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfferTimes {
+    pub quiet: Duration,
+    pub at_rest: Duration,
+}
+
+/// What the window offers to clean in one go, each asked about in a question of its own: every
+/// idle folder, and apart from them the folders kept only by sessions at rest.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Offered {
+    pub idle: IdleCleans,
+    pub at_rest: AtRestCleans,
+}
+
+/// Work out what the window offers to clean, by `times`, but for the folders in `left_alone`, such
+/// as those already being cleaned: the clean of every idle folder, as `prepare_idle` does, and of
+/// every folder kept only by sessions at rest (see `at_rest`). The two never take the same folder:
+/// a project with a session on it is never idle, so it keeps from the idle cleans every folder it
+/// shares. What every project's build deletes is read once for both, and only once some folder is
+/// found.
+pub fn prepare_offer(
+    map: &Snapshot,
+    now: SystemTime,
+    times: OfferTimes,
+    left_alone: &HashSet<PathBuf>,
+    env: &CargoEnv,
+) -> Offered {
+    let mut idle = idle_folders(map, now, times.quiet);
+    idle.retain(|folder| !left_alone.contains(&folder.dir.path));
+    let mut at_rest = at_rest_folders(map, now, times.at_rest);
+    at_rest.retain(|folder| !left_alone.contains(&folder.dir.path));
+    if idle.is_empty() && at_rest.is_empty() {
+        return Offered::default();
+    }
+    let builds = Builds::of(map, env);
+    Offered {
+        idle: prepare_idle_among(idle, map, now, |_| Some(times.quiet), env, &builds),
+        at_rest: at_rest::prepare_among(at_rest, map, now, times, env, &builds),
+    }
 }
 
 #[cfg(test)]
@@ -270,16 +372,16 @@ mod tests {
     use std::io;
     use std::net::Ipv4Addr;
 
-    const DAY: u64 = 86_400;
-    const THREE_DAYS: Duration = Duration::from_secs(3 * DAY);
-    const LARGE: u64 = 10 * WORTH_CLEANING_BYTES;
+    pub(super) const DAY: u64 = 86_400;
+    pub(super) const THREE_DAYS: Duration = Duration::from_secs(3 * DAY);
+    pub(super) const LARGE: u64 = 10 * WORTH_CLEANING_BYTES;
 
-    fn now() -> SystemTime {
+    pub(super) fn now() -> SystemTime {
         at(1_000 * DAY)
     }
 
     /// A project at `/code/<name>` quiet for `days`, with a `target` of `bytes`.
-    fn quiet_project(name: &str, days: u64, bytes: u64) -> Project {
+    pub(super) fn quiet_project(name: &str, days: u64, bytes: u64) -> Project {
         let path = format!("/code/{name}");
         Project {
             last_activity: Some(at((1_000 - days) * DAY)),
@@ -433,7 +535,7 @@ mod tests {
 
     /// A scratch folder of the session `name`, with `session` running or none, quiet for 9 days as
     /// far as its activity is known, with a large build folder and its own files at `own_files`.
-    fn scratch_folder(
+    pub(super) fn scratch_folder(
         name: &str,
         session: Option<AgentSession>,
         own_files: Measurement,
@@ -531,7 +633,7 @@ mod tests {
     }
 
     /// A built package in `fixture` at `name`, on the map as idle.
-    fn idle_package(fixture: &TempDir, name: &str) -> Project {
+    pub(super) fn idle_package(fixture: &TempDir, name: &str) -> Project {
         fixture.package(name);
         fixture.write(&format!("{name}/target/debug/deps/lib"), [1; 64 * 1024]);
         let path = fixture.path(name);
@@ -591,7 +693,7 @@ mod tests {
     }
 
     /// An idle project `app` with a build folder, and a package `other` that builds in it too.
-    fn app_and_a_package_building_in_it(fixture: &TempDir) -> (Project, Project) {
+    pub(super) fn app_and_a_package_building_in_it(fixture: &TempDir) -> (Project, Project) {
         let app = idle_package(fixture, "app");
         fixture.package("other");
         fixture.write(
@@ -826,7 +928,7 @@ mod tests {
         assert!(!still_idle(&cannot_tell));
     }
 
-    fn session_file_unread() -> SourceProblem {
+    pub(super) fn session_file_unread() -> SourceProblem {
         SourceProblem::new(
             Source::ClaudeSessionFile,
             PathBuf::from("/Users/dev/.claude/sessions/1.json"),
