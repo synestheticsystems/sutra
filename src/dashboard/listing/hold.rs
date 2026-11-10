@@ -28,7 +28,7 @@ pub(super) struct Hold {
 }
 
 /// The cards of each section of the list, in the order on screen, those under a folded line where
-/// it stands, and Docker's by the socket Docker is read through. The cards under a line stand
+/// it stands, and Docker's group by the socket Docker is read through. The cards under a line stand
 /// together, so the order of the groups, and of the rows under each line, is the order of their
 /// cards.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -102,9 +102,9 @@ impl Hold {
 
     /// `sorted`, one section's rows as the sort lays them out, with the cards the held order lists
     /// put back in that order: each group in the place its first held card gives it, and Docker's
-    /// in the place of its card, then under each line the rows beside each other, each in the place
-    /// of its first held card, the line's own card staying first. Each group or row new to the
-    /// section keeps the place the sort gives it, and one gone from it leaves no gap. Unheld,
+    /// in the place its socket held, then under each line the rows beside each other, each in the
+    /// place of its first held card, the line's own card staying first. Each group or row new to
+    /// the section keeps the place the sort gives it, and one gone from it leaves no gap. Unheld,
     /// `sorted` as it is.
     pub(super) fn arrange<'a>(
         &self,
@@ -126,7 +126,7 @@ impl Hold {
         );
         let row_place = |row: &SectionRow| match row {
             SectionRow::Group(group) => places.first_of(&group.cards()),
-            SectionRow::Docker(docker) => places.0.get(docker.socket.as_path()).copied(),
+            SectionRow::Docker(listed) => places.0.get(listed.docker.socket.as_path()).copied(),
         };
         keep_places(sorted, row_place)
             .into_iter()

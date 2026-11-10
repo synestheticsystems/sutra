@@ -63,8 +63,11 @@ private struct Rows: View {
                     case .card(let card, let place):
                         CardView(model: card, dashboard: dashboard)
                             .hanging(at: place)
-                    case .docker(let card, let place):
-                        DockerCardView(card: card)
+                    case .container(let card, let place):
+                        ContainerCardView(card: card)
+                            .hanging(at: place)
+                    case .dockerDisk(let tray, let location, let place):
+                        DockerDiskRow(tray: tray, location: location)
                             .hanging(at: place)
                     case .elsewhere(let heading, let lines, let waiting, let place):
                         ElsewhereCard(heading: heading, lines: lines, waiting: waiting)

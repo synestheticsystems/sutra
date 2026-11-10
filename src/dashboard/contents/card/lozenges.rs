@@ -21,8 +21,9 @@ use crate::map::Project;
 /// container, by a port it publishes.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Lozenge {
-    /// The unit's name, the process's, or the short name of the image the container runs.
-    pub name: String,
+    /// The unit's name, the process's, or the short name of the image the container runs; `None`
+    /// on a container's own card, which names the container already.
+    pub name: Option<String>,
     /// The port as the window draws it after the name, colon included: `:3000`.
     pub port: Option<String>,
     pub look: LozengeLook,
@@ -92,7 +93,7 @@ pub(in crate::dashboard::contents) fn on_cards<'p>(
         let listening = processes::lozenges(&card.listening, &shown, ctx.home);
         placed.extend(listening.into_iter().map(alone));
         shown.extend(card.listening.iter().flat_map(|process| process.ports()));
-        let on = containers::CardOf::Project(&card.path);
+        let on = containers::ShownOn::ProjectCard(&card.path);
         for container in &card.containers {
             if !containers_shown.insert(container.id.as_str()) {
                 continue;
@@ -206,12 +207,12 @@ mod tests {
             now: now(),
         };
 
-        let shown: Vec<(String, Option<String>)> = lozenges(&app, &ctx)
+        let shown: Vec<(Option<String>, Option<String>)> = lozenges(&app, &ctx)
             .into_iter()
             .map(|lozenge| (lozenge.name, lozenge.port))
             .collect();
 
-        let lozenge = |name: &str, port: &str| (name.to_string(), Some(port.to_string()));
+        let lozenge = |name: &str, port: &str| (Some(name.to_string()), Some(port.to_string()));
         assert_eq!(
             shown,
             [

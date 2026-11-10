@@ -276,7 +276,7 @@ fn a_folded_line_shows_two_of_the_servers_up_in_what_it_holds_and_counts_the_res
         .iter()
         .map(|on_line| {
             (
-                on_line.lozenge.name.as_str(),
+                on_line.lozenge.name.as_deref().unwrap(),
                 on_line.lozenge.port.as_deref(),
             )
         })
@@ -339,7 +339,7 @@ fn a_folded_line_shows_its_cards_processes_and_containers_and_a_container_on_two
         .iter()
         .map(|on_line| {
             (
-                on_line.lozenge.name.as_str(),
+                on_line.lozenge.name.as_deref().unwrap(),
                 on_line.lozenge.port.as_deref(),
             )
         })

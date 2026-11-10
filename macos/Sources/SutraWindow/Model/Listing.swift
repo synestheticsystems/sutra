@@ -20,9 +20,11 @@ public enum Row: Identifiable, Equatable {
     /// checkout's, which holds its own card and the copies made from it. Open, its rows follow it.
     case line(Line, place: Place)
     case card(CardModel, place: Place)
-    /// Docker's card, alone under its group's line: the containers it runs for no project, and its
-    /// disk use.
-    case docker(DockerCard, place: Place)
+    /// A Docker container's card, under Docker's line.
+    case container(ContainerCard, place: Place)
+    /// The disk Docker takes, under Docker's line, on a tray, with the socket Docker is read
+    /// through.
+    case dockerDisk(tray: Tray, location: String, place: Place)
     /// The agents working outside every project, which stand in Other.
     case elsewhere(heading: String, lines: [ElsewhereLine], waiting: Bool, place: Place)
     case quietProjects(open: Bool, label: String, tooltip: String)
@@ -30,8 +32,9 @@ public enum Row: Identifiable, Equatable {
     public enum ID: Hashable {
         case card(path: String)
         case line(LineKey)
-        /// The one Docker card there is.
-        case docker
+        case container(id: String)
+        /// The one row of Docker's disk there is.
+        case dockerDisk
         case elsewhere
         case quietProjects
     }
@@ -40,7 +43,8 @@ public enum Row: Identifiable, Equatable {
         switch self {
         case .card(let model, _): .card(path: model.path)
         case .line(let line, _): .line(line.key)
-        case .docker: .docker
+        case .container(let card, _): .container(id: card.id)
+        case .dockerDisk: .dockerDisk
         case .elsewhere: .elsewhere
         case .quietProjects: .quietProjects
         }
@@ -53,8 +57,11 @@ public enum Row: Identifiable, Equatable {
             lhs === rhs && lhsPlace == rhsPlace
         case (.line(let lhs, let lhsPlace), .line(let rhs, let rhsPlace)):
             lhs == rhs && lhsPlace == rhsPlace
-        case (.docker(let lhs, let lhsPlace), .docker(let rhs, let rhsPlace)):
+        case (.container(let lhs, let lhsPlace), .container(let rhs, let rhsPlace)):
             lhs == rhs && lhsPlace == rhsPlace
+        case (.dockerDisk(let lhsTray, let lhsLocation, let lhsPlace),
+              .dockerDisk(let rhsTray, let rhsLocation, let rhsPlace)):
+            lhsTray == rhsTray && lhsLocation == rhsLocation && lhsPlace == rhsPlace
         case (.elsewhere(let lhsHeading, let lhsLines, let lhsWaiting, let lhsPlace),
               .elsewhere(let rhsHeading, let rhsLines, let rhsWaiting, let rhsPlace)):
             lhsHeading == rhsHeading && lhsLines == rhsLines && lhsWaiting == rhsWaiting
@@ -118,8 +125,10 @@ struct CardModels {
                     return .card(model, place: place)
                 case .line(let line, let place):
                     return .line(line, place: place)
-                case .docker(let card, let place):
-                    return .docker(card, place: place)
+                case .container(let card, let place):
+                    return .container(card, place: place)
+                case .dockerDisk(let tray, let location, let place):
+                    return .dockerDisk(tray: tray, location: location, place: place)
                 case .elsewhere(let heading, let lines, let waiting, let place):
                     return .elsewhere(heading: heading, lines: lines, waiting: waiting, place: place)
                 case .quietProjects(_, let open, let label, let tooltip):

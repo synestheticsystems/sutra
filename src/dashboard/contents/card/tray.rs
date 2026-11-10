@@ -36,12 +36,12 @@ pub struct Tray {
 pub struct DiskUse {
     /// The folder's whole size, with what a clean has left of the folders it is at work on.
     pub total: Option<String>,
-    /// The build folders too small to name, for the total's tooltip; on Docker's card, its stores
-    /// too small to name, and when Docker said what it takes.
+    /// The build folders too small to name, for the total's tooltip; on Docker's disk row, its
+    /// stores too small to name, and when Docker said what it takes.
     pub total_tooltip: Option<String>,
     /// Why the folder has no total, when measuring its own files failed: an alert sign's tooltip.
     pub warning: Option<String>,
-    /// The build folders large enough to matter, largest first; on Docker's card, its stores.
+    /// The build folders large enough to matter, largest first; on Docker's disk row, its stores.
     pub entries: Vec<TrayEntry>,
     /// How far the clean of its build folders has come, from 0 to 1, by the space given back:
     /// the bar along the seam above the tray. Empty while a clean is worked out or waits its turn.

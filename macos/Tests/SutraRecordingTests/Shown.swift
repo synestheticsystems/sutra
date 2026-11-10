@@ -8,8 +8,8 @@ let takeOpening = [
 ]
 
 /// What the list in `contents` shows, a few words a row: a line as `name: open` or
-/// `name: folded`, a card by its name, Docker's card as `docker`, and the quiet row as
-/// `quiet:<count>`.
+/// `name: folded`, a card by its name, a container's as `container <name>`, Docker's disk as
+/// `docker's disk`, and the quiet row as `quiet:<count>`.
 func shown(_ contents: WindowContents) -> [String] {
     guard case .rows(let rows) = contents.list else { return [] }
     return rows.map { row in
@@ -18,8 +18,10 @@ func shown(_ contents: WindowContents) -> [String] {
             "\(line.name): " + (line.fold == .open ? "open" : "folded")
         case .card(let card, _):
             card.name
-        case .docker:
-            "docker"
+        case .container(let card, _):
+            "container \(card.name)"
+        case .dockerDisk:
+            "docker's disk"
         case .elsewhere:
             "elsewhere"
         case .quietProjects(let count, _, _, _):
@@ -34,7 +36,7 @@ func card(at path: String, in contents: WindowContents) -> Card? {
     let cards = rows.compactMap { row -> Card? in
         switch row {
         case .card(let card, _): card
-        case .line, .docker, .elsewhere, .quietProjects: nil
+        case .line, .container, .dockerDisk, .elsewhere, .quietProjects: nil
         }
     }
     return cards.first { $0.path == path }

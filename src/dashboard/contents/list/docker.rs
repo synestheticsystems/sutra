@@ -1,60 +1,101 @@
-//! Docker's own group, under a line of its own: it came from no upstream, and what it holds is no
-//! project's. Its card shows the containers running for no project on the map, a lozenge for each
-//! port they publish, as a project's card shows what serves in it, and along its bottom the disk
-//! Docker takes, as a project's tray shows its folder's: the total, then the stores large enough to
-//! name, largest first, as `48 GB  volumes  images  build cache` reads. Each store's tooltip gives
-//! its size, how many it holds and how many are in use, and what a prune would give back: Sutra
-//! itself cleans nothing of Docker's, as its volumes hold data, so its line offers no clean. The
-//! card opens no folder, as Docker keeps what it holds in its own virtual machine.
+//! Docker's own group, under a line of its own: it came from no upstream, and what it holds is
+//! Docker's, not a project's. Open, it holds a card for each container running, whether a project
+//! accounts for it or not (see `container`), and the disk Docker takes, in a row of its own with no
+//! title, as its place under Docker's line says whose it is (see `disk`): first in the Disk sort,
+//! which weighs it, and after the containers in the others. Folded shut, the line shows the
+//! containers no project accounts for, a lozenge for each port they publish, as those a project
+//! accounts for show on that project's card and line. It offers no clean, as Sutra cleans nothing
+//! of Docker's, and nothing under it opens a folder, as Docker keeps what it holds in its own
+//! virtual machine.
 
-use std::cmp::Reverse;
+mod container;
+mod disk;
+
+pub use container::{AccountedFor, ContainerCard};
+
 use std::collections::BTreeSet;
 
 use super::line::first_few;
-use crate::dashboard::contents::card::lozenges::containers::{self, CardOf};
-use crate::dashboard::contents::card::{CardContext, worth_showing};
-use crate::dashboard::listing::DOCKER;
-use crate::dashboard::{
-    DiskUse, GroupKind, Line, LineFold, LineKey, Lozenge, Tray, TrayEntry, format,
-};
-use crate::map::Docker;
-use crate::map::docker::{DockerDisk, Store};
+use super::rows::{ListRow, Place};
+use crate::dashboard::contents::card::CardContext;
+use crate::dashboard::contents::card::lozenges::containers::{self, ShownOn};
+use crate::dashboard::listing::{DOCKER, DockerGroup};
+use crate::dashboard::{GroupKind, Line, LineFold, LineKey, SortOrder, format};
+use crate::map::docker::{DockerDisk, RunningContainer};
 
-/// What Docker's card and its line show, in their tooltips.
-const SHOWN: &str = "The Docker containers running for no project on the list, and the disk Docker                      takes";
-
-/// Docker's card.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct DockerCard {
-    /// `Docker`.
-    pub name: String,
-    /// What the card shows.
-    pub name_tooltip: String,
-    /// How long ago the latest container on the card started, as `8d` reads.
-    pub age: Option<String>,
-    /// The containers running for no project, a lozenge for each port one publishes, by name.
-    pub lozenges: Vec<Lozenge>,
-    /// The disk Docker takes, as a project's tray holds its folder's: `None` until Docker has said.
-    pub tray: Option<Tray>,
-    /// The socket Docker is read through, with `~` for the home folder: shown while the pointer is
-    /// over the card, where a project's card shows its folder.
-    pub location: String,
-}
+/// What Docker's line stands for, in its tooltip.
+const SHOWN: &str = "The Docker containers running, and the disk Docker takes";
 
 impl LineKey {
-    /// The key of Docker's line, which stands for Docker's card alone.
+    /// The key of Docker's line, which stands for Docker's group.
     pub(in crate::dashboard) const DOCKER: LineKey = LineKey::Group {
         kind: GroupKind::Docker,
     };
 }
 
-/// The line of Docker's group, `folded` shut or open: Docker's name, and the disk Docker takes,
-/// as its card's tray totals it; folded shut, the first of its card's lozenges, each running for no
-/// project, with no agent, as no agent works in Docker. It offers no clean, nor to clean by itself
-/// once idle: Sutra cleans nothing of Docker's.
-pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
+/// The rows of Docker's group as the list shows it, `shown`, its line `folded` shut or open, in
+/// `sort`: the line, then while it is open what it holds.
+pub(super) fn rows(
+    shown: &DockerGroup,
+    folded: bool,
+    sort: SortOrder,
+    ctx: &CardContext,
+) -> Vec<ListRow> {
+    let line = ListRow::Line {
+        line: Box::new(line(shown, folded, ctx)),
+        place: Place {
+            depth: 0,
+            first: false,
+        },
+    };
+    if folded {
+        return vec![line];
+    }
+    let containers = shown.containers.iter().copied().map(Under::Container);
+    let disk = shown.docker.disk.filter(|_| shown.disk).map(Under::Disk);
+    let under: Vec<Under> = match sort {
+        SortOrder::Disk => disk.into_iter().chain(containers).collect(),
+        SortOrder::Activity | SortOrder::Name => containers.chain(disk).collect(),
+    };
+    let under = under.into_iter().enumerate().map(|(at, row)| {
+        let place = Place {
+            depth: 1,
+            first: at == 0,
+        };
+        match row {
+            Under::Container(running) => ListRow::Container {
+                card: Box::new(container::card(running, ctx)),
+                place,
+            },
+            Under::Disk(taken) => ListRow::DockerDisk {
+                tray: disk::tray(&taken),
+                location: format::tilde(&shown.docker.socket, ctx.home),
+                place,
+            },
+        }
+    });
+    std::iter::once(line).chain(under).collect()
+}
+
+/// A row under Docker's line.
+enum Under<'a> {
+    Container(&'a RunningContainer),
+    Disk(DockerDisk),
+}
+
+/// Docker's line, `folded` shut or open: Docker's name, and the disk Docker takes, as its row
+/// totals it; folded shut, the first lozenges of the containers listed under it that no project
+/// accounts for, named by their images as on a project's card, with no agent, as no agent works in
+/// Docker. It offers no clean, nor to clean by itself once idle: Sutra cleans nothing of Docker's.
+fn line(shown: &DockerGroup, folded: bool, ctx: &CardContext) -> Line {
     let fold = if folded {
-        let (lozenges, more_lozenges) = first_few(lozenges(docker, ctx));
+        let listed = shown.containers.iter();
+        let unaccounted = listed.filter(|running| running.projects.is_empty());
+        let unaccounted = unaccounted.map(|running| &running.container);
+        let none_shown = BTreeSet::new();
+        let lozenges =
+            containers::lozenges(unaccounted, ShownOn::DockersLine, &none_shown, ctx.home);
+        let (lozenges, more_lozenges) = first_few(lozenges);
         LineFold::Folded {
             sessions: Vec::new(),
             subagents: Vec::new(),
@@ -65,6 +106,7 @@ pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
     } else {
         LineFold::Open
     };
+    let docker = shown.docker;
     Line {
         key: LineKey::DOCKER,
         name: DOCKER.to_string(),
@@ -76,227 +118,52 @@ pub(super) fn line(docker: &Docker, folded: bool, ctx: &CardContext) -> Line {
     }
 }
 
-/// The card of `docker`.
-pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
-    let newest = docker
-        .unaccounted()
-        .filter_map(|container| container.started)
-        .max();
-    DockerCard {
-        name: DOCKER.to_string(),
-        name_tooltip: SHOWN.to_string(),
-        age: newest.map(|then| format::age(then, ctx.now)),
-        lozenges: lozenges(docker, ctx),
-        tray: docker.disk.map(|disk| Tray {
-            disk: Some(disk_use(&disk)),
-            sessions: Vec::new(),
-            subagents: Vec::new(),
-        }),
-        location: format::tilde(&docker.socket, ctx.home),
-    }
-}
-
-/// The lozenges of the containers on Docker's card, each running, by name.
-fn lozenges(docker: &Docker, ctx: &CardContext) -> Vec<Lozenge> {
-    let none_shown = BTreeSet::new();
-    containers::lozenges(docker.unaccounted(), CardOf::Docker, &none_shown, ctx.home)
-}
-
-/// One of Docker's stores, as its card names it.
-struct Named {
-    /// As the tray writes it: `volumes`.
-    label: &'static str,
-    /// What one of its things is: `volume`.
-    noun: &'static str,
-    /// What one in use is: `in use`, or for a container, `running`.
-    in_use: &'static str,
-    store: Store,
-}
-
-/// Docker's disk use as a tray shows it: the total, then the stores large enough to name, largest
-/// first; the others, and when Docker said so, in the total's tooltip.
-fn disk_use(disk: &DockerDisk) -> DiskUse {
-    let named = |label, noun, in_use, store| Named {
-        label,
-        noun,
-        in_use,
-        store,
-    };
-    let stores = [
-        named("images", "image", "in use", disk.images),
-        named("containers", "container", "running", disk.containers),
-        named("volumes", "volume", "in use", disk.volumes),
-        named("build cache", "record", "in use", disk.build_cache),
-    ];
-    let (mut shown, small): (Vec<Named>, Vec<Named>) = stores
-        .into_iter()
-        .partition(|named| worth_showing(named.store.bytes));
-    shown.sort_by_key(|named| Reverse(named.store.bytes));
-    let small = small.iter().map(|named| {
-        let size = format::size(named.store.bytes, false);
-        format!("{} {size}", named.label)
-    });
-    let said = format::timestamp(disk.read_at).map(|at| format!("As Docker said at {at}"));
-    let total_tooltip: Vec<String> = small.chain(said).collect();
-    DiskUse {
-        total: Some(format::size(disk.bytes(), false)),
-        total_tooltip: (!total_tooltip.is_empty()).then(|| total_tooltip.join("\n")),
-        warning: None,
-        entries: shown
-            .iter()
-            .map(|named| TrayEntry {
-                label: named.label.to_string(),
-                tooltip: store_tooltip(named),
-                cleaning: false,
-            })
-            .collect(),
-        progress: None,
-    }
-}
-
-/// What a store's tooltip says: its size, how many it holds and how many are in use, then what a
-/// prune would give back, as `23 GB in 68 volumes, 21 in use` and `5 GB reclaimable` read.
-fn store_tooltip(named: &Named) -> String {
-    let store = &named.store;
-    let in_use = match store.in_use {
-        0 => format!("none {}", named.in_use),
-        n => format!("{n} {}", named.in_use),
-    };
-    format!(
-        "{} in {}, {in_use}\n{} reclaimable",
-        format::size(store.bytes, false),
-        format::plural(store.count, named.noun),
-        format::size(store.reclaimable, false)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::time::Duration;
 
+    use super::disk::tests::disk;
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
     use crate::dashboard::listing::fixtures::now;
-    use crate::map::docker::{Container, PublishedPort, RunningContainer};
+    use crate::map::Docker;
+    use crate::map::docker::{Container, PublishedPort};
     use crate::notifications::Notifier;
 
-    fn store(bytes: u64, count: u64, in_use: u64, reclaimable: u64) -> Store {
-        Store {
-            bytes,
-            count,
-            in_use,
-            reclaimable,
-        }
-    }
-
-    /// Docker's disk use on Daniel's Mac on 2026-11-07, as its engine said at `now()`.
-    fn disk() -> DockerDisk {
-        DockerDisk {
-            images: store(19_143_582_596, 20, 14, 11_446_905),
-            containers: store(659_615_744, 33, 14, 340_410_368),
-            volumes: store(22_705_049_435, 68, 21, 5_039_641_769),
-            build_cache: store(5_415_259_336, 28, 0, 5_415_259_336),
-            read_at: now(),
-        }
-    }
-
-    #[test]
-    fn the_tray_gives_the_total_then_the_stores_large_enough_to_name_largest_first() {
-        let shown = disk_use(&disk());
-
-        assert_eq!(shown.total.as_deref(), Some("48 GB"));
-        let labels: Vec<&str> = shown
-            .entries
-            .iter()
-            .map(|entry| entry.label.as_str())
-            .collect();
-        assert_eq!(labels, ["volumes", "images", "build cache"]);
-        assert_eq!(
-            shown.entries[0].tooltip,
-            "23 GB in 68 volumes, 21 in use\n5 GB reclaimable"
-        );
-        assert_eq!(
-            shown.entries[2].tooltip,
-            "5.4 GB in 28 records, none in use\n5.4 GB reclaimable"
-        );
-        let said = format::timestamp(now()).unwrap();
-        assert_eq!(
-            shown.total_tooltip,
-            Some(format!("containers 660 MB\nAs Docker said at {said}"))
-        );
-        assert!(
-            shown.entries.iter().all(|entry| !entry.cleaning),
-            "Sutra cleans none"
-        );
-    }
-
-    #[test]
-    fn the_card_shows_the_containers_for_no_project_and_opens_no_folder() {
-        let pg = Container {
-            id: "e99d".to_string(),
-            name: "pg596".to_string(),
-            image: "postgres:17".to_string(),
-            compose_folder: None,
-            bound: Vec::new(),
-            ports: vec![PublishedPort {
-                port: 55596,
-                to: 5432,
-                addresses: BTreeSet::from(["127.0.0.1".parse().unwrap()]),
-                udp: false,
-            }],
-            started: Some(now() - Duration::from_secs(9 * 24 * 60 * 60)),
-        };
-        let docker = Docker {
-            socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
-            running: vec![RunningContainer {
-                container: pg,
-                projects: Vec::new(),
-            }],
-            disk: None,
-        };
-        let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
-        let ctx = CardContext {
-            notifier: &notifier,
-            cleaning: &cleaning,
-            home: Path::new("/Users/dev"),
-            now: now(),
-        };
-
-        let card = card(&docker, &ctx);
-
-        assert_eq!(card.name, "Docker");
-        assert_eq!(card.age.as_deref(), Some("9d"));
-        let lozenges: Vec<(&str, Option<&str>)> = card
-            .lozenges
-            .iter()
-            .map(|lozenge| (lozenge.name.as_str(), lozenge.port.as_deref()))
-            .collect();
-        assert_eq!(lozenges, [("postgres", Some(":55596"))]);
-        assert_eq!(card.tray, None, "Docker has not said what it takes");
-        assert_eq!(card.location, "~/.docker/run/docker.sock");
-    }
-
-    #[test]
-    fn dockers_line_totals_the_disk_docker_takes_shows_its_cards_containers_folded_and_cleans_nothing()
-     {
-        let running = |name: &str| RunningContainer {
+    /// The running container `name`, of `name:1`, publishing `port` to a web server's inside it,
+    /// accounted for by `projects`.
+    fn running(name: &str, port: u16, projects: &[&str]) -> RunningContainer {
+        RunningContainer {
             container: Container {
                 id: name.to_string(),
                 name: name.to_string(),
                 image: format!("{name}:1"),
                 compose_folder: None,
                 bound: Vec::new(),
-                ports: Vec::new(),
+                ports: vec![PublishedPort {
+                    port,
+                    to: 8080,
+                    addresses: BTreeSet::from(["127.0.0.1".parse().unwrap()]),
+                    udp: false,
+                }],
                 started: Some(now()),
             },
-            projects: Vec::new(),
-        };
-        let docker = Docker {
+            projects: projects.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    /// Docker at `~/.docker/run/docker.sock`, running `running`, and taking what it took on
+    /// Daniel's Mac on 2026-11-07.
+    fn docker(running: Vec<RunningContainer>) -> Docker {
+        Docker {
             socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
-            running: vec![running("redis"), running("minio"), running("nats")],
+            running,
             disk: Some(disk()),
-        };
+        }
+    }
+
+    /// The rows of all of `docker`'s group, its line `folded` or open, in `sort`.
+    fn rows_of(docker: &Docker, folded: bool, sort: SortOrder) -> Vec<ListRow> {
         let (cleaning, notifier) = (cleaning(), Notifier::new(|_, _| {}));
         let ctx = CardContext {
             notifier: &notifier,
@@ -304,33 +171,133 @@ mod tests {
             home: Path::new("/Users/dev"),
             now: now(),
         };
+        rows(&DockerGroup::whole(docker), folded, sort, &ctx)
+    }
 
-        let folded = line(&docker, true, &ctx);
+    /// `rows` as `line`, `container name` and `disk`, each with its place.
+    fn shapes(rows: &[ListRow]) -> Vec<(String, Place)> {
+        let shape = |row: &ListRow| match row {
+            ListRow::Line { line, place } => (format!("line {}", line.name), *place),
+            ListRow::Container { card, place } => (format!("container {}", card.name), *place),
+            ListRow::DockerDisk { place, .. } => ("disk".to_string(), *place),
+            other => panic!("not of Docker's group: {other:?}"),
+        };
+        rows.iter().map(shape).collect()
+    }
 
-        assert_eq!(folded.key, LineKey::DOCKER);
-        assert_eq!(folded.name, "Docker");
+    fn at(depth: u32, first: bool) -> Place {
+        Place { depth, first }
+    }
+
+    #[test]
+    fn open_dockers_line_holds_a_card_for_every_container_then_its_disk_first_in_the_disk_sort() {
+        let docker = docker(vec![
+            running("api", 8440, &[]),
+            running("payment", 8090, &["/Users/dev/GT/repo/gt-core"]),
+        ]);
+
+        let by_activity = rows_of(&docker, false, SortOrder::Activity);
         assert_eq!(
-            folded.total.as_deref(),
-            Some("48 GB"),
-            "as its card's tray totals it"
+            shapes(&by_activity),
+            [
+                ("line Docker".to_string(), at(0, false)),
+                ("container api".to_string(), at(1, true)),
+                ("container payment".to_string(), at(1, false)),
+                ("disk".to_string(), at(1, false)),
+            ],
+            "payment too, which gt-core accounts for"
         );
-        assert_eq!(folded.menu, [], "Sutra cleans nothing of Docker's");
+        assert_eq!(
+            shapes(&rows_of(&docker, false, SortOrder::Name)),
+            shapes(&by_activity)
+        );
+        assert_eq!(
+            shapes(&rows_of(&docker, false, SortOrder::Disk)),
+            [
+                ("line Docker".to_string(), at(0, false)),
+                ("disk".to_string(), at(1, true)),
+                ("container api".to_string(), at(1, false)),
+                ("container payment".to_string(), at(1, false)),
+            ],
+            "the size it is"
+        );
+        let Some(ListRow::DockerDisk { tray, location, .. }) = by_activity.last() else {
+            unreachable!()
+        };
+        assert_eq!(tray.disk.as_ref().unwrap().total.as_deref(), Some("48 GB"));
+        assert_eq!(location, "~/.docker/run/docker.sock");
+    }
+
+    #[test]
+    fn dockers_line_folded_shows_only_the_containers_no_project_accounts_for_and_cleans_nothing() {
+        let docker = docker(vec![
+            running("api", 8440, &[]),
+            running("payment", 8090, &["/Users/dev/GT/repo/gt-core"]),
+            running("redis", 8001, &[]),
+            running("minio", 9001, &[]),
+        ]);
+
+        let folded = rows_of(&docker, true, SortOrder::Activity);
+
+        let [ListRow::Line { line, place }] = folded.as_slice() else {
+            panic!("the line alone: {folded:?}");
+        };
+        assert_eq!((line.key.clone(), *place), (LineKey::DOCKER, at(0, false)));
+        assert_eq!(line.name, "Docker");
+        assert_eq!(line.total.as_deref(), Some("48 GB"));
+        assert_eq!(
+            line.tooltip,
+            "The Docker containers running, and the disk Docker takes\n~/.docker/run/docker.sock"
+        );
+        assert_eq!(line.menu, [], "Sutra cleans nothing of Docker's");
         let LineFold::Folded {
             lozenges,
             more_lozenges,
             sessions,
             ..
-        } = &folded.fold
+        } = &line.fold
         else {
-            panic!("folded: {:?}", folded.fold);
+            panic!("folded: {:?}", line.fold);
         };
-        let names: Vec<&str> = lozenges.iter().map(|l| l.lozenge.name.as_str()).collect();
-        assert_eq!(names, ["redis", "minio"]);
+        let named: Vec<String> = lozenges
+            .iter()
+            .map(|l| {
+                let name = l.lozenge.name.as_deref().unwrap();
+                format!("{name} {}", l.lozenge.port.as_deref().unwrap())
+            })
+            .collect();
         assert_eq!(
-            more_lozenges.as_ref().map(|more| more.label.as_str()),
-            Some("+1")
+            named,
+            ["api :8440", "redis :8001"],
+            "payment shows on gt-core's"
+        );
+        let more = more_lozenges.as_ref().unwrap();
+        assert_eq!(
+            (more.label.as_str(), more.tooltip.as_str()),
+            ("+1", "minio :9001")
         );
         assert_eq!(sessions, &[], "no agent works in Docker");
-        assert_eq!(line(&docker, false, &ctx).fold, LineFold::Open);
+    }
+
+    #[test]
+    fn a_docker_that_has_not_said_what_it_takes_lists_no_disk_row_and_no_total() {
+        let docker = Docker {
+            disk: None,
+            ..docker(vec![running("pg596", 55596, &[])])
+        };
+
+        let open = rows_of(&docker, false, SortOrder::Disk);
+
+        assert_eq!(
+            shapes(&open),
+            [
+                ("line Docker".to_string(), at(0, false)),
+                ("container pg596".to_string(), at(1, true)),
+            ]
+        );
+        let ListRow::Line { line, .. } = &open[0] else {
+            unreachable!()
+        };
+        assert_eq!(line.total, None);
     }
 }

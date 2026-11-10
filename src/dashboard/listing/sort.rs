@@ -1,16 +1,16 @@
 //! The orders the list can take, as the toolbar names them. Every sort lays the list out in groups
 //! (see `group`), and orders both the groups and the rows beside each other under each line: by
 //! their newest work, by name, or by the disk they take. Docker's group stands among the others
-//! by when the latest container on its card started, by its name, and by the disk Docker takes.
+//! by when the latest of its containers started, by its name, and by the disk Docker takes.
 
 use std::cmp::Reverse;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::focus::{disk_bytes, docker_bytes};
-use super::{DOCKER, Elsewhere, Group, Node, SectionRow};
+use super::{DOCKER, DockerGroup, Elsewhere, Group, Node, SectionRow};
 use crate::dashboard::SortOrder;
-use crate::map::{Docker, GroupKey, Project};
+use crate::map::{GroupKey, Project};
 
 /// How finely the Activity sort tells activity apart. Rows whose last activity falls in the same
 /// five minutes of the clock rank alike and stand in name order, so that agents at work in several
@@ -61,9 +61,9 @@ impl SortOrder {
     pub(super) fn lay_out<'a>(
         self,
         groups: Vec<Group<'a>>,
-        docker: Option<&'a Docker>,
+        docker: Option<DockerGroup<'a>>,
     ) -> Vec<SectionRow<'a>> {
-        let at = docker.map(|docker| match self {
+        let at = docker.as_ref().map(|docker| match self {
             SortOrder::Activity => {
                 let rank = docker_activity_rank(docker);
                 groups.partition_point(|group| activity_rank(group) <= rank)
@@ -72,7 +72,7 @@ impl SortOrder {
                 groups.partition_point(|group| name_rank(group) <= docker_name_rank())
             }
             SortOrder::Disk => {
-                let bytes = docker_bytes(docker);
+                let bytes = docker_bytes(docker.docker);
                 groups.partition_point(|group| bytes_of(&group.members) >= bytes)
             }
         });
@@ -113,12 +113,11 @@ fn activity_rank(group: &Group) -> (Reverse<Option<u64>>, String) {
     )
 }
 
-/// Where the Activity sort stands Docker's group: by the slice in which the latest container on
-/// its card started, as a group by its newest work.
-fn docker_activity_rank(docker: &Docker) -> (Reverse<Option<u64>>, String) {
-    let started = docker
-        .unaccounted()
-        .filter_map(|container| container.started);
+/// Where the Activity sort stands Docker's group: by the slice in which the latest of the
+/// containers it lists started, as a group by its newest work.
+fn docker_activity_rank(docker: &DockerGroup) -> (Reverse<Option<u64>>, String) {
+    let listed = docker.containers.iter();
+    let started = listed.filter_map(|running| running.container.started);
     (Reverse(slice(started.max())), DOCKER.to_lowercase())
 }
 

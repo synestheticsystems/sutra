@@ -206,8 +206,8 @@ extension Project {
         case .activity:
             "Groups with no agent session, no dev-runner environment, nothing listening on a port, "
                 + "no container running, and no activity in the last \(days) days. Scratch from "
-                + "Claude Code sessions that have ended waits here too, as does Docker while its "
-                + "card shows no container."
+                + "Claude Code sessions that have ended waits here too, as does Docker while no "
+                + "container runs."
         case .name, .disk:
             "Groups with no agent session, no dev-runner environment, nothing listening on a port, "
                 + "no container running, no activity in the last \(days) days, and no folder of "

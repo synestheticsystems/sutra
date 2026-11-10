@@ -10,8 +10,8 @@ use crate::dashboard::cleaning::CleanState;
 use crate::dashboard::format;
 use crate::map::{ArtifactDir, Measurement, Project};
 
-/// One entry of a tray's disk use after its total: a build folder, or on Docker's card one of the
-/// stores Docker keeps on disk.
+/// One entry of a tray's disk use after its total: a build folder, or on Docker's disk row one of
+/// the stores Docker keeps on disk.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct TrayEntry {
     /// As `target/` reads, or `volumes`.

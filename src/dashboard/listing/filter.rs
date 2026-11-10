@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use super::DOCKER;
+use super::{DOCKER, DockerGroup};
 use crate::map::{Docker, GroupKey, Project, ScratchSpace};
 
 /// Typed text matched against a project's name, the name its card's chip shows beside it (a
@@ -41,12 +41,23 @@ impl Query {
             || self.admits_folder(&project.path)
     }
 
-    /// Whether the query matches Docker's card: its name, or a container's on it, or its image.
-    pub(super) fn admits_docker(&self, docker: &Docker) -> bool {
-        let mut containers = docker.unaccounted();
-        self.matches(DOCKER)
-            || containers
-                .any(|container| self.matches(&container.name) || self.matches(&container.image))
+    /// Docker's group as the query admits it: whole where the query matches Docker's name, else
+    /// the containers whose name or image it matches, as it admits a project's card; `None` when
+    /// it matches none.
+    pub(super) fn admits_docker<'a>(&self, docker: &'a Docker) -> Option<DockerGroup<'a>> {
+        if self.matches(DOCKER) {
+            return Some(DockerGroup::whole(docker));
+        }
+        let admitted = docker.running.iter().filter(|running| {
+            let container = &running.container;
+            self.matches(&container.name) || self.matches(&container.image)
+        });
+        let containers: Vec<_> = admitted.collect();
+        (!containers.is_empty()).then_some(DockerGroup {
+            docker,
+            containers,
+            disk: false,
+        })
     }
 
     /// Whether the query matches a folder's path, as it does for the folder an agent outside every

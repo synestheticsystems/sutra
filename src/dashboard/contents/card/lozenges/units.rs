@@ -15,7 +15,7 @@ pub(super) fn lozenges(env: &Environment, notifier: &Notifier) -> Vec<Lozenge> {
         .map(|unit| {
             let port = env.port_for(&unit.name);
             Lozenge {
-                name: unit.name.clone(),
+                name: Some(unit.name.clone()),
                 port: port.map(|port| format!(":{port}")),
                 look: look(&unit.state, stopped),
                 beside: unit.detail.clone().filter(|_| worth_saying(&unit.state)),

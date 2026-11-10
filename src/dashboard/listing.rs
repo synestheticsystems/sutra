@@ -1,9 +1,9 @@
 //! What the list shows, in order: the groups in focus in the user's sort (see `focus`), each under
 //! its line, then one row standing for the quiet groups, which opens to list them. Every card stands
 //! in the group of the upstream its project came from, in a tree of provenance (see `group`), and
-//! the agents working outside every project stand in Other. Docker's card stands in a group of its
-//! own, which the sort places among the others: it came from no upstream, and what it holds, the
-//! containers for no project and the disk Docker takes, is no project's. A group is in focus while
+//! the agents working outside every project stand in Other. Docker's containers and the disk it
+//! takes stand in a group of their own, which the sort places among the others: it came from no
+//! upstream, and what it holds is Docker's, not a project's. A group is in focus while
 //! any card in it is, so each stands wholly on one side of the quiet row, and no line stands twice.
 //! Of a session's scratch folders, those with something to show have a card (see `scratch_rows`). A
 //! typed filter lists every project it admits instead. Judged at one instant, so the cards and the
@@ -37,9 +37,10 @@ use self::hold::{Hold, Order, Section};
 use self::scratch_rows::has_a_row;
 use crate::dashboard::cleaning::Cleaning;
 use crate::dashboard::{LineKey, SortOrder};
+use crate::map::docker::RunningContainer;
 use crate::map::{AgentSession, Docker, GroupKey, Project, Snapshot, SubagentWithParent};
 
-/// What Docker's card and its group's line go by, as the Name sort and the filter read it too.
+/// What Docker's group's line goes by, as the Name sort and the filter read it too.
 pub(super) const DOCKER: &str = "Docker";
 
 /// Every group the engine knows on `map`: each one its projects stand in, listed or not, and
@@ -60,9 +61,8 @@ pub(super) fn group_names(map: &Snapshot) -> HashMap<&GroupKey, String> {
 pub(super) enum Row<'a> {
     /// A group, under its line.
     Group(Group<'a>),
-    /// Docker's group, under its line: its card alone, with the containers it runs for no
-    /// project, and its disk use.
-    Docker(&'a Docker),
+    /// Docker's group, under its line: its containers, then its disk use.
+    Docker(DockerGroup<'a>),
     /// "▸ 764 quiet": the projects of the groups outside the focus, behind one row.
     QuietProjects { count: usize, shown: bool },
 }
@@ -70,7 +70,29 @@ pub(super) enum Row<'a> {
 /// One row of a section of the list, as the sort lays the section out: a group, or Docker's.
 pub(super) enum SectionRow<'a> {
     Group(Group<'a>),
-    Docker(&'a Docker),
+    Docker(DockerGroup<'a>),
+}
+
+/// Docker's group as the list shows it: under its line, a card for each container it lists, then
+/// the disk Docker takes.
+pub(super) struct DockerGroup<'a> {
+    pub(super) docker: &'a Docker,
+    /// The containers it lists, by name: every one running, or those a typed filter admits.
+    pub(super) containers: Vec<&'a RunningContainer>,
+    /// It lists the disk Docker takes, once Docker has said: always, but under a typed filter that
+    /// admits only some of its containers.
+    pub(super) disk: bool,
+}
+
+impl<'a> DockerGroup<'a> {
+    /// All of `docker`'s group.
+    pub(super) fn whole(docker: &'a Docker) -> DockerGroup<'a> {
+        DockerGroup {
+            docker,
+            containers: docker.running.iter().collect(),
+            disk: true,
+        }
+    }
 }
 
 impl<'a> From<SectionRow<'a>> for Row<'a> {
@@ -159,16 +181,16 @@ impl<'a> Listing<'a> {
             Some(query) => {
                 let admitted = with_rows.into_iter().filter(|p| query.admits(p)).collect();
                 let elsewhere = Elsewhere::of(snapshot, |folder| query.admits_folder(folder));
-                let docker = docker.filter(|docker| query.admits_docker(docker));
+                let docker = docker.and_then(|docker| query.admits_docker(docker));
                 rows.extend(section(Section::Main, admitted, elsewhere, docker));
             }
             None => {
                 let elsewhere = Elsewhere::of(snapshot, |_| true);
                 let (focused, quiet) =
                     focus::split_by_group(with_rows, sort, now, elsewhere.is_some());
-                let (docker_focused, docker_quiet) = match docker {
-                    Some(docker) if docker_in_focus(docker, sort) => (Some(docker), None),
-                    docker => (None, docker),
+                let (docker_focused, docker_quiet) = match docker.map(DockerGroup::whole) {
+                    Some(whole) if docker_in_focus(whole.docker, sort) => (Some(whole), None),
+                    whole => (None, whole),
                 };
                 rows.extend(section(Section::Main, focused, elsewhere, docker_focused));
                 let count = quiet.len() + usize::from(docker_quiet.is_some());
@@ -227,7 +249,7 @@ impl<'a> Listing<'a> {
                     section.extend(cards.map(|card| card.path.clone()));
                 }
                 // Held by the socket it is read through, which is no project's folder.
-                Row::Docker(docker) => section.push(docker.socket.clone()),
+                Row::Docker(listed) => section.push(listed.docker.socket.clone()),
                 Row::QuietProjects { .. } => past_quiet_row = true,
             }
         }
@@ -513,35 +535,37 @@ mod tests {
                 vec![],
             )
         };
-        let listed = ["api: api", "docker", "site: site"];
+        let listed = ["api: api", "docker: pg596, disk", "site: site"];
         assert_eq!(
             listed_in(&map, SortOrder::Activity),
             listed,
-            "its newest container, made 12 minutes ago, between them"
+            "its latest container, started 12 minutes ago, between them"
         );
         assert_eq!(listed_in(&map, SortOrder::Name), listed);
         assert_eq!(listed_in(&map, SortOrder::Disk), listed);
     }
 
     #[test]
-    fn docker_with_no_container_on_its_card_is_quiet_in_the_activity_sort_and_disk_news_elsewhere()
-    {
+    fn docker_running_no_container_is_quiet_in_the_activity_sort_and_disk_news_elsewhere() {
         let map = Snapshot {
             docker: Some(docker(&[], 10 * LARGE_FOLDER_BYTES)),
             ..snapshot(vec![alone(project("api", 1))], vec![])
         };
         assert_eq!(
             listed_in(&map, SortOrder::Activity),
-            ["api: api", "quiet:1", "docker"]
+            ["api: api", "quiet:1", "docker: disk"]
         );
-        assert_eq!(listed_in(&map, SortOrder::Disk), ["docker", "api: api"]);
+        assert_eq!(
+            listed_in(&map, SortOrder::Disk),
+            ["docker: disk", "api: api"]
+        );
         let small = Snapshot {
             docker: Some(docker(&[], LARGE_FOLDER_BYTES - 1)),
             ..map.clone()
         };
         assert_eq!(
             listed_in(&small, SortOrder::Disk),
-            ["api: api", "quiet:1", "docker"]
+            ["api: api", "quiet:1", "docker: disk"]
         );
         let away = Snapshot {
             docker: None,
@@ -555,9 +579,23 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_filter_lists_dockers_group_by_its_name_or_a_containers_name_or_image() {
+    fn docker_running_only_containers_projects_account_for_is_in_focus_as_each_has_a_card_there() {
+        let mut docker = docker(&[("payment", 30 * 24 * 60)], 0);
+        docker.running[0].projects = vec![PathBuf::from("/code/core")];
         let map = Snapshot {
-            docker: Some(docker(&[("pg596", 12)], 0)),
+            docker: Some(docker),
+            ..snapshot(vec![alone(project("api", 1))], vec![])
+        };
+        assert_eq!(
+            listed_in(&map, SortOrder::Activity),
+            ["api: api", "docker: payment, disk"]
+        );
+    }
+
+    #[test]
+    fn a_typed_filter_lists_dockers_group_whole_by_its_name_or_the_containers_it_matches_alone() {
+        let map = Snapshot {
+            docker: Some(docker(&[("pg596", 12), ("wgs-pg", 30)], 0)),
             ..snapshot(vec![alone(project("api", 1))], vec![])
         };
         let filtered = |text: &str| {
@@ -565,9 +603,13 @@ mod tests {
             arrangement.set_filter_text(text.to_string(), Some(&map), &cleaning(), now());
             shown(&Listing::new(&map, &arrangement, &cleaning(), now()).rows)
         };
-        assert_eq!(filtered("dock"), ["docker"]);
-        assert_eq!(filtered("pg59"), ["docker"]);
-        assert_eq!(filtered("postgres"), ["docker"], "its image");
+        assert_eq!(filtered("dock"), ["docker: pg596, wgs-pg, disk"]);
+        assert_eq!(filtered("pg59"), ["docker: pg596"]);
+        assert_eq!(
+            filtered("postgres"),
+            ["docker: pg596, wgs-pg"],
+            "the image each runs"
+        );
         assert_eq!(filtered("api"), ["api: api"]);
     }
 

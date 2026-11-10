@@ -2,14 +2,15 @@
 //! anything, the wait for the first map, or why nothing is listed. Otherwise the rows (see `rows`):
 //! each group's line, which names the upstream its cards came from, then what hangs from it in a
 //! tree of provenance, each checkout with copies under a line of its own (see `line`); Docker's
-//! group, its line over its card (see `docker`); and the row standing for the quiet groups.
+//! group, its line over a card for each container and the disk Docker takes (see `docker`); and the
+//! row standing for the quiet groups.
 
 mod docker;
 mod elsewhere;
 mod line;
 mod rows;
 
-pub use docker::DockerCard;
+pub use docker::{AccountedFor, ContainerCard};
 pub use elsewhere::ElsewhereLine;
 pub use line::{GroupKind, Line, LineFold, LineKey, MoreLozenges};
 pub use rows::{ListRow, Place};
@@ -128,8 +129,7 @@ fn what_makes_one_quiet(sort: SortOrder) -> String {
         SortOrder::Activity => format!(
             "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
              no container running, and no activity in the last {days} days. Scratch from Claude \
-             Code sessions that have ended waits here too, as does Docker while its card shows no \
-             container."
+             Code sessions that have ended waits here too, as does Docker while no container runs."
         ),
         SortOrder::Name | SortOrder::Disk => format!(
             "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn dockers_group_is_its_line_then_while_it_is_open_its_card_alone_beneath_it() {
+    fn dockers_group_is_its_line_then_while_it_is_open_a_card_for_each_container_then_its_disk() {
         use crate::dashboard::listing::fixtures::docker;
         let map = Snapshot {
             docker: Some(docker(&[("pg596", 12)], 0)),
@@ -313,17 +313,17 @@ mod tests {
         let mut folds = Folds::default();
         assert!(folds.toggle(&LineKey::DOCKER, &map), "Docker is here");
         let open = rows(&folds);
-        let [ListRow::Line { .. }, ListRow::Docker { card, place }] = &open[..] else {
-            panic!("Docker's line, then its card: {open:?}");
+        let [
+            ListRow::Line { .. },
+            ListRow::Container { card, place },
+            ListRow::DockerDisk { place: under, .. },
+        ] = &open[..]
+        else {
+            panic!("Docker's line, then pg596's card, then its disk: {open:?}");
         };
-        assert_eq!(card.name, "Docker");
-        assert_eq!(
-            *place,
-            Place {
-                depth: 1,
-                first: true
-            }
-        );
+        assert_eq!(card.name, "pg596");
+        let hanging = |first| Place { depth: 1, first };
+        assert_eq!((*place, *under), (hanging(true), hanging(false)));
     }
 
     #[test]
@@ -398,8 +398,7 @@ mod tests {
             what_makes_one_quiet(SortOrder::Activity),
             "Groups with no agent session, no dev-runner environment, nothing listening on a port, \
              no container running, and no activity in the last 7 days. Scratch from Claude Code \
-             sessions that have ended waits here too, as does Docker while its card shows no \
-             container."
+             sessions that have ended waits here too, as does Docker while no container runs."
         );
         let by_size = "Groups with no agent session, no dev-runner environment, nothing listening \
                        on a port, no container running, no activity in the last 7 days, and no \

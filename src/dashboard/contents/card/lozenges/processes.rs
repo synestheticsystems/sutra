@@ -43,7 +43,7 @@ fn lozenge(port: u16, listening: &[ListeningProcess], home: &Path) -> Lozenge {
         tooltip.push(format::tilde(&process.folder, home));
     }
     Lozenge {
-        name: processes[0].name.clone(),
+        name: Some(processes[0].name.clone()),
         port: Some(format!(":{port}")),
         look: LozengeLook::Up,
         beside: None,
@@ -93,7 +93,7 @@ mod tests {
             .try_into()
             .unwrap();
 
-        assert_eq!(lozenge.name, "node");
+        assert_eq!(lozenge.name.as_deref(), Some("node"));
         assert_eq!(lozenge.port.as_deref(), Some(":5177"));
         assert_eq!(lozenge.look, LozengeLook::Up);
         assert_eq!(lozenge.link.as_deref(), Some("http://localhost:5177"));

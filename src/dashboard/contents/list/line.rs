@@ -63,7 +63,7 @@ pub enum GroupKind {
     Package { name: String },
     /// What nothing else groups, and the agents working outside every project.
     Other,
-    /// Docker's card alone: the containers it runs for no project, and the disk it takes.
+    /// Docker's containers, and the disk it takes.
     Docker,
 }
 

@@ -44,15 +44,7 @@ struct CardHeader: View {
     private var chip: some View {
         switch card.chip {
         case .branch(let text, let tooltip):
-            Text(text)
-                .font(.callout.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
-                .hoverTip(tooltip)
+            CodeChip(text: text, tooltip: tooltip)
         case .scratch(let session, let mark):
             // The session's name is the mark's own words, so once the session has ended it steps
             // back with the outline, as a robot at rest does; the card's own words stay.
@@ -66,6 +58,25 @@ struct CardHeader: View {
         case nil:
             EmptyView()
         }
+    }
+}
+
+/// A chip of words written as code beside a card's name, as a branch reads on a checkout's card and
+/// an image on a container's: monospaced on a quiet fill, cut in the middle where short of room.
+struct CodeChip: View {
+    let text: String
+    let tooltip: String
+
+    var body: some View {
+        Text(text)
+            .font(.callout.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Color(nsColor: .quaternaryLabelColor), in: .rect(cornerRadius: 4))
+            .hoverTip(tooltip)
     }
 }
 

@@ -224,16 +224,20 @@ mod tests {
         };
         let before = with(&[("pg", 15)]);
         let mut arrangement = pointed_at(&before);
-        assert_eq!(listed(&before, &arrangement), ["a: a", "docker", "b: b"]);
+        assert_eq!(
+            listed(&before, &arrangement),
+            ["a: a", "docker: pg, disk", "b: b"]
+        );
 
         let started = with(&[("pg", 15), ("cache", 0)]);
         arrangement.observe(&started, &cleaning(), now());
-        assert_eq!(listed(&started, &arrangement), ["a: a", "docker", "b: b"]);
+        let held = ["a: a", "docker: pg, cache, disk", "b: b"];
+        assert_eq!(listed(&started, &arrangement), held);
 
         arrangement.pointer_left();
         assert_eq!(
             listed(&started, &arrangement),
-            ["docker", "a: a", "b: b"],
+            ["docker: pg, cache, disk", "a: a", "b: b"],
             "re-sorted"
         );
     }

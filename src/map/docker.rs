@@ -122,18 +122,6 @@ pub struct Docker {
     pub disk: Option<DockerDisk>,
 }
 
-impl Docker {
-    /// The containers running that no project accounts for, which show on no project's card, by
-    /// name.
-    pub fn unaccounted(&self) -> impl Iterator<Item = &Container> {
-        let unaccounted = self
-            .running
-            .iter()
-            .filter(|running| running.projects.is_empty());
-        unaccounted.map(|running| &running.container)
-    }
-}
-
 /// A container running, with the projects on the map that account for it, on whose cards it shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningContainer {

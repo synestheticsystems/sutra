@@ -38,7 +38,10 @@ private struct LozengeCapsule: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Text(lozenge.name)
+            // On a container's own card, which names it, a lozenge says the port alone.
+            if let name = lozenge.name {
+                Text(name)
+            }
             if let port = lozenge.port {
                 Text(port).monospaced()
             }

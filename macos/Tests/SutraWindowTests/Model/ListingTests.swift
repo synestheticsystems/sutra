@@ -23,20 +23,31 @@ struct ListingTests {
         ])
     }
 
-    @Test func dockersCardIsARowOfItsOwnKnownAsTheOneDockerCard() {
-        let docker = DockerCard(
-            name: "Docker", nameTooltip: "", age: nil, lozenges: [], tray: nil,
-            location: "~/.docker/run/docker.sock"
-        )
-        let place = Place(depth: 1, first: true)
+    @Test func eachContainerIsARowKnownByItsIdAndDockersDiskTheOneRowOfIts() {
+        let container = { (id: String, name: String) in
+            ContainerCard(
+                id: id, name: name, nameTooltip: "", image: "postgres:17",
+                imageTooltip: "postgres:17", age: "14d", lozenges: [], accountedFor: nil
+            )
+        }
+        let pg = container("e99d", "pg596")
+        let wgs = container("faf5", "wgs-pg-faf527a08d23d003")
+        let tray = Tray(disk: nil, sessions: [], subagents: [])
+        let location = "~/.docker/run/docker.sock"
         var models = CardModels()
-        let list = SutraCore.List.rows(rows: [.docker(card: docker, place: place)])
+        let list = SutraCore.List.rows(rows: [
+            .container(card: pg, place: Place(depth: 1, first: true)),
+            .container(card: wgs, place: Place(depth: 1, first: false)),
+            .dockerDisk(tray: tray, location: location, place: Place(depth: 1, first: false)),
+        ])
         guard case .rows(let rows) = models.listing(of: list) else {
             Issue.record("a list of rows")
             return
         }
-        #expect(rows.map(\.id) == [.docker])
-        #expect(rows == [.docker(docker, place: place)])
+        #expect(rows.map(\.id) == [.container(id: "e99d"), .container(id: "faf5"), .dockerDisk])
+        #expect(rows.last == .dockerDisk(
+            tray: tray, location: location, place: Place(depth: 1, first: false)
+        ))
     }
 
     @Test func aCardKeepsItsModelAsItMovesFromOneLineToAnother() throws {
@@ -81,8 +92,10 @@ struct ListingTests {
                 "line \(line.name)" + at(place)
             case .card(let model, let place):
                 "card \(model.path)" + at(place)
-            case .docker(_, let place):
-                "docker" + at(place)
+            case .container(let card, let place):
+                "container \(card.name)" + at(place)
+            case .dockerDisk(_, _, let place):
+                "docker's disk" + at(place)
             case .elsewhere:
                 "elsewhere"
             case .quietProjects:
@@ -101,7 +114,7 @@ struct ListingTests {
         return rows.lazy.compactMap { row -> CardModel? in
             switch row {
             case .card(let model, _): model.path == path ? model : nil
-            case .line, .docker, .elsewhere, .quietProjects: nil
+            case .line, .container, .dockerDisk, .elsewhere, .quietProjects: nil
             }
         }.first
     }

@@ -1,12 +1,13 @@
 //! The list's rows, as flat as the window lays them out, one row per line and per card: each
 //! group's line, then, unless it is folded shut, what hangs from it, down through each checkout's
-//! line to its cards, each row with its place in the group's tree (see `Place`); and the row
-//! standing for the quiet groups.
+//! line to its cards, each row with its place in the group's tree (see `Place`); Docker's line and
+//! what it holds (see `docker`); and the row standing for the quiet groups.
 
+use super::docker::ContainerCard;
 use super::{LineChoices, docker, elsewhere, how_many, line, what_makes_one_quiet};
 use crate::dashboard::contents::card::{self, CardContext, agents};
 use crate::dashboard::listing::{Group, Listing, Node, Row};
-use crate::dashboard::{Card, DockerCard, ElsewhereLine, Line, LineFold, LineKey, format};
+use crate::dashboard::{Card, ElsewhereLine, Line, LineFold, LineKey, Tray, format};
 use crate::map::Snapshot;
 
 /// One row of the list.
@@ -29,11 +30,20 @@ pub enum ListRow {
         card: Box<Card>,
         place: Place,
     },
-    /// Docker's card, alone under its group's line: the containers running for no project, and
-    /// the disk Docker takes. The window knows it as the one Docker card there is.
-    Docker {
+    /// A Docker container's card, under Docker's line, whether a project accounts for it or not.
+    /// The window knows it by the container's id.
+    Container {
         // Boxed, as a card dwarfs the other rows; the window receives it as a plain card.
-        card: Box<DockerCard>,
+        card: Box<ContainerCard>,
+        place: Place,
+    },
+    /// The disk Docker takes, under Docker's line, on a tray as a project's card holds its
+    /// folder's, with `location`, the socket Docker is read through with `~` for the home folder,
+    /// showing while the pointer is over it, where a card's tray shows its folder. The window knows
+    /// it as the one there is.
+    DockerDisk {
+        tray: Tray,
+        location: String,
         place: Place,
     },
     /// The agents working outside every project, which stand in Other, under `heading`: a line
@@ -86,23 +96,9 @@ pub(super) fn of(
             rows: Vec::new(),
         }
         .group(group),
-        Row::Docker(docker) => {
+        Row::Docker(shown) => {
             let folded = chosen.folds.is_folded(&LineKey::DOCKER);
-            let line = ListRow::Line {
-                line: Box::new(docker::line(docker, folded, cards)),
-                place: Place {
-                    depth: 0,
-                    first: false,
-                },
-            };
-            let card = (!folded).then(|| ListRow::Docker {
-                card: Box::new(docker::card(docker, cards)),
-                place: Place {
-                    depth: 1,
-                    first: true,
-                },
-            });
-            std::iter::once(line).chain(card).collect()
+            docker::rows(shown, folded, listing.sort, cards)
         }
         Row::QuietProjects { count, shown } => vec![ListRow::QuietProjects {
             count: format::count(*count),

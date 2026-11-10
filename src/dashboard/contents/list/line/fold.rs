@@ -117,8 +117,11 @@ fn on_the_line(placed: Placed, home: &Path) -> Lozenge {
         .collect();
     let folders = format::all(&folders.iter().map(String::as_str).collect::<Vec<_>>());
     let lozenge = placed.lozenge;
+    // What serves: by its name, or where a lozenge has none, by its port.
+    let serving = lozenge.name.as_deref().or(lozenge.port.as_deref());
+    let serving = serving.unwrap_or_default();
     Lozenge {
-        tooltip: format!("{} in {folders}\n{}", lozenge.name, lozenge.tooltip),
+        tooltip: format!("{serving} in {folders}\n{}", lozenge.tooltip),
         beside: None,
         muted: false,
         notifications_off: false,
@@ -133,9 +136,9 @@ pub(in crate::dashboard::contents) fn first_few(
 ) -> (Vec<LineLozenge>, Option<MoreLozenges>) {
     let named: Vec<String> = lozenges
         .iter()
-        .map(|lozenge| match &lozenge.port {
-            Some(port) => format!("{} {port}", lozenge.name),
-            None => lozenge.name.clone(),
+        .map(|lozenge| {
+            let words = [lozenge.name.as_deref(), lozenge.port.as_deref()];
+            words.into_iter().flatten().collect::<Vec<_>>().join(" ")
         })
         .collect();
     let drawn = LOZENGES_ON_A_FOLDED_LINE.min(lozenges.len());

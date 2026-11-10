@@ -28,8 +28,8 @@ pub use card::{
 pub use dialog::Dialog;
 pub use footer::Footer;
 pub use list::{
-    DockerCard, ElsewhereLine, GroupKind, Line, LineFold, LineKey, List, ListRow, MoreLozenges,
-    Place,
+    AccountedFor, ContainerCard, ElsewhereLine, GroupKind, Line, LineFold, LineKey, List, ListRow,
+    MoreLozenges, Place,
 };
 pub use menu::{MenuAction, MenuEntry};
 pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings};

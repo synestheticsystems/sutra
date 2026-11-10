@@ -1,8 +1,10 @@
-//! The Docker containers on a card, a lozenge for each port one publishes, as `(postgres :36684)`
-//! reads: up, as the container runs, and named by the image it runs, short, as a process's lozenge
-//! is by the process. One that publishes no port shows too, on a lozenge with none, as it runs for
-//! the card all the same. The tooltip says who can reach the port, then the container's name and
-//! its image, where the port goes inside it, and the folder it is for.
+//! The Docker containers on a project's card or on Docker's folded line, a lozenge for each port
+//! one publishes, as `(postgres :36684)` reads: up, as the container runs, and named by the image
+//! it runs, short, as a process's lozenge is by the process. One that publishes no port shows too,
+//! on a lozenge with none, as it runs all the same. The tooltip says who can reach the port, then
+//! the container's name and its image, where the port goes inside it, and the folder it is for. On
+//! the container's own card, which names it already, each lozenge says the port alone (see
+//! `on_its_card`).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -11,20 +13,21 @@ use super::{Lozenge, LozengeLook, link, reach};
 use crate::dashboard::format;
 use crate::map::docker::{Container, PublishedPort};
 
-/// The card the lozenges stand on, which says which of a container's folders its tooltip names.
+/// Where the lozenges stand, which says which of a container's folders its tooltip names.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::dashboard::contents) enum CardOf<'a> {
+pub(in crate::dashboard::contents) enum ShownOn<'a> {
     /// The card of the project at this folder: the first of the container's folders there.
-    Project(&'a Path),
-    /// Docker's own card, for the containers for no project: the first of their folders, if any.
-    Docker,
+    ProjectCard(&'a Path),
+    /// Docker's folded line, for the containers no project accounts for: the first of their
+    /// folders, if any.
+    DockersLine,
 }
 
-/// The lozenges of `containers`, in their order, on the card `on`, leaving out each port in
-/// `shown`.
+/// The lozenges of `containers`, in their order, shown `on` a project's card or Docker's line,
+/// leaving out each port in `shown`.
 pub(in crate::dashboard::contents) fn lozenges<'c>(
     containers: impl IntoIterator<Item = &'c Container>,
-    on: CardOf,
+    on: ShownOn,
     shown: &BTreeSet<u16>,
     home: &Path,
 ) -> Vec<Lozenge> {
@@ -38,39 +41,53 @@ pub(in crate::dashboard::contents) fn lozenges<'c>(
 /// with no port when it publishes none.
 pub(super) fn of(
     container: &Container,
-    on: CardOf,
+    on: ShownOn,
     shown: &BTreeSet<u16>,
     home: &Path,
 ) -> Vec<Lozenge> {
     let folder = match on {
-        CardOf::Project(project) => container.folder_in(project),
-        CardOf::Docker => container.folders().next(),
+        ShownOn::ProjectCard(project) => container.folder_in(project),
+        ShownOn::DockersLine => container.folders().next(),
     };
     let folder = folder.map(|folder| format::tilde(folder, home));
     let named = format!("Container {}, of {}", container.name, container.image);
     let tcp: Vec<&PublishedPort> = container.ports.iter().filter(|port| !port.udp).collect();
+    let name = image_name(container);
     if tcp.is_empty() {
         let mut tooltip = vec![format!("{named}, publishing no TCP port")];
         tooltip.extend(folder);
-        return vec![lozenge(container, None, tooltip)];
+        return vec![lozenge(Some(name), None, tooltip)];
     }
     let unshown = tcp.into_iter().filter(|port| !shown.contains(&port.port));
     unshown
         .map(|port| {
-            let mut tooltip = vec![
-                reach(&port.addresses),
-                named.clone(),
-                format!(":{} goes to {} inside it", port.port, port.to),
-            ];
+            let mut tooltip = vec![reach(&port.addresses), named.clone(), goes_to(port)];
             tooltip.extend(folder.clone());
-            lozenge(container, Some(port.port), tooltip)
+            lozenge(Some(name), Some(port.port), tooltip)
         })
         .collect()
 }
 
-fn lozenge(container: &Container, port: Option<u16>, tooltip: Vec<String>) -> Lozenge {
+/// The lozenges of `container` on its own card: one for each TCP port it publishes, with no name,
+/// as the card names the container, and a tooltip that says who can reach the port and where it
+/// goes inside.
+pub(in crate::dashboard::contents) fn on_its_card(container: &Container) -> Vec<Lozenge> {
+    let tcp = container.ports.iter().filter(|port| !port.udp);
+    tcp.map(|port| {
+        let tooltip = vec![reach(&port.addresses), goes_to(port)];
+        lozenge(None, Some(port.port), tooltip)
+    })
+    .collect()
+}
+
+/// Where `port` goes inside its container, as `:46823 goes to 5432 inside it` reads.
+fn goes_to(port: &PublishedPort) -> String {
+    format!(":{} goes to {} inside it", port.port, port.to)
+}
+
+fn lozenge(name: Option<&str>, port: Option<u16>, tooltip: Vec<String>) -> Lozenge {
     Lozenge {
-        name: image_name(container).to_string(),
+        name: name.map(str::to_string),
         port: port.map(|port| format!(":{port}")),
         look: LozengeLook::Up,
         beside: None,
@@ -138,14 +155,14 @@ mod tests {
             vec![published(3306, 3306, &["0.0.0.0", "::"], false)],
         );
 
-        let on_app = CardOf::Project(Path::new("/Users/dev/code/app"));
+        let on_app = ShownOn::ProjectCard(Path::new("/Users/dev/code/app"));
         let [lozenge] = lozenges(&[database], on_app, &BTreeSet::new(), Path::new(HOME))
             .try_into()
             .unwrap();
 
         assert_eq!(
-            (lozenge.name.as_str(), lozenge.port.as_deref()),
-            ("testdb", Some(":3306"))
+            (lozenge.name.as_deref(), lozenge.port.as_deref()),
+            (Some("testdb"), Some(":3306"))
         );
         assert_eq!(lozenge.look, LozengeLook::Up);
         assert_eq!(lozenge.link.as_deref(), Some("http://localhost:3306"));
@@ -176,15 +193,15 @@ mod tests {
         let shown = BTreeSet::from([8080]);
         let core = Path::new("/Users/dev/GT/repo/gt-core");
 
-        let on_core = CardOf::Project(core);
+        let on_core = ShownOn::ProjectCard(core);
         let lozenges = lozenges(&[payment, web], on_core, &shown, Path::new(HOME));
 
         let [lozenge] = lozenges.as_slice() else {
             panic!("payment's alone, :8080 shown already: {lozenges:?}");
         };
         assert_eq!(
-            (lozenge.name.as_str(), &lozenge.port),
-            ("gt-payment-service", &None)
+            (lozenge.name.as_deref(), &lozenge.port),
+            (Some("gt-payment-service"), &None)
         );
         assert_eq!(lozenge.link, None);
         assert_eq!(
@@ -196,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn on_dockers_card_a_container_names_the_first_folder_it_is_for_none_of_which_a_project_holds()
+    fn on_dockers_line_a_container_names_the_first_folder_it_is_for_none_of_which_a_project_holds()
     {
         let api = container(
             "api",
@@ -205,10 +222,61 @@ mod tests {
             vec![published(8440, 8443, &["0.0.0.0", "::"], false)],
         );
 
-        let lozenges = lozenges(&[api], CardOf::Docker, &BTreeSet::new(), Path::new(HOME));
+        let lozenges = lozenges(
+            &[api],
+            ShownOn::DockersLine,
+            &BTreeSet::new(),
+            Path::new(HOME),
+        );
 
         let tooltip = &lozenges[0].tooltip;
         assert!(tooltip.ends_with("\n~/GT/backplane"), "{tooltip}");
+    }
+
+    #[test]
+    fn on_its_own_card_a_container_shows_each_tcp_port_it_publishes_by_the_port_alone() {
+        let api = container(
+            "api",
+            "gcr.io/retailops-1/gt-dispatcher:2020-06-15",
+            &["/Users/dev/GT/backplane"],
+            vec![
+                published(8440, 8443, &["0.0.0.0", "::"], false),
+                published(8443, 8443, &["0.0.0.0"], false),
+                published(5353, 5353, &["0.0.0.0"], true),
+            ],
+        );
+        let quiet = container(
+            "rop-login",
+            "gcr.io/retailops-1/rop-login-dev",
+            &[],
+            Vec::new(),
+        );
+
+        let shown = on_its_card(&api);
+
+        let named: Vec<(Option<&str>, &str, Option<&str>)> = shown
+            .iter()
+            .map(|l| {
+                (
+                    l.name.as_deref(),
+                    l.port.as_deref().unwrap(),
+                    l.link.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                (None, ":8440", Some("http://localhost:8440")),
+                (None, ":8443", Some("http://localhost:8443")),
+            ],
+            "no UDP port"
+        );
+        assert_eq!(
+            shown[0].tooltip,
+            "Listening on the network, at 0.0.0.0 and ::\n:8440 goes to 8443 inside it"
+        );
+        assert_eq!(on_its_card(&quiet), [], "its card says it runs");
     }
 
     #[test]

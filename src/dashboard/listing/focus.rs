@@ -80,11 +80,11 @@ pub(super) fn disk_bytes(project: &Project) -> u64 {
 }
 
 /// Whether Docker's group belongs in the focused view of `sort`, as a project's would: in every
-/// sort while a container runs on its card, and in the Name and Disk sorts also while Docker takes
-/// `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as for a scratch folder
-/// whose session has ended.
+/// sort while a container runs, as each has a card under its line, and in the Name and Disk sorts
+/// also while Docker takes `LARGE_FOLDER_BYTES`. What it takes is disk news, not activity news, as
+/// for a scratch folder whose session has ended.
 pub(super) fn docker_in_focus(docker: &Docker, sort: SortOrder) -> bool {
-    docker.unaccounted().next().is_some()
+    !docker.running.is_empty()
         || match sort {
             SortOrder::Activity => false,
             SortOrder::Name | SortOrder::Disk => docker_bytes(docker) >= LARGE_FOLDER_BYTES,

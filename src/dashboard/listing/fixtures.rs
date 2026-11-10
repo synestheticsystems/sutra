@@ -205,12 +205,21 @@ pub(in crate::dashboard) fn snapshot(
 
 /// What `rows` show, a few words each: a group as `name: row, row`, each card by its folder's own
 /// name, a checkout's line as `name(row, row)`, the agents elsewhere as `elsewhere`; Docker's group
-/// as `docker`; and the quiet row as `quiet:<count>`.
+/// as `docker: container, container, disk`, its disk use last when it lists it; and the quiet row
+/// as `quiet:<count>`.
 pub(in crate::dashboard) fn shown(rows: &[Row]) -> Vec<String> {
     rows.iter()
         .map(|row| match row {
             Row::Group(group) => format!("{}: {}", group.name, nodes(&group.children)),
-            Row::Docker(_) => "docker".to_string(),
+            Row::Docker(listed) => {
+                let containers = listed.containers.iter();
+                let names = containers.map(|running| running.container.name.as_str());
+                let disk = (listed.disk && listed.docker.disk.is_some()).then_some("disk");
+                format!(
+                    "docker: {}",
+                    names.chain(disk).collect::<Vec<_>>().join(", ")
+                )
+            }
             Row::QuietProjects { count, .. } => format!("quiet:{count}"),
         })
         .collect()
