@@ -2,7 +2,8 @@
 //! under words that name each line: its kind, then what it is known by. So that what is kept never
 //! outgrows the map, a choice goes once a live map no longer knows what its line stands for: not
 //! what one snapshot lists, which leaves out a folder that waits to be sized for its card, but
-//! every group and every copied checkout the engine tracks (see `map::Ancestry`).
+//! every group and every copied checkout the engine tracks (see `map::Ancestry`). A group whose key
+//! changed under all its projects at once keeps its line's choice under the new key.
 
 use std::collections::BTreeMap;
 
@@ -56,13 +57,26 @@ impl<T: PartialEq> ByLine<T> {
         }
     }
 
-    /// A live map arrived: forget the choice made for every line whose key `map` no longer knows.
-    /// Returns whether any went.
-    pub(in crate::dashboard) fn forget_gone(&mut self, map: &Snapshot) -> bool {
+    /// A live map arrived: carry the choice made for the line of each group that `moves` says
+    /// moved over to the line of the group it moved to (see `Ancestry::moves_since`), then forget
+    /// the choice made for every line whose key `map` no longer knows. Returns whether the choices
+    /// changed.
+    pub(in crate::dashboard) fn keep_up_with(
+        &mut self,
+        map: &Snapshot,
+        moves: &BTreeMap<GroupKey, GroupKey>,
+    ) -> bool {
+        let mut carried = false;
+        for (from, to) in moves {
+            if let Some(choice) = self.0.remove(&saved_as(&LineKey::group(from))) {
+                self.0.insert(saved_as(&LineKey::group(to)), choice);
+                carried = true;
+            }
+        }
         let known = known(map);
         let before = self.0.len();
         self.0.retain(|saved, _| known.contains(saved));
-        self.0.len() < before
+        carried || self.0.len() < before
     }
 }
 
@@ -93,7 +107,7 @@ fn saved_as(line: &LineKey) -> String {
 /// one line each, which may stand whatever the map holds: Other's with the agents working
 /// elsewhere alone, and Docker's whenever Docker answers, which it may not have yet.
 fn known(map: &Snapshot) -> Vec<String> {
-    let groups = map.ancestry.groups.iter().map(LineKey::group);
+    let groups = map.ancestry.groups.keys().map(LineKey::group);
     let always = [LineKey::group(&GroupKey::Other), LineKey::DOCKER];
     let checkouts = map
         .ancestry
@@ -144,7 +158,7 @@ mod tests {
     fn map() -> Snapshot {
         Snapshot {
             ancestry: Arc::new(Ancestry {
-                groups: BTreeSet::from([GroupKey::Upstream(APP.to_string())]),
+                groups: BTreeMap::from([(GroupKey::Upstream(APP.to_string()), BTreeSet::new())]),
                 made_from: BTreeSet::from([PathBuf::from(SITE)]),
             }),
             ..snapshot(vec![], vec![])
@@ -194,7 +208,7 @@ mod tests {
         assert!(chosen.set(&LineKey::DOCKER, Some(1), &map()));
         assert_eq!(map().docker, None, "Docker has said nothing");
 
-        assert!(!chosen.forget_gone(&map()));
+        assert!(!chosen.keep_up_with(&map(), &BTreeMap::new()));
         assert_eq!(chosen.get(&LineKey::DOCKER), Some(&1), "still kept");
     }
 
@@ -204,20 +218,45 @@ mod tests {
         chosen.set(&app(), Some(1), &map());
         chosen.set(&site_checkout(), Some(2), &map());
         assert!(
-            !chosen.forget_gone(&map()),
+            !chosen.keep_up_with(&map(), &BTreeMap::new()),
             "both known, though no card is listed"
         );
 
         let only_app = Snapshot {
             ancestry: Arc::new(Ancestry {
-                groups: BTreeSet::from([GroupKey::Upstream(APP.to_string())]),
+                groups: BTreeMap::from([(GroupKey::Upstream(APP.to_string()), BTreeSet::new())]),
                 made_from: BTreeSet::new(),
             }),
             ..map()
         };
-        assert!(chosen.forget_gone(&only_app));
+        assert!(chosen.keep_up_with(&only_app, &BTreeMap::new()));
         assert_eq!(chosen.get(&app()), Some(&1), "app's choice stays");
         assert_eq!(chosen.get(&site_checkout()), None);
+    }
+
+    #[test]
+    fn a_choice_follows_its_group_to_the_key_it_moved_to_and_no_other_choice_moves() {
+        let mut chosen = ByLine::default();
+        chosen.set(&app(), Some(1), &map());
+        chosen.set(&site_checkout(), Some(2), &map());
+        let renamed = GroupKey::Upstream("github.com/me/app-renamed".to_string());
+        let moved = Snapshot {
+            ancestry: Arc::new(Ancestry {
+                groups: BTreeMap::from([(renamed.clone(), BTreeSet::new())]),
+                made_from: BTreeSet::from([PathBuf::from(SITE)]),
+            }),
+            ..map()
+        };
+        let moves = BTreeMap::from([(GroupKey::Upstream(APP.to_string()), renamed.clone())]);
+
+        assert!(chosen.keep_up_with(&moved, &moves));
+        assert_eq!(chosen.get(&LineKey::group(&renamed)), Some(&1));
+        assert_eq!(chosen.get(&app()), None);
+        assert_eq!(chosen.get(&site_checkout()), Some(&2), "a checkout's stays");
+        assert!(
+            !chosen.keep_up_with(&moved, &moves),
+            "nothing left to carry"
+        );
     }
 
     #[test]

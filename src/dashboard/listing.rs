@@ -47,7 +47,7 @@ pub(super) const DOCKER: &str = "Docker";
 /// Other, whose line may stand for the agents working elsewhere alone.
 pub(super) fn groups(map: &Snapshot) -> impl Iterator<Item = &GroupKey> {
     static OTHER: GroupKey = GroupKey::Other;
-    map.ancestry.groups.iter().chain([&OTHER])
+    map.ancestry.groups.keys().chain([&OTHER])
 }
 
 /// What each group on `map` goes by, unique among them all, as its line reads with every project

@@ -321,16 +321,19 @@ impl State {
         self.notifier.process_snapshot(&snapshot);
         self.cleaning.settle(&snapshot);
         self.arrangement.observe(&snapshot, &self.cleaning, now);
-        // What a line stands for comes and goes only with the projects on the map, which every
-        // snapshot shares until one joins or leaves.
+        // What a line stands for comes and goes only with the projects on the map and their keys,
+        // which every snapshot shares until one joins, leaves or is keyed anew.
         let ancestry_changed = self
             .snapshot
             .as_ref()
             .is_none_or(|shown| !Arc::ptr_eq(&shown.ancestry, &snapshot.ancestry));
         if ancestry_changed {
-            let folds_gone = self.settings.folds.forget_gone(&snapshot);
-            let choices_gone = self.settings.clean_when_idle.forget_gone(&snapshot);
-            if folds_gone || choices_gone {
+            let moves = (self.snapshot.as_ref())
+                .map(|shown| snapshot.ancestry.moves_since(&shown.ancestry))
+                .unwrap_or_default();
+            let folds_changed = self.settings.folds.keep_up_with(&snapshot, &moves);
+            let choices_changed = (self.settings.clean_when_idle).keep_up_with(&snapshot, &moves);
+            if folds_changed || choices_changed {
                 self.save_settings();
             }
         }

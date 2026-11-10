@@ -69,6 +69,42 @@ fn a_time_chosen_from_a_groups_line_is_kept_for_the_next_run_until_the_group_goe
 }
 
 #[test]
+fn a_groups_time_and_fold_follow_its_checkouts_when_their_remote_gets_a_new_address() {
+    let fixture = TempDir::new("state-when-idle-moved");
+    let (mut state, _inbox) = dashboard(&fixture);
+    let saved = || SavedSettings::load(Some(&settings_in(&fixture))).unwrap();
+    let checkouts = |group: &GroupKey| {
+        let clones = [
+            clone_of_app("/code/app".into(), 0, Vec::new()),
+            clone_of_app("/code/wt/app-fix".into(), 0, Vec::new()),
+        ];
+        clones.map(|clone| Project {
+            provenance: Provenance {
+                group: group.clone(),
+                made_from: Vec::new(),
+            },
+            ..clone
+        })
+    };
+    state.show(Arc::new(snapshot_of(checkouts(&app_key()).to_vec())), now());
+    choose(&mut state, app(), Some(3));
+    let line = |group: &GroupKey| LineKey::group(group);
+    state.perform(
+        Action::ToggleFold {
+            line: line(&app_key()),
+        },
+        now(),
+    );
+
+    let renamed = GroupKey::Upstream("github.com/me/app-renamed".to_string());
+    state.show(Arc::new(snapshot_of(checkouts(&renamed).to_vec())), now());
+
+    assert_eq!(saved().clean_when_idle.days_for(&renamed), Some(3));
+    assert!(!saved().folds.is_folded(&line(&renamed)), "still open");
+    assert_eq!(saved().clean_when_idle.days_for(&app_key()), None);
+}
+
+#[test]
 fn a_tick_cleans_the_idle_folders_of_a_group_chosen_to_be_cleaned_once_idle() {
     let fixture = TempDir::new("state-when-idle-tick");
     let (mut state, inbox) = dashboard(&fixture);

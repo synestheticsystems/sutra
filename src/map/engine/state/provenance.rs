@@ -152,7 +152,9 @@ impl State {
         let traced = trace(&self.projects);
         let mut ancestry = Ancestry::default();
         for (path, provenance) in traced {
-            ancestry.groups.insert(provenance.group.clone());
+            (ancestry.groups.entry(provenance.group.clone()))
+                .or_default()
+                .insert(path.clone());
             ancestry
                 .made_from
                 .extend(provenance.made_from.iter().cloned());

@@ -3,11 +3,13 @@
 //! copies. A click on a line turns its fold, and the choice outlasts the run, kept with the saved
 //! settings for as long as the engine knows the line (see `ByLine`).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::ByLine;
 use crate::dashboard::LineKey;
-use crate::map::Snapshot;
+use crate::map::{GroupKey, Snapshot};
 
 /// The fold the user left each line in. A line never clicked is not here, and starts folded.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,10 +40,15 @@ impl Folds {
         self.0.set(line, Some(turned), map)
     }
 
-    /// A live map arrived: forget the fold of every line whose key `map` no longer knows. Returns
-    /// whether any went.
-    pub(in crate::dashboard) fn forget_gone(&mut self, map: &Snapshot) -> bool {
-        self.0.forget_gone(map)
+    /// A live map arrived: carry the fold of each group that `moves` says moved to its new key,
+    /// and forget the fold of every line whose key `map` no longer knows (see
+    /// `ByLine::keep_up_with`). Returns whether the folds changed.
+    pub(in crate::dashboard) fn keep_up_with(
+        &mut self,
+        map: &Snapshot,
+        moves: &BTreeMap<GroupKey, GroupKey>,
+    ) -> bool {
+        self.0.keep_up_with(map, moves)
     }
 }
 
@@ -54,7 +61,7 @@ mod tests {
     use super::*;
     use crate::dashboard::GroupKind;
     use crate::dashboard::listing::fixtures::snapshot;
-    use crate::map::{Ancestry, GroupKey};
+    use crate::map::Ancestry;
 
     const APP: &str = "github.com/me/app";
     const SITE: &str = "/code/site";
@@ -78,7 +85,7 @@ mod tests {
     fn map() -> Snapshot {
         Snapshot {
             ancestry: Arc::new(Ancestry {
-                groups: BTreeSet::from([GroupKey::Upstream(APP.to_string())]),
+                groups: BTreeMap::from([(GroupKey::Upstream(APP.to_string()), BTreeSet::new())]),
                 made_from: BTreeSet::from([PathBuf::from(SITE)]),
             }),
             ..snapshot(vec![], vec![])

@@ -320,10 +320,20 @@ fn a_rediscovery_groups_a_repository_its_clone_in_scratch_and_its_sessions_scrat
     assert_eq!(
         *snapshot.ancestry,
         Ancestry {
-            groups: BTreeSet::from([alice_group, upstream("github.com/me/other")]),
+            groups: BTreeMap::from([
+                (
+                    alice_group,
+                    BTreeSet::from([
+                        alice.clone(),
+                        clone,
+                        fixture.path(&format!("{scratchpad}/out-1"))
+                    ]),
+                ),
+                (upstream("github.com/me/other"), BTreeSet::from([other])),
+            ]),
             made_from: BTreeSet::from([alice]),
         },
-        "the group of the clone with no card among them"
+        "the group of the clone with no card among them, and each with its projects"
     );
 }
 

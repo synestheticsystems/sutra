@@ -2,7 +2,7 @@
 //! knows what the line stands for, card or not, and forgotten once it does not; and a line held in
 //! its place while the pointer is over the list.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::dashboard::listing::fixtures::{linked_worktree, main_worktree};
@@ -99,9 +99,15 @@ fn a_fold_lasts_while_the_engine_knows_its_line_card_or_not_and_goes_once_it_doe
     // App's folders wait to be sized for their cards: the engine still knows its group.
     let app_waiting = Snapshot {
         ancestry: Arc::new(Ancestry {
-            groups: BTreeSet::from([
-                GroupKey::LocalRepository(PathBuf::from("/code/app")),
-                GroupKey::LocalRepository(PathBuf::from("/code/site")),
+            groups: BTreeMap::from([
+                (
+                    GroupKey::LocalRepository(PathBuf::from("/code/app")),
+                    BTreeSet::from([PathBuf::from("/code/app")]),
+                ),
+                (
+                    GroupKey::LocalRepository(PathBuf::from("/code/site")),
+                    BTreeSet::from([PathBuf::from("/code/site")]),
+                ),
             ]),
             made_from: BTreeSet::new(),
         }),

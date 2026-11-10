@@ -1,7 +1,7 @@
 //! What the user chose from each group's line: how many days its build folders may sit idle before
 //! Sutra cleans them, kept by the line, and the choices and the mark the line shows.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -40,10 +40,15 @@ impl CleanWhenIdle {
         offered && self.0.set(&LineKey::group(group), days, map)
     }
 
-    /// A live map arrived: forget the choice for every group `map` no longer knows. Returns
-    /// whether any went.
-    pub(in crate::dashboard) fn forget_gone(&mut self, map: &Snapshot) -> bool {
-        self.0.forget_gone(map)
+    /// A live map arrived: carry the choice of each group that `moves` says moved to its new key,
+    /// and forget the choice for every group `map` no longer knows (see `ByLine::keep_up_with`).
+    /// Returns whether the choices changed.
+    pub(in crate::dashboard) fn keep_up_with(
+        &mut self,
+        map: &Snapshot,
+        moves: &BTreeMap<GroupKey, GroupKey>,
+    ) -> bool {
+        self.0.keep_up_with(map, moves)
     }
 
     /// Whether the user chose a time for no group.

@@ -102,6 +102,7 @@ impl SavedSettings {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -124,7 +125,10 @@ mod tests {
     fn map() -> Snapshot {
         Snapshot {
             ancestry: Arc::new(Ancestry {
-                groups: BTreeSet::from([GroupKey::Upstream("github.com/me/app".to_string())]),
+                groups: BTreeMap::from([(
+                    GroupKey::Upstream("github.com/me/app".to_string()),
+                    BTreeSet::from([PathBuf::from("/code/app")]),
+                )]),
                 made_from: BTreeSet::from([PathBuf::from("/code/app")]),
             }),
             ..snapshot(vec![], vec![])

@@ -382,17 +382,14 @@ pub(crate) fn container_for(folder: impl Into<PathBuf>, name: &str) -> Container
 /// A map of `projects`, in the order given, under the one root `/code`, generated at the epoch,
 /// with nothing else on it.
 pub(crate) fn snapshot_of(projects: Vec<Project>) -> Snapshot {
-    let provenance = projects.iter().map(|project| &project.provenance);
     // What the engine would know of them, had it tracked only them.
-    let ancestry = Ancestry {
-        groups: provenance
-            .clone()
-            .map(|known| known.group.clone())
-            .collect(),
-        made_from: provenance
-            .flat_map(|known| known.made_from.clone())
-            .collect(),
-    };
+    let mut ancestry = Ancestry::default();
+    for project in &projects {
+        (ancestry.groups.entry(project.provenance.group.clone()))
+            .or_default()
+            .insert(project.path.clone());
+        (ancestry.made_from).extend(project.provenance.made_from.iter().cloned());
+    }
     Snapshot {
         roots: vec![PathBuf::from("/code")],
         skipped_private_folders: Vec::new(),
