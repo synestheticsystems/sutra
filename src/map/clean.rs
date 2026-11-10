@@ -41,6 +41,7 @@ mod idle;
 mod locks;
 mod open_folder;
 mod prepare;
+mod programs;
 mod removal;
 mod run;
 mod safety;
@@ -94,13 +95,16 @@ pub struct CheckedPlan {
     pub plan: Plan,
     /// Which folder each of `plan`'s paths led to as it passed, in the plan's order.
     identities: Vec<Identity>,
+    /// Whether taking the locks looks for a program running from the folders too: in the direct
+    /// edition alone, as the App Sandbox shows an app no other process (see `programs`).
+    looks_for_programs: bool,
 }
 
 impl CheckedPlan {
-    /// Take the locks for the delete, or refuse because a build holds one or a folder is no longer
-    /// the one checked.
+    /// Take the locks for the delete, or refuse because a build holds one, a program runs from a
+    /// folder, or a folder is no longer the one checked.
     pub fn lock(&self) -> Result<LockedPlan, CleanError> {
-        run::lock(&self.plan, &self.identities)
+        run::lock(&self.plan, &self.identities, self.looks_for_programs)
     }
 }
 
@@ -169,6 +173,7 @@ pub fn plan(
     };
     let protected =
         |workspace: Option<&Path>| safety::Protected::new(workspace, project, beside, env);
+    let looks_for_programs = matches!(reach, Reach::Anywhere);
     match cargo_clean {
         Some(clean) if clean.folders.iter().any(|folder| folder.path == clicked) => {
             let protected = protected(Some(&clean.workspace));
@@ -180,6 +185,7 @@ pub fn plan(
             Ok(CheckedPlan {
                 plan: Plan::CargoClean(clean),
                 identities,
+                looks_for_programs,
             })
         }
         cargo_clean => {
@@ -191,6 +197,7 @@ pub fn plan(
                     cargo_clean,
                 },
                 identities: vec![identity],
+                looks_for_programs,
             })
         }
     }

@@ -54,6 +54,15 @@ pub(super) fn failure(err: &CleanError, show: &dyn Fn(&Path) -> String) -> Strin
             "A build is using {}. Try again once it finishes.",
             show(lock.parent().unwrap_or(lock))
         ),
+        CleanError::ProgramRunning { executable } => format!(
+            "{} is running from {}. Try again once it quits.",
+            program_name(executable),
+            show(executable.parent().unwrap_or(executable))
+        ),
+        CleanError::ProgramsUnlisted { kind } => format!(
+            "macOS wouldn't list the programs running ({kind}), so Sutra can't tell whether one \
+             runs from there."
+        ),
         CleanError::Changed { folder } => {
             format!("{} changed before the clean could start.", show(folder))
         }
@@ -63,6 +72,12 @@ pub(super) fn failure(err: &CleanError, show: &dyn Fn(&Path) -> String) -> Strin
         ),
         CleanError::Io { path, kind } => format!("{}: {kind}", show(path)),
     }
+}
+
+/// What a program running `executable` goes by: the file's name.
+pub(super) fn program_name(executable: &Path) -> String {
+    let name = executable.file_name().unwrap_or(executable.as_os_str());
+    name.to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
@@ -108,6 +123,14 @@ mod tests {
         assert_eq!(
             stopped(target, None, 1_204, home).1,
             "The cleaning stopped before it finished. It had deleted 1204 files by then."
+        );
+        let simulating = CleanError::ProgramRunning {
+            executable: PathBuf::from("/Users/dev/code/app/target/release/sim"),
+        };
+        assert_eq!(
+            stopped(target, Some(&simulating), 0, home).1,
+            "sim is running from ~/code/app/target/release. Try again once it quits. \
+             Nothing was deleted."
         );
     }
 }

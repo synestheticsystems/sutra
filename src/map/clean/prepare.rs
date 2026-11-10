@@ -38,6 +38,7 @@ impl Prepared {
         let checked = CheckedPlan {
             plan,
             identities: identities.unwrap_or_default(),
+            looks_for_programs: true,
         };
         Prepared {
             checked,
@@ -491,6 +492,50 @@ mod tests {
                 reason: Refusal::OutsideGrant,
             }))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_folder_a_program_runs_from_goes_no_further_and_one_started_since_stops_it_at_its_turn() {
+        use crate::map::clean::programs::tests::Running;
+
+        let fixture = TempDir::new("prepare-program-running");
+        fixture.package("app");
+        let target = fixture.dir("app/target");
+        let executable = target.join("release/sim");
+        let map = snapshot_of(Vec::new());
+        let prepare = || prepare(&target, &fixture.path("app"), &map, &fixture.cargo_env());
+        let running = Running::from(&executable);
+
+        let refused = Err(PrepareError::Locks(CleanError::ProgramRunning {
+            executable: executable.clone(),
+        }));
+        assert_eq!(prepare(), refused);
+
+        drop(running);
+        let prepared = prepare().expect("it quit");
+        let _started_since = Running::from(&executable);
+        assert_eq!(
+            prepared.lock().map(drop),
+            Err(CleanError::ProgramRunning { executable })
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sandboxed_maps_clean_never_asks_after_programs_which_the_sandbox_hides() {
+        use crate::map::clean::programs::tests::Running;
+
+        let fixture = TempDir::new("prepare-program-sandboxed");
+        fixture.package("app");
+        let target = fixture.dir("app/target");
+        let mut map = snapshot_of(Vec::new());
+        map.sandboxed = true;
+        map.roots = vec![fixture.path("app")];
+        let _running = Running::from(&target.join("release/sim"));
+
+        let prepared = prepare(&target, &fixture.path("app"), &map, &fixture.cargo_env());
+        assert!(prepared.is_ok(), "{prepared:?}");
     }
 
     #[test]

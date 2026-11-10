@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{list, unknown_sharers};
+use super::{list, outcome, unknown_sharers};
 use crate::dashboard::format;
 use crate::dashboard::state::Question;
 use crate::map::clean::{CleanError, IdleClean, IdleCleans, LeftOut, PrepareError, Sharing, Why};
@@ -147,6 +147,9 @@ fn left_out_line(left_out: &[LeftOut]) -> String {
             let why = match &left_out.why {
                 Why::Refused(PrepareError::Locks(CleanError::BuildRunning { .. })) => {
                     "a build is using it".to_string()
+                }
+                Why::Refused(PrepareError::Locks(CleanError::ProgramRunning { executable })) => {
+                    format!("{} is running from it", outcome::program_name(executable))
                 }
                 Why::Refused(_) => "Sutra can't clean it".to_string(),
                 Why::SharedWith(project) => format!("{project} builds there and isn't idle"),

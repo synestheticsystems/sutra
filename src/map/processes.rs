@@ -139,6 +139,33 @@ pub(crate) fn server_of(socket: &Path) -> io::Result<ProcessId> {
         .ok_or_else(ended)
 }
 
+/// One of the user's processes, by the file it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningProgram {
+    pub pid: u32,
+    /// The file it runs, as macOS resolved its path.
+    pub executable: PathBuf,
+}
+
+/// The first of the user's processes, in the order macOS lists them, that runs a file inside one
+/// of `folders`, each given by its resolved path, as macOS gives an executable's. Fails only when
+/// macOS will not list the user's processes; one that ends while it is read, or whose file macOS
+/// will not name, is passed over, as only a process of another user's would be.
+#[cfg(target_os = "macos")]
+pub(crate) fn running_inside(folders: &[PathBuf]) -> io::Result<Option<RunningProgram>> {
+    let found = libproc::processes_of_this_user()?
+        .into_iter()
+        .filter_map(|pid| Some((pid, libproc::executable_of(pid)?)))
+        .find(|(_, executable)| folders.iter().any(|folder| executable.starts_with(folder)));
+    Ok(found.map(|(pid, executable)| RunningProgram { pid, executable }))
+}
+
+/// Outside macOS no libproc tells of other processes' files, so none is found running.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn running_inside(_folders: &[PathBuf]) -> io::Result<Option<RunningProgram>> {
+    Ok(None)
+}
+
 /// Where `process` listens for TCP connections while it runs; `None` once it has ended.
 #[cfg(target_os = "macos")]
 pub(crate) fn sockets_of(process: ProcessId) -> Option<BTreeSet<SocketAddr>> {

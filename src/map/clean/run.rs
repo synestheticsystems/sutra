@@ -4,8 +4,9 @@
 //! files from under it. Sutra refuses while a build runs, and makes a build that starts during
 //! the delete wait for it. In order:
 //!  1. Open each folder, refusing one that is no longer the folder its checks passed, and take
-//!     every lock in the folders, or refuse when a build holds one (`lock`). Each folder stays
-//!     open from here on, and whatever follows reaches into it through that folder alone.
+//!     every lock in the folders, or refuse when a build holds one (`lock`), or while a program
+//!     runs from one (`programs`). Each folder stays open from here on, and whatever follows
+//!     reaches into it through that folder alone.
 //!  2. Measure the folders, while every link of a file is still there to share its size.
 //!  3. Find the locks again and take any that appeared while measuring took its seconds, still
 //!     refusing when a build holds one, and refuse a folder whose path no longer leads to it.
@@ -32,7 +33,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::locks::HeldLocks;
 use super::open_folder::{Identity, OpenFolder, is_not_a_folder};
-use super::{Plan, removal};
+use super::{Plan, programs, removal};
 use crate::map::disk;
 
 /// A plan's folders, each held open as the folder its checks passed, with every build lock in them
@@ -45,8 +46,12 @@ pub struct LockedPlan {
 
 /// Open each folder `plan` deletes, refusing one that is no longer the folder `identities` names
 /// for it, in the plan's order, and take every build lock in them without waiting, or refuse
-/// because a build holds one.
-pub(super) fn lock(plan: &Plan, identities: &[Identity]) -> Result<LockedPlan, CleanError> {
+/// because a build holds one; and with `looks_for_programs`, refuse while a program runs from one.
+pub(super) fn lock(
+    plan: &Plan,
+    identities: &[Identity],
+    looks_for_programs: bool,
+) -> Result<LockedPlan, CleanError> {
     let mut folders = Vec::new();
     for (index, path) in plan.folders().into_iter().enumerate() {
         // A folder with no identity never passed its checks.
@@ -56,6 +61,9 @@ pub(super) fn lock(plan: &Plan, identities: &[Identity]) -> Result<LockedPlan, C
     let mut locks = HeldLocks::default();
     for (path, folder) in &folders {
         locks.take_found(folder, path)?;
+    }
+    if looks_for_programs {
+        programs::refuse_while_one_runs(&folders)?;
     }
     Ok(LockedPlan { folders, locks })
 }
@@ -82,7 +90,7 @@ fn changed(folder: &Path) -> CleanError {
     }
 }
 
-fn io_error(path: &Path, err: &io::Error) -> CleanError {
+pub(super) fn io_error(path: &Path, err: &io::Error) -> CleanError {
     CleanError::Io {
         path: path.to_path_buf(),
         kind: err.kind(),
@@ -167,6 +175,11 @@ pub struct Freed {
 pub enum CleanError {
     /// A build holds this lock, so the folder holding it is in use.
     BuildRunning { lock: PathBuf },
+    /// One of the user's processes runs this file, inside a folder the clean deletes.
+    ProgramRunning { executable: PathBuf },
+    /// macOS would not list the user's processes, so whether one runs from a folder the clean
+    /// deletes cannot be told.
+    ProgramsUnlisted { kind: io::ErrorKind },
     /// This is no longer the folder the clean was worked out for: it is gone, or something else
     /// stands at its path.
     Changed { folder: PathBuf },
@@ -249,7 +262,7 @@ mod tests {
             .iter()
             .map(|folder| OpenFolder::at(folder).unwrap().identity().unwrap())
             .collect();
-        lock(&plan, &identities)
+        lock(&plan, &identities, true)
     }
 
     #[test]

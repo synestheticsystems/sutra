@@ -1,7 +1,7 @@
 //! The calls into libproc that tell of the user's processes: which there are, the folder each runs
-//! in, its name, its command and the TCP sockets it listens on, as `lsof -p` reads them. `libc`
-//! binds most of it; the socket record it lacks is laid out here, as far as the fields read, as the
-//! macOS SDK's `<sys/proc_info.h>` lays it out. Every field is a fixed size, so the layout is the
+//! in, the file it runs, its name, its command and the TCP sockets it listens on, as `lsof -p`
+//! reads them. `libc` binds most of it; the socket record it lacks is laid out here, as far as the
+//! fields read, as the macOS SDK's `<sys/proc_info.h>` lays it out. Every field is a fixed size, so the layout is the
 //! same on arm64 and x86_64. On 2026-11-07 a C probe compiled against the SDK (Xcode 26.6) printed
 //! the sizes and offsets checked below, and a pass over the processes of Daniel's Mac found the 39
 //! listening sockets `lsof -nP -iTCP -sTCP:LISTEN` listed, at the same addresses and ports.
@@ -143,6 +143,20 @@ pub(super) fn folder_of(pid: u32) -> Option<PathBuf> {
     let info = unsafe { info.assume_init() };
     let path = text(info.pvi_cdir.vip_path.as_flattened())?;
     (!path.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(path)))
+}
+
+/// The file `pid` runs, by the path macOS resolved when the process started it, with no link
+/// left in it; `None` once it has ended, or when macOS will not say.
+pub(super) fn executable_of(pid: u32) -> Option<PathBuf> {
+    let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `path` holds as many bytes as it says, and libproc writes no more than that.
+    let written =
+        unsafe { libc::proc_pidpath(pid as c_int, path.as_mut_ptr().cast(), path.len() as u32) };
+    let written = usize::try_from(written)
+        .ok()
+        .filter(|&written| written > 0)?;
+    path.truncate(written);
+    Some(PathBuf::from(OsStr::from_bytes(&path)))
 }
 
 /// Room for the file descriptors of one process at a time, kept through a pass so that it grows to
