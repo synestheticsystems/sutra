@@ -12,7 +12,7 @@ use super::super::{Cleaning, OFFER, Report, words};
 use super::Asked;
 use crate::dashboard::state::{Alert, Proposal};
 use crate::map::Snapshot;
-use crate::map::clean::{self, AtRestClean, CargoEnv, IdleClean, LeftOut, Offered};
+use crate::map::clean::{self, AtRestClean, CargoEnv, IdleClean, Offered};
 
 impl Cleaning {
     /// The user clicked the toolbar's clean. Work out the clean of every idle folder, and apart from
@@ -48,8 +48,9 @@ impl Cleaning {
 
     /// What the toolbar's clean offers has been worked out, or its thread ended with no word
     /// (`None`). Ask about the idle folders, naming how many and how much, then apart about those
-    /// kept only by sessions at rest; `answered_idle` and `answered_at_rest` take the answers. With
-    /// nothing for either, say so, and why.
+    /// kept only by sessions at rest; `answered_idle` and `answered_at_rest` take the answers. Each
+    /// question tells what its own search left out, and one asked alone what the other's left out
+    /// too. With nothing for either, say so, and why.
     pub(in crate::dashboard::cleaning) fn asking_offered(&mut self, found: Option<Offered>) {
         self.preparing_offer = false;
         let Some(Offered {
@@ -68,34 +69,39 @@ impl Cleaning {
                 .asked_about_in(&clean.clicked, &clean.prepared)
                 .is_none()
         });
-        let asks_idle = !idle.cleans.is_empty();
-        if asks_idle {
-            let question = words::idle_question(&idle.cleans, &idle.left_out, OFFER.quiet);
-            for clean in &idle.cleans {
-                (self.questions).open(&Asked::CleanIdle, &clean.clicked, &clean.prepared);
-            }
-            let proposal = Proposal::CleanIdle(idle.cleans);
-            self.alerts.push(Alert::question(question, proposal));
+        for clean in &idle.cleans {
+            (self.questions).open(&Asked::CleanIdle, &clean.clicked, &clean.prepared);
         }
         at_rest.cleans.retain(|clean| {
             (self.questions)
                 .asked_about_in(&clean.clicked, &clean.prepared)
                 .is_none()
         });
+        for clean in &at_rest.cleans {
+            (self.questions).open(&Asked::CleanAtRest, &clean.clicked, &clean.prepared);
+        }
+        let asks_idle = !idle.cleans.is_empty();
         let asks_at_rest = !at_rest.cleans.is_empty();
+        // What a search that asks nothing left out is told with the other's, the idle ones first:
+        // in the other's question, or in the notice when neither asks.
+        if !asks_at_rest {
+            idle.left_out.append(&mut at_rest.left_out);
+        } else if !asks_idle {
+            at_rest.left_out.splice(0..0, idle.left_out.drain(..));
+        }
+        if asks_idle {
+            let question = words::idle_question(&idle.cleans, &idle.left_out, OFFER.quiet);
+            let proposal = Proposal::CleanIdle(idle.cleans);
+            self.alerts.push(Alert::question(question, proposal));
+        }
         if asks_at_rest {
             let question =
                 words::at_rest_question(&at_rest.cleans, &at_rest.left_out, OFFER.at_rest);
-            for clean in &at_rest.cleans {
-                (self.questions).open(&Asked::CleanAtRest, &clean.clicked, &clean.prepared);
-            }
             let proposal = Proposal::CleanAtRest(at_rest.cleans);
             self.alerts.push(Alert::question(question, proposal));
         }
         if !asks_idle && !asks_at_rest {
-            let left_out: Vec<LeftOut> =
-                idle.left_out.into_iter().chain(at_rest.left_out).collect();
-            let (title, detail) = words::nothing_to_clean(&left_out);
+            let (title, detail) = words::nothing_to_clean(&idle.left_out);
             self.alerts.push(Alert::notice(title, detail));
         }
     }
@@ -159,7 +165,7 @@ mod tests {
         ALWAYS_SHORT, at_rest_clean, cleaning, idle_clean, next_report, offered, prepared_at,
         reporting,
     };
-    use crate::map::clean::{IdleCleans, PrepareError, WORTH_CLEANING_BYTES, Why};
+    use crate::map::clean::{IdleCleans, LeftOut, PrepareError, WORTH_CLEANING_BYTES, Why};
     use crate::map::test_support::{TempDir, agent_session, at, project_at, snapshot_of};
     use crate::map::{AgentSession, AgentStatus, Project};
 
@@ -377,6 +383,55 @@ mod tests {
             "Left out for now: busy (a build is using it) and tied (working builds there and \
              isn't idle)."
         );
+    }
+
+    #[test]
+    fn a_question_asked_alone_tells_what_the_other_search_left_out_too() {
+        let fixture = TempDir::new("asking-left-out");
+        let idle = fixture.dir("idle/target");
+        let resting = fixture.dir("resting/target");
+        let left_out = |name: &str, why| LeftOut {
+            project_name: name.to_string(),
+            folder: PathBuf::from(format!("/code/{name}/target")),
+            why,
+        };
+        // Whether each question asked says that the idle search left out `busy`, and that the
+        // search for folders kept by sessions at rest left out `tied`.
+        let told = |idle: Vec<IdleClean>, at_rest: Vec<AtRestClean>| -> Vec<(bool, bool)> {
+            let building = Why::Refused(PrepareError::Locks(clean::CleanError::BuildRunning {
+                lock: PathBuf::from("/code/busy/target/debug/.cargo-lock"),
+            }));
+            let mut cleaning = cleaning();
+            cleaning.asking_offered(Some(Offered {
+                idle: IdleCleans {
+                    cleans: idle,
+                    left_out: vec![left_out("busy", building)],
+                },
+                at_rest: clean::AtRestCleans {
+                    cleans: at_rest,
+                    left_out: vec![left_out("tied", Why::SharedWith("working".to_string()))],
+                },
+            }));
+            (cleaning.take_alerts().iter())
+                .map(|alert| {
+                    let Alert::Question { question, .. } = alert else {
+                        panic!("not a question: {alert:?}");
+                    };
+                    let says = |project: &str| question.detail.contains(&format!("{project} ("));
+                    (says("busy"), says("tied"))
+                })
+                .collect()
+        };
+        let idle_clean = || vec![idle_clean(&[&idle])];
+        let at_rest_clean = || vec![at_rest_clean(&[&resting])];
+
+        assert_eq!(
+            told(idle_clean(), at_rest_clean()),
+            [(true, false), (false, true)],
+            "each its own"
+        );
+        assert_eq!(told(idle_clean(), Vec::new()), [(true, true)]);
+        assert_eq!(told(Vec::new(), at_rest_clean()), [(true, true)]);
     }
 
     #[test]
