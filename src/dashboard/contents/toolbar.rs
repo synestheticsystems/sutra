@@ -10,7 +10,7 @@ pub(in crate::dashboard) use gauge::gauge as disk_gauge;
 
 use std::path::{Path, PathBuf};
 
-use crate::dashboard::cleaning::{self, IdleOffer};
+use crate::dashboard::cleaning::{self, AtRestOffer, IdleOffer};
 use crate::dashboard::listing::{Arrangement, Listing};
 use crate::dashboard::{Action, MenuAction, MenuEntry, SortOrder, format};
 use crate::notifications::Notifier;
@@ -108,59 +108,88 @@ pub(in crate::dashboard) fn toolbar(
     }
 }
 
-/// The toolbar's clean: a click cleans every idle build folder, and a right click sets what Sutra
-/// keeps free. `offer` is what is idle, if anything, when the map `can_tell`; `busy` while a
+/// The toolbar's clean: a click cleans every idle build folder, then asks apart about those kept
+/// only by sessions at rest, and a right click sets what Sutra keeps free. `offer` is what is idle
+/// and `at_rest` what sessions at rest keep, if anything, when the map `can_tell`; `busy` while a
 /// click's clean is still worked out; `floor` the free space Sutra keeps, if the user chose one.
 pub(in crate::dashboard) fn clean_control(
     offer: Option<IdleOffer>,
+    at_rest: Option<AtRestOffer>,
     can_tell: bool,
     busy: bool,
     floor: Option<u64>,
 ) -> CleanControl {
     CleanControl {
-        offered: offer.is_some(),
+        offered: offer.is_some() || at_rest.is_some(),
         busy,
-        tooltip: offer_tooltip(offer, can_tell, floor),
-        menu: clean_menu(offer, floor),
+        tooltip: offer_tooltip(offer, at_rest, can_tell, floor),
+        menu: clean_menu(offer, at_rest, floor),
     }
 }
 
-/// The toolbar's words for what is on offer, when `can_tell` what is idle, and for what Sutra keeps
-/// free.
-fn offer_tooltip(offer: Option<IdleOffer>, can_tell: bool, floor: Option<u64>) -> String {
+/// The toolbar's words for what is on offer, when `can_tell` what is idle, for what it asks about
+/// apart, and for what Sutra keeps free.
+fn offer_tooltip(
+    offer: Option<IdleOffer>,
+    at_rest: Option<AtRestOffer>,
+    can_tell: bool,
+    floor: Option<u64>,
+) -> String {
+    let at_rest = at_rest.map(|AtRestOffer { folders, bytes }| {
+        let which = match folders {
+            1 => "the build folder".to_string(),
+            folders => format!("{folders} build folders"),
+        };
+        format!(
+            "Ask about {which} kept by sessions at rest: {}",
+            format::size(bytes, false)
+        )
+    });
     let offer = match offer {
-        Some(IdleOffer { folders: 1, bytes }) => {
-            format!(
-                "Clean the idle build folder: {}",
-                format::size(bytes, false)
-            )
-        }
-        Some(IdleOffer { folders, bytes }) => {
-            format!(
-                "Clean {folders} idle build folders: {}",
-                format::size(bytes, false)
-            )
-        }
-        None if can_tell => "No idle build folders to clean".to_string(),
-        None => "Can't tell what is idle right now".to_string(),
+        Some(IdleOffer { folders: 1, bytes }) => Some(format!(
+            "Clean the idle build folder: {}",
+            format::size(bytes, false)
+        )),
+        Some(IdleOffer { folders, bytes }) => Some(format!(
+            "Clean {folders} idle build folders: {}",
+            format::size(bytes, false)
+        )),
+        // What sessions at rest keep is then all a click asks about.
+        None if at_rest.is_some() => None,
+        None if can_tell => Some("No idle build folders to clean".to_string()),
+        None => Some("Can't tell what is idle right now".to_string()),
     };
-    match floor {
-        Some(floor) => format!("{offer}\nKeeping {} free", format::size(floor, false)),
-        None => offer,
-    }
+    let floor = floor.map(|floor| format!("Keeping {} free", format::size(floor, false)));
+    let lines: Vec<String> = [offer, at_rest, floor].into_iter().flatten().collect();
+    lines.join("\n")
 }
 
-/// What a right click on the toolbar's clean offers: the clean itself when anything is idle, then
-/// how much free space Sutra should keep by itself, with the current choice checked.
-fn clean_menu(offer: Option<IdleOffer>, floor: Option<u64>) -> Vec<MenuEntry> {
+/// What a right click on the toolbar's clean offers: the clean itself when anything is idle or
+/// kept by sessions at rest, titled by the idle folders when there are any, as its first question
+/// asks about them, then how much free space Sutra should keep by itself, with the current choice
+/// checked.
+fn clean_menu(
+    offer: Option<IdleOffer>,
+    at_rest: Option<AtRestOffer>,
+    floor: Option<u64>,
+) -> Vec<MenuEntry> {
     let mut menu = Vec::new();
-    if let Some(IdleOffer { folders, bytes }) = offer {
+    let title = match (offer, at_rest) {
+        (Some(IdleOffer { folders, bytes }), _) => Some(format!(
+            "Clean {} ({})\u{2026}",
+            format::plural(folders as u64, "Idle Folder"),
+            format::size(bytes, false)
+        )),
+        (None, Some(AtRestOffer { folders, bytes })) => Some(format!(
+            "Clean {} Kept by Sessions at Rest ({})\u{2026}",
+            format::plural(folders as u64, "Folder"),
+            format::size(bytes, false)
+        )),
+        (None, None) => None,
+    };
+    if let Some(title) = title {
         menu.push(MenuEntry::Item {
-            title: format!(
-                "Clean {} ({})\u{2026}",
-                format::plural(folders as u64, "Idle Folder"),
-                format::size(bytes, false)
-            ),
+            title,
             checked: false,
             action: MenuAction::Dashboard {
                 action: Action::CleanIdle,
@@ -235,7 +264,7 @@ mod tests {
             folders: 12,
             bytes: 282_000_000_000,
         };
-        let menu = clean_menu(Some(offer), Some(100_000_000_000));
+        let menu = clean_menu(Some(offer), None, Some(100_000_000_000));
         let title = |title: &str, checked| (Some(title.to_string()), checked);
         assert_eq!(
             titles(&menu),
@@ -267,7 +296,7 @@ mod tests {
 
     #[test]
     fn with_nothing_idle_the_clean_menu_only_sets_what_is_kept_free() {
-        let menu = clean_menu(None, None);
+        let menu = clean_menu(None, None, None);
         assert_eq!(
             titles(&menu)[0],
             (Some("Never Clean by Itself".to_string()), true)
@@ -278,11 +307,11 @@ mod tests {
     #[test]
     fn the_toolbar_says_what_is_on_offer_and_what_is_kept_free() {
         assert_eq!(
-            offer_tooltip(None, true, None),
+            offer_tooltip(None, None, true, None),
             "No idle build folders to clean"
         );
         assert_eq!(
-            offer_tooltip(None, false, None),
+            offer_tooltip(None, None, false, None),
             "Can't tell what is idle right now"
         );
         let one = IdleOffer {
@@ -290,7 +319,7 @@ mod tests {
             bytes: 4_000_000_000,
         };
         assert_eq!(
-            offer_tooltip(Some(one), true, None),
+            offer_tooltip(Some(one), None, true, None),
             "Clean the idle build folder: 4 GB"
         );
         let many = IdleOffer {
@@ -298,8 +327,48 @@ mod tests {
             bytes: 282_000_000_000,
         };
         assert_eq!(
-            offer_tooltip(Some(many), true, Some(100_000_000_000)),
+            offer_tooltip(Some(many), None, true, Some(100_000_000_000)),
             "Clean 12 idle build folders: 282 GB\nKeeping 100 GB free"
+        );
+    }
+
+    #[test]
+    fn the_toolbar_says_what_it_asks_about_apart_after_what_is_idle_or_alone() {
+        let idle = IdleOffer {
+            folders: 12,
+            bytes: 282_000_000_000,
+        };
+        let at_rest = |folders| AtRestOffer {
+            folders,
+            bytes: 180_000_000_000,
+        };
+        assert_eq!(
+            offer_tooltip(Some(idle), Some(at_rest(3)), true, Some(100_000_000_000)),
+            "Clean 12 idle build folders: 282 GB\nAsk about 3 build folders kept by sessions at \
+             rest: 180 GB\nKeeping 100 GB free"
+        );
+        assert_eq!(
+            offer_tooltip(None, Some(at_rest(1)), true, None),
+            "Ask about the build folder kept by sessions at rest: 180 GB"
+        );
+
+        let control = clean_control(None, Some(at_rest(3)), true, false, None);
+        assert!(control.offered, "a click asks about them");
+        assert_eq!(
+            titles(&control.menu)[0],
+            (
+                Some("Clean 3 Folders Kept by Sessions at Rest (180 GB)\u{2026}".to_string()),
+                false
+            )
+        );
+        let both = clean_menu(Some(idle), Some(at_rest(3)), None);
+        assert_eq!(
+            titles(&both)[0],
+            (
+                Some("Clean 12 Idle Folders (282 GB)\u{2026}".to_string()),
+                false
+            ),
+            "titled by the first question"
         );
     }
 
@@ -320,7 +389,7 @@ mod tests {
     #[test]
     fn the_sort_shows_with_more_than_one_project_and_the_folder_only_in_the_store_edition() {
         let notifier = Notifier::new(|_, _| {});
-        let clean = clean_control(None, true, false, None);
+        let clean = clean_control(None, None, true, false, None);
         let arrangement = Arrangement::default();
         let toolbar_over = |map, sandboxed| {
             let listing = Listing::new(map, &arrangement, &cleaning::tests::cleaning(), now());

@@ -14,7 +14,7 @@ use crate::map::clean::{LeftOut, Progress};
 use crate::map::test_support::{
     TempDir, agent_session, at, cargo_target, measured, project_at, snapshot_of,
 };
-use crate::map::{AgentStatus, Project, Provenance};
+use crate::map::{AgentSession, AgentStatus, Project, Provenance};
 
 const DAY_SECS: u64 = 24 * 60 * 60;
 const LARGE: u64 = 100 * clean::WORTH_CLEANING_BYTES;
@@ -105,6 +105,40 @@ fn a_groups_idle_folders_go_unasked_and_one_banner_says_what_went_once_the_last_
     assert!(!built("app-old").exists());
     assert!(built("app-busy").exists(), "an agent is at work in it");
     assert!(built("site").exists(), "its group has no time chosen");
+}
+
+#[test]
+fn a_session_at_rest_however_long_keeps_its_folders_from_a_groups_clean_when_idle() {
+    let fixture = TempDir::new("when-idle-at-rest");
+    // At rest for a month, in a checkout quiet as long, which the toolbar asks about apart.
+    let resting = Project {
+        agents: vec![AgentSession {
+            since: Some(at((1_000 - 30) * DAY_SECS)),
+            ..agent_session("s1", AgentStatus::Idle)
+        }],
+        ..checkout(&fixture, "app", upstream("app"), 30)
+    };
+    let map = Arc::new(snapshot_of(vec![resting.clone()]));
+    let day = Duration::from_secs(DAY_SECS);
+    assert_eq!(clean::at_rest_folders(&map, now(), day).len(), 1);
+    let chosen = chosen(&upstream("app"), IdleTime::OneHour, &map);
+    let (mut cleaning, inbox) = reporting();
+    let home = fixture.root();
+
+    cleaning.clean_when_idle(&map, &chosen, Instant::now(), now(), home);
+    cleaning.receive(next_report(&inbox), Some(&map), now(), home);
+    assert!(cleaning.running.is_empty() && cleaning.waiting.is_empty());
+
+    let times = Arc::new(chosen.times_on(&map));
+    let target = &resting.artifacts[0].path;
+    let by = when_idle(&resting.path, upstream("app"), &times);
+    cleaning.queue(target.clone(), prepared_at(target), by);
+    cleaning.start_next(Some(&map), now(), home);
+    assert!(
+        cleaning.running.is_empty(),
+        "nor cleaned at its turn, should a look have found it before the session came"
+    );
+    assert!(fixture.path("app/target/debug/deps/lib").exists());
 }
 
 #[test]

@@ -35,6 +35,8 @@ enum Asked {
     Clean(PathBuf),
     /// The toolbar's clean of every idle folder.
     CleanIdle,
+    /// The toolbar's clean of the folders kept only by sessions at rest, asked about apart.
+    CleanAtRest,
 }
 
 impl OpenQuestions {
@@ -253,10 +255,11 @@ mod tests {
 
     use super::*;
     use crate::dashboard::cleaning::tests::{
-        ALWAYS_SHORT, cleaning, idle_clean, next_report, prepared_at, prepared_of, reporting,
+        ALWAYS_SHORT, cleaning, idle_clean, next_report, offered, prepared_at, prepared_of,
+        reporting,
     };
     use crate::dashboard::cleaning::{CleanState, IdleOffer};
-    use crate::map::clean::{IdleCleans, Sharing, WORTH_CLEANING_BYTES};
+    use crate::map::clean::{Sharing, WORTH_CLEANING_BYTES};
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, at, cargo_target, measured, project_at, snapshot_of,
     };
@@ -510,10 +513,7 @@ mod tests {
         let asked = fixture.dir("cache/app");
         let map = Arc::new(snapshot_of(Vec::new()));
         let mut cleaning = cleaning();
-        cleaning.asking_idle(Some(IdleCleans {
-            cleans: vec![idle_clean(&[&asked])],
-            left_out: Vec::new(),
-        }));
+        cleaning.asking_idle(offered(vec![idle_clean(&[&asked])], Vec::new()));
         cleaning.take_alerts();
         // A click on Clean in the project `name`, whose clean takes `build_dir` with its target.
         let click = |cleaning: &mut Cleaning, name: &str, build_dir: &Path| {

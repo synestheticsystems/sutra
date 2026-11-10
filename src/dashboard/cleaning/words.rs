@@ -1,14 +1,16 @@
 //! What Sutra says about a clean: the question before the clean of one folder and why it refused
-//! one here, and in the child modules, what it says about cleaning every idle folder, about
-//! cleaning by itself to keep free space, or a group's folders once idle, and when a clean stops
-//! early.
+//! one here, and in the child modules, what it says about cleaning every idle folder, and apart
+//! the folders kept only by sessions at rest, about cleaning by itself to keep free space, or a
+//! group's folders once idle, and when a clean stops early.
 
+mod at_rest;
 mod idle;
 mod keep_free;
 mod outcome;
 mod when_idle;
 
-pub(super) use idle::{IDLE_SEARCH_STOPPED, idle_question, nothing_to_ask};
+pub(super) use at_rest::at_rest_question;
+pub(super) use idle::{IDLE_SEARCH_STOPPED, idle_question, nothing_to_clean, search_stopped};
 pub(super) use keep_free::{keep_free_choice, keep_free_question, made_room};
 pub(super) use outcome::{all_stopped, stopped};
 pub(super) use when_idle::{

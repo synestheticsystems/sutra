@@ -1,5 +1,5 @@
-//! What Sutra says about cleaning every idle build folder at once: the one question, and why there
-//! is nothing to ask.
+//! What Sutra says about cleaning every idle build folder at once: the question, and why there is
+//! nothing to ask, of these or of the folders kept only by sessions at rest.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -8,10 +8,10 @@ use std::time::Duration;
 use super::{list, outcome, unknown_sharers};
 use crate::dashboard::format;
 use crate::dashboard::state::Question;
-use crate::map::clean::{CleanError, IdleClean, IdleCleans, LeftOut, PrepareError, Sharing, Why};
+use crate::map::clean::{CleanError, IdleClean, LeftOut, PrepareError, Prepared, Sharing, Why};
 
-/// How many folders the question about idle folders names before it counts the rest.
-const IDLE_NAMED: usize = 8;
+/// How many lines a question about many cleans names before it counts the rest.
+pub(super) const NAMED: usize = 8;
 
 /// The one question before every idle folder is cleaned: how many, how much, whose, and what was
 /// left out.
@@ -20,7 +20,7 @@ pub(in crate::dashboard::cleaning) fn idle_question(
     left_out: &[LeftOut],
     quiet_at_least: Duration,
 ) -> Question {
-    let bytes = bytes_of_each(cleans);
+    let bytes = bytes_of_each(cleans.iter().map(|clean| &clean.prepared));
     let total: u64 = bytes.iter().sum();
     let title = match cleans {
         [one] => format!("Clean the idle build folder in {}?", one.project_name),
@@ -41,41 +41,21 @@ pub(in crate::dashboard::cleaning) fn idle_question(
         largest.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
         let lines: Vec<String> = largest
             .iter()
-            .take(IDLE_NAMED)
+            .take(NAMED)
             .map(|(clean, bytes)| {
                 format!("{} ({})", name_of_clean(clean), format::size(*bytes, false))
             })
             .collect();
         detail.push_str(&format!("\n\n{}", lines.join("\n")));
-        if cleans.len() > IDLE_NAMED {
-            detail.push_str(&format!("\nand {} more", cleans.len() - IDLE_NAMED));
+        if cleans.len() > NAMED {
+            detail.push_str(&format!("\nand {} more", cleans.len() - NAMED));
         }
     }
-    let among_them = |name: &String| cleans.iter().any(|clean| clean.project_name == *name);
-    let mut sharing = Sharing::default();
-    for clean in cleans {
-        sharing
-            .projects
-            .extend(clean.prepared.sharing.projects.iter().cloned());
-        sharing
-            .unknown
-            .extend(clean.prepared.sharing.unknown.iter().cloned());
-    }
-    sharing.projects.retain(|name| !among_them(name));
-    sharing.projects.sort();
-    sharing.projects.dedup();
-    sharing.unknown.sort();
-    sharing.unknown.dedup();
-    if !sharing.projects.is_empty() {
-        detail.push_str(&format!(
-            "\n\nBuilds of {} are in there too, and go with {them}.",
-            list(&sharing.projects)
-        ));
-    }
-    detail.push_str(&unknown_sharers(&sharing));
-    if !left_out.is_empty() {
-        detail.push_str(&format!("\n\n{}", left_out_line(left_out)));
-    }
+    let theirs: Vec<(&str, &Prepared)> = (cleans.iter())
+        .map(|clean| (clean.project_name.as_str(), &clean.prepared))
+        .collect();
+    detail.push_str(&others_building_there(&theirs, them));
+    detail.push_str(&left_out_paragraph(left_out));
     Question {
         title,
         detail,
@@ -87,24 +67,17 @@ pub(in crate::dashboard::cleaning) fn idle_question(
 pub(in crate::dashboard::cleaning) const IDLE_SEARCH_STOPPED: &str =
     "Couldn't work out what to clean";
 
-/// The alert in place of the toolbar's question when there is nothing to ask about, `None` when
-/// there is. `found` is what the search found, `None` when it ended with no word.
-pub(in crate::dashboard::cleaning) fn nothing_to_ask(
-    found: Option<&IdleCleans>,
-) -> Option<(String, String)> {
-    match found {
-        None => Some((
-            IDLE_SEARCH_STOPPED.to_string(),
-            "The search stopped before it finished. Nothing was deleted.".to_string(),
-        )),
-        Some(found) if found.cleans.is_empty() => Some(nothing_idle_to_clean(&found.left_out)),
-        Some(_) => None,
-    }
+/// The alert in place of the toolbar's questions when the search behind them ended with no word.
+pub(in crate::dashboard::cleaning) fn search_stopped() -> (String, String) {
+    (
+        IDLE_SEARCH_STOPPED.to_string(),
+        "The search stopped before it finished. Nothing was deleted.".to_string(),
+    )
 }
 
-/// What the toolbar's clean says when it finds nothing it can do: what stopped it, when anything
-/// did.
-fn nothing_idle_to_clean(left_out: &[LeftOut]) -> (String, String) {
+/// The alert in place of the toolbar's questions when it finds nothing it can do: what stopped it,
+/// when anything did, among `left_out`, the folders either question would have asked about.
+pub(in crate::dashboard::cleaning) fn nothing_to_clean(left_out: &[LeftOut]) -> (String, String) {
     let detail = if left_out.is_empty() {
         "Every build folder is in use, recently active or already clean.".to_string()
     } else {
@@ -113,21 +86,59 @@ fn nothing_idle_to_clean(left_out: &[LeftOut]) -> (String, String) {
     ("Nothing to clean right now".to_string(), detail)
 }
 
-/// What each clean frees at most, counting a folder two cleans share for the first of them only.
-fn bytes_of_each(cleans: &[IdleClean]) -> Vec<u64> {
+/// What each of `cleans` frees at most, counting a folder two cleans share for the first of them
+/// only.
+pub(super) fn bytes_of_each<'a>(cleans: impl Iterator<Item = &'a Prepared>) -> Vec<u64> {
     let mut counted = HashSet::new();
     cleans
-        .iter()
-        .map(|clean| {
-            let folders = clean.prepared.plan().folders();
+        .map(|prepared| {
+            let folders = prepared.plan().folders();
             folders
                 .into_iter()
-                .zip(&clean.prepared.sizes)
+                .zip(&prepared.sizes)
                 .filter(|(folder, _)| counted.insert(*folder))
                 .filter_map(|(_, usage)| usage.map(|usage| usage.bytes))
                 .sum()
         })
         .collect()
+}
+
+/// What a question says of the projects whose builds go with `cleans`, each its project's name and
+/// the clean, besides their own, whose builds go with `them`: those whose builds are in there too,
+/// and those whose settings Sutra can't read. Nothing when there are none.
+pub(super) fn others_building_there(cleans: &[(&str, &Prepared)], them: &str) -> String {
+    let among_them = |name: &String| cleans.iter().any(|(own, _)| own == name);
+    let mut sharing = Sharing::default();
+    for (_, prepared) in cleans {
+        sharing
+            .projects
+            .extend(prepared.sharing.projects.iter().cloned());
+        sharing
+            .unknown
+            .extend(prepared.sharing.unknown.iter().cloned());
+    }
+    sharing.projects.retain(|name| !among_them(name));
+    sharing.projects.sort();
+    sharing.projects.dedup();
+    sharing.unknown.sort();
+    sharing.unknown.dedup();
+    let mut said = String::new();
+    if !sharing.projects.is_empty() {
+        said.push_str(&format!(
+            "\n\nBuilds of {} are in there too, and go with {them}.",
+            list(&sharing.projects)
+        ));
+    }
+    said.push_str(&unknown_sharers(&sharing));
+    said
+}
+
+/// What a question says of `left_out` in a paragraph of its own; nothing when none is.
+pub(super) fn left_out_paragraph(left_out: &[LeftOut]) -> String {
+    if left_out.is_empty() {
+        return String::new();
+    }
+    format!("\n\n{}", left_out_line(left_out))
 }
 
 /// The project's name, and the folder's path in it when it is not the usual `target`.
@@ -247,7 +258,9 @@ mod tests {
             ..idle_clean("two", 0)
         };
 
-        assert_eq!(bytes_of_each(&[one, two]), [6_000_000_000, 2_000_000_000]);
+        let both = [one, two];
+        let bytes = bytes_of_each(both.iter().map(|clean| &clean.prepared));
+        assert_eq!(bytes, [6_000_000_000, 2_000_000_000]);
     }
 
     #[test]
@@ -299,7 +312,7 @@ mod tests {
     #[test]
     fn nothing_to_clean_says_why_when_something_stopped_it() {
         assert_eq!(
-            nothing_idle_to_clean(&[]).1,
+            nothing_to_clean(&[]).1,
             "Every build folder is in use, recently active or already clean."
         );
         let left_out = [LeftOut {
@@ -310,20 +323,18 @@ mod tests {
             })),
         }];
         assert_eq!(
-            nothing_idle_to_clean(&left_out).1,
+            nothing_to_clean(&left_out).1,
             "Left out for now: busy (a build is using it)."
         );
     }
 
     #[test]
     fn a_search_that_ended_with_no_word_says_so_and_does_not_claim_nothing_is_idle() {
-        let (title, detail) = nothing_to_ask(None).unwrap();
+        let (title, detail) = search_stopped();
         assert_eq!(title, "Couldn't work out what to clean");
         assert_eq!(
             detail,
             "The search stopped before it finished. Nothing was deleted."
         );
-        let (title, _) = nothing_to_ask(Some(&IdleCleans::default())).unwrap();
-        assert_eq!(title, "Nothing to clean right now");
     }
 }

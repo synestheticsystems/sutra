@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use super::when_idle::IdleTimes;
-use super::{CleanOutcome, Cleaning, OFFER_QUIET_AT_LEAST, Report, Stage, auto, overlap, words};
+use super::{CleanOutcome, Cleaning, OFFER, Report, Stage, auto, overlap, words};
 use crate::dashboard::state::Alert;
 use crate::map::clean::{self, Prepared, Progress};
 use crate::map::{GroupKey, Project, Snapshot};
@@ -22,6 +22,11 @@ pub(super) enum By {
     /// The user said yes to every idle folder at once, so this one goes only if the project at
     /// `project` is still idle when its turn comes. Its end is told as `User`.
     UserForIdle { project: PathBuf },
+    /// The user said yes to the folders kept only by sessions at rest, so this one goes only if
+    /// the sessions on the project at `project` are still at rest and nothing else has started
+    /// there when its turn comes. Its end is told as `User`. Only that question's yes makes one:
+    /// a session keeps its folders from every clean Sutra chooses by itself.
+    UserForAtRest { project: PathBuf },
     /// Sutra chose it to keep free space, so it goes only if room is still short on the volume
     /// holding the home folder, every folder it deletes is on that volume and clear of those a
     /// question waiting for the user asks about, and the project at `project` is still idle when
@@ -97,7 +102,10 @@ impl Cleaning {
         };
         match &waiting.by {
             By::User => true,
-            By::UserForIdle { project } => still_idle(project, &|_| Some(OFFER_QUIET_AT_LEAST)),
+            By::UserForIdle { project } => still_idle(project, &|_| Some(OFFER.quiet)),
+            By::UserForAtRest { project } => map.is_some_and(|map| {
+                clean::is_still_at_rest(&waiting.prepared, project, map, now, OFFER)
+            }),
             By::Sutra { project } => {
                 if !self.keeping_free.is_short_of_room(home) {
                     return false;
@@ -264,7 +272,7 @@ impl Cleaning {
         let failure = match outcome {
             CleanOutcome::Cleaned(cleaned) => {
                 match &running.by {
-                    By::User | By::UserForIdle { .. } => {}
+                    By::User | By::UserForIdle { .. } | By::UserForAtRest { .. } => {}
                     By::Sutra { .. } => {
                         let floor = self.keeping_free.floor.unwrap_or_default();
                         self.banners
@@ -294,7 +302,9 @@ impl Cleaning {
             home,
         );
         match running.by {
-            By::User | By::UserForIdle { .. } => self.stopped.push(stopped),
+            By::User | By::UserForIdle { .. } | By::UserForAtRest { .. } => {
+                self.stopped.push(stopped);
+            }
             By::Sutra { .. } => {
                 self.banners.push(stopped);
                 self.keeping_free.pass_over(target.to_path_buf(), now);
@@ -316,11 +326,11 @@ mod tests {
     use super::*;
     use crate::dashboard::cleaning::CleanState;
     use crate::dashboard::cleaning::tests::{
-        ALWAYS_SHORT, cleaning, deleting_two, idle_clean, next_report, prepared_at, prepared_clean,
-        prepared_of, reporting, target,
+        ALWAYS_SHORT, cleaning, deleting_two, idle_clean, next_report, offered, prepared_at,
+        prepared_clean, prepared_of, reporting, target,
     };
     use crate::map::Project;
-    use crate::map::clean::{CleanError, Cleaned, Freed, IdleCleans};
+    use crate::map::clean::{CleanError, Cleaned, Freed};
     use crate::map::test_support::{at, cargo_target, project_at, snapshot_of};
 
     #[test]
@@ -497,6 +507,47 @@ mod tests {
     }
 
     #[test]
+    fn a_clean_of_folders_kept_by_sessions_at_rest_goes_only_while_they_still_rest() {
+        let now = at(100 * 86_400);
+        let since = |secs| crate::map::AgentSession {
+            since: Some(now - Duration::from_secs(secs)),
+            ..crate::map::test_support::agent_session("s1", crate::map::AgentStatus::Idle)
+        };
+        let app = |session| {
+            snapshot_of(vec![Project {
+                agents: vec![session],
+                artifacts: vec![target(Some(at(0)))],
+                ..project_at("/code/app")
+            }])
+        };
+        let may_start = |by: By, map: &Snapshot| {
+            let waiting = Waiting {
+                clicked: PathBuf::from("/code/app/target"),
+                prepared: prepared_clean("/code/app/target"),
+                by,
+            };
+            cleaning().may_start(&waiting, Some(map), now, Path::new("/Users/dev"))
+        };
+        let for_at_rest = || By::UserForAtRest {
+            project: PathBuf::from("/code/app"),
+        };
+        let for_idle = || By::UserForIdle {
+            project: PathBuf::from("/code/app"),
+        };
+
+        let rested_two_days = app(since(2 * 86_400));
+        assert!(may_start(for_at_rest(), &rested_two_days));
+        assert!(
+            !may_start(for_idle(), &rested_two_days),
+            "a yes to the idle folders never takes a session's"
+        );
+        assert!(
+            !may_start(for_at_rest(), &app(since(60))),
+            "its session took a turn since"
+        );
+    }
+
+    #[test]
     fn a_clean_that_may_not_go_shows_its_size_again_and_the_next_one_starts() {
         let fixture = crate::map::test_support::TempDir::new("cleaning-dropped");
         let target = fixture.dir("app/target");
@@ -579,10 +630,7 @@ mod tests {
         let map = snapshot_of(vec![project_at(project.clone())]);
         let mut cleaning = cleaning();
         cleaning.set_keep_free_floor(ALWAYS_SHORT);
-        cleaning.asking_idle(Some(IdleCleans {
-            cleans: vec![idle_clean(&[&asked])],
-            left_out: Vec::new(),
-        }));
+        cleaning.asking_idle(offered(vec![idle_clean(&[&asked])], Vec::new()));
         let may_start = |cleaning: &mut Cleaning, build_dir: &Path| {
             let waiting = Waiting {
                 clicked: target.clone(),

@@ -21,7 +21,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
-use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads, WhenIdle};
+use super::cleaning::{self, AtRestOffer, Cleaning, IdleOffer, Report, Threads, WhenIdle};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
 use super::disk_space::{Volume, VolumeUnread};
 use super::listing::{self, Arrangement, Listing};
@@ -263,6 +263,7 @@ impl State {
         };
         let clean = toolbar::clean_control(
             self.idle_offer(now),
+            self.at_rest_offer(now),
             self.can_tell_what_is_idle(),
             self.cleaning.is_preparing_idle(),
             self.cleaning.keep_free_floor(),
@@ -489,6 +490,10 @@ impl State {
                 let cleans = yes.then_some(cleans);
                 self.cleaning.answered_idle(cleans, map, now, &self.home);
             }
+            Proposal::CleanAtRest(cleans) => {
+                let cleans = yes.then_some(cleans);
+                self.cleaning.answered_at_rest(cleans, map, now, &self.home);
+            }
             Proposal::KeepFree(floor) => {
                 if yes {
                     self.keep_free_from_now(Some(floor));
@@ -584,6 +589,12 @@ impl State {
     fn idle_offer(&self, now: SystemTime) -> Option<IdleOffer> {
         self.live_map()
             .and_then(|map| self.cleaning.idle_offer(map, now))
+    }
+
+    /// What the toolbar asks about apart at `now`, kept only by sessions at rest, if anything.
+    fn at_rest_offer(&self, now: SystemTime) -> Option<AtRestOffer> {
+        self.live_map()
+            .and_then(|map| self.cleaning.at_rest_offer(map, now))
     }
 
     /// Whether the map can say what is idle.

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::dashboard::Dialog;
-use crate::map::clean::{IdleClean, Prepared};
+use crate::map::clean::{AtRestClean, IdleClean, Prepared};
 
 /// A question: what it asks, in a title and the detail under it, and the label of the button that
 /// says yes.
@@ -29,6 +29,8 @@ pub(in crate::dashboard) enum Proposal {
     },
     /// Clean each of `cleans`, the idle build folders.
     CleanIdle(Vec<IdleClean>),
+    /// Clean each of `cleans`, the build folders kept only by sessions at rest.
+    CleanAtRest(Vec<AtRestClean>),
     /// Keep this many bytes free from now on, cleaning by itself.
     KeepFree(u64),
 }
@@ -38,7 +40,7 @@ impl Proposal {
     /// cleans follow from it later, each told in a banner.
     fn deletes(&self) -> bool {
         match self {
-            Proposal::Clean { .. } | Proposal::CleanIdle(_) => true,
+            Proposal::Clean { .. } | Proposal::CleanIdle(_) | Proposal::CleanAtRest(_) => true,
             Proposal::KeepFree(_) => false,
         }
     }
@@ -185,6 +187,7 @@ mod tests {
             shown.destructive
         };
         assert!(asked(&mut dialogs, Proposal::CleanIdle(Vec::new())));
+        assert!(asked(&mut dialogs, Proposal::CleanAtRest(Vec::new())));
         assert!(!asked(&mut dialogs, Proposal::KeepFree(1)));
     }
 

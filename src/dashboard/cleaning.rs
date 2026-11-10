@@ -21,17 +21,23 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::state::{Alert, Question};
-use crate::map::clean;
+use crate::map::clean::{self, OfferTimes};
 use crate::map::{ArtifactDir, Project, Snapshot};
 use asking::{Clicked, OpenQuestions};
 use auto::KeepingFree;
 use queue::{By, Running, Waiting};
 use when_idle::IdleLooks;
 
-/// How long a project must have been quiet for the toolbar to offer its build folders. A folder is
-/// rebuilt when its project is next used, and on Daniel's Mac (2026-11-04) three days separates what
-/// has been left from what is in use: 282 GB idle at three days, 532 GB at one, 4 GB at seven.
-const OFFER_QUIET_AT_LEAST: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+/// How long a project must have been left for the toolbar to offer its build folders. A folder is
+/// rebuilt when its project is next used, and on Daniel's Mac (2026-11-04) three days of quiet
+/// separates what has been left from what is in use: 282 GB idle at three days, 532 GB at one, 4 GB
+/// at seven. A project whose sessions alone keep it is asked about apart once they and it have been
+/// at rest for a day, as Daniel agreed (2026-11-10): sessions keep their folders from everything
+/// automatic, and the toolbar's second question is how that disk comes back.
+const OFFER: OfferTimes = OfferTimes {
+    quiet: Duration::from_secs(3 * 24 * 60 * 60),
+    at_rest: Duration::from_secs(24 * 60 * 60),
+};
 
 /// The build folders being cleaned, or cleaned and not yet measured again.
 #[derive(Debug)]
@@ -103,6 +109,14 @@ pub(super) struct IdleOffer {
     pub(super) bytes: u64,
 }
 
+/// What the toolbar asks about apart, the folders kept only by sessions at rest: how many, and how
+/// much they hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AtRestOffer {
+    pub(super) folders: usize,
+    pub(super) bytes: u64,
+}
+
 impl Cleaning {
     /// Cleaning that starts its threads with `threads`, keeping `keep_free` free as the user chose
     /// in an earlier run.
@@ -137,7 +151,7 @@ impl Cleaning {
 
     /// What is on offer for the toolbar's icon, at `now`: `None` when nothing is.
     pub(super) fn idle_offer(&self, map: &Snapshot, now: SystemTime) -> Option<IdleOffer> {
-        let idle = clean::idle_folders(map, now, OFFER_QUIET_AT_LEAST);
+        let idle = clean::idle_folders(map, now, OFFER.quiet);
         let idle = idle
             .iter()
             .filter(|folder| self.state_of(folder.dir).is_none());
@@ -147,6 +161,26 @@ impl Cleaning {
                 bytes: 0,
             },
             |offer, folder| IdleOffer {
+                folders: offer.folders + 1,
+                bytes: offer.bytes + folder.bytes,
+            },
+        );
+        (offer.folders > 0).then_some(offer)
+    }
+
+    /// What the toolbar asks about apart at `now`, the folders kept only by sessions at rest:
+    /// `None` when none is.
+    pub(super) fn at_rest_offer(&self, map: &Snapshot, now: SystemTime) -> Option<AtRestOffer> {
+        let at_rest = clean::at_rest_folders(map, now, OFFER.at_rest);
+        let at_rest = at_rest
+            .iter()
+            .filter(|folder| self.state_of(folder.dir).is_none());
+        let offer = at_rest.fold(
+            AtRestOffer {
+                folders: 0,
+                bytes: 0,
+            },
+            |offer, folder| AtRestOffer {
                 folders: offer.folders + 1,
                 bytes: offer.bytes + folder.bytes,
             },
@@ -204,7 +238,7 @@ impl Cleaning {
                     self.asking(folder, prepared, map, now, home);
                 }
             }
-            Report::IdlePrepared(found) => self.asking_idle(found),
+            Report::OfferPrepared(found) => self.asking_idle(found),
             Report::UnaskedPrepared {
                 clicked,
                 project,
@@ -394,10 +428,7 @@ pub(super) mod tests {
     fn a_folder_being_deleted_shows_how_far_the_delete_has_come_while_a_question_asks_about_it() {
         let mut cleaning = deleting_two();
         let shared = Path::new("/cache/app");
-        cleaning.asking_idle(Some(clean::IdleCleans {
-            cleans: vec![idle_clean(&[shared])],
-            left_out: Vec::new(),
-        }));
+        cleaning.asking_idle(offered(vec![idle_clean(&[shared])], Vec::new()));
         let dir = cargo_target(shared, crate::map::test_support::measured(5_000));
         assert_eq!(
             cleaning.state_of(&dir),
@@ -517,9 +548,47 @@ pub(super) mod tests {
             clicked: clicked.to_path_buf(),
             project_name: project_at(project).name,
             project_path: project.to_path_buf(),
-            quiet_at_least: OFFER_QUIET_AT_LEAST,
+            quiet_at_least: OFFER.quiet,
             prepared: prepared_of(folders),
         }
+    }
+
+    /// The clean of `folders` as the toolbar's search finds one kept only by a session at rest for
+    /// two days, started from the first of them in the project holding it.
+    pub(in crate::dashboard) fn at_rest_clean(folders: &[&Path]) -> clean::AtRestClean {
+        let clean::IdleClean {
+            clicked,
+            project_name,
+            project_path,
+            prepared,
+            ..
+        } = idle_clean(folders);
+        clean::AtRestClean {
+            clicked,
+            project_name,
+            project_path,
+            sessions: 1,
+            at_rest_for: 2 * OFFER.at_rest,
+            prepared,
+        }
+    }
+
+    /// What the toolbar's search finds: the cleans of `idle` folders, and apart those of folders
+    /// kept only by sessions at rest, `at_rest`, with none left out.
+    pub(in crate::dashboard) fn offered(
+        idle: Vec<clean::IdleClean>,
+        at_rest: Vec<clean::AtRestClean>,
+    ) -> Option<clean::Offered> {
+        Some(clean::Offered {
+            idle: clean::IdleCleans {
+                cleans: idle,
+                left_out: Vec::new(),
+            },
+            at_rest: clean::AtRestCleans {
+                cleans: at_rest,
+                left_out: Vec::new(),
+            },
+        })
     }
 
     pub(super) fn prepared_clean(folder: &str) -> Prepared {
@@ -560,5 +629,44 @@ pub(super) mod tests {
             })
         );
         assert_eq!(cleaning.idle_offer(&map, at(1_000)), None);
+    }
+
+    #[test]
+    fn the_toolbar_asks_apart_about_folders_kept_by_sessions_at_rest_until_one_is_queued() {
+        let day = OFFER.at_rest;
+        let now = at(100 * day.as_secs());
+        let dir = cargo_target(
+            "/code/app/target",
+            crate::map::test_support::measured(1 << 30),
+        );
+        let resting = crate::map::AgentSession {
+            since: Some(now - 2 * day),
+            ..crate::map::test_support::agent_session("s1", crate::map::AgentStatus::Idle)
+        };
+        let map = snapshot_of(vec![Project {
+            agents: vec![resting],
+            artifacts: vec![dir.clone()],
+            ..project_at("/code/app")
+        }]);
+        let mut cleaning = cleaning();
+        assert_eq!(
+            cleaning.idle_offer(&map, now),
+            None,
+            "its session keeps it from the idle ones"
+        );
+        assert_eq!(
+            cleaning.at_rest_offer(&map, now),
+            Some(AtRestOffer {
+                folders: 1,
+                bytes: 1 << 30
+            })
+        );
+
+        cleaning.queue(
+            dir.path.clone(),
+            prepared_clean("/code/app/target"),
+            By::User,
+        );
+        assert_eq!(cleaning.at_rest_offer(&map, now), None);
     }
 }

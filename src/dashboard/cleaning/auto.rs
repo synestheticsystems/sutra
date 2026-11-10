@@ -238,13 +238,14 @@ impl Cleaning {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dashboard::cleaning::tests::{ALWAYS_SHORT, cleaning, idle_clean, prepared_at};
-    use crate::map::AgentStatus;
+    use crate::dashboard::cleaning::tests::{
+        ALWAYS_SHORT, cleaning, idle_clean, offered, prepared_at,
+    };
     use crate::map::Project;
-    use crate::map::clean::IdleCleans;
     use crate::map::test_support::{
         TempDir, agent_session, at, cargo_target, measured, project_at, snapshot_of,
     };
+    use crate::map::{AgentSession, AgentStatus};
 
     const DAY: u64 = 86_400;
     const LARGE: u64 = 100 * clean::WORTH_CLEANING_BYTES;
@@ -372,10 +373,7 @@ mod tests {
         reaching.sharing.projects = vec!["fwd".to_string()];
         cleaning.asking(&card, Some(Ok(reaching)), None, now(), home);
         let other = fixture.dir("other/target");
-        cleaning.asking_idle(Some(IdleCleans {
-            cleans: vec![idle_clean(&[&other])],
-            left_out: Vec::new(),
-        }));
+        cleaning.asking_idle(offered(vec![idle_clean(&[&other])], Vec::new()));
         assert_eq!(cleaning.take_alerts().len(), 2, "both questions are open");
 
         cleaning.keep_free_space(&map, Instant::now(), now(), home);
@@ -467,6 +465,39 @@ mod tests {
         assert!(agent_started.keeping_free.has_passed_over(&target));
 
         assert!(!start(ALWAYS_SHORT, &idle_map).running.is_empty());
+    }
+
+    #[test]
+    fn a_session_at_rest_however_long_keeps_its_folders_from_keeping_free_space() {
+        let fixture = TempDir::new("auto-at-rest");
+        let (target, project, idle_map) = idle_project_in(&fixture);
+        // At rest for a month, in a project quiet as long, which the toolbar asks about apart.
+        let month_ago = now() - Duration::from_secs(30 * DAY);
+        let resting = snapshot_of(vec![Project {
+            agents: vec![AgentSession {
+                since: Some(month_ago),
+                ..agent_session("s1", AgentStatus::Idle)
+            }],
+            last_activity: Some(month_ago),
+            ..idle_map.projects[0].clone()
+        }]);
+        assert_eq!(
+            clean::at_rest_folders(&resting, now(), Duration::from_secs(DAY)).len(),
+            1
+        );
+
+        assert!(
+            next_folder(&resting, now(), 100, 99, |_| true).is_none(),
+            "never picked"
+        );
+        let mut cleaning = keeping(ALWAYS_SHORT);
+        let by = By::Sutra { project };
+        cleaning.queue(target.clone(), prepared_at(&target), by);
+        cleaning.start_next(Some(&resting), now(), fixture.root());
+        assert!(
+            cleaning.running.is_empty(),
+            "nor cleaned at its turn, should one have been picked before the session came"
+        );
     }
 
     #[test]

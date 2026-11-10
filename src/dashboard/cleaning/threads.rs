@@ -10,7 +10,7 @@ use std::thread;
 
 use super::when_idle::IdleTimes;
 use crate::dashboard::live::Event;
-use crate::map::clean::{CleanError, Cleaned, IdleCleans, PrepareError, Prepared};
+use crate::map::clean::{CleanError, Cleaned, IdleCleans, Offered, PrepareError, Prepared};
 
 /// How a clean ended, as its thread reports it.
 #[derive(Debug, Clone)]
@@ -41,8 +41,9 @@ pub(in crate::dashboard) enum Report {
         clicked: Vec<PathBuf>,
         prepared: Option<Vec<Result<Prepared, PrepareError>>>,
     },
-    /// The cleans of every idle folder.
-    IdlePrepared(Option<IdleCleans>),
+    /// The cleans the toolbar asks about: of every idle folder, and apart from them of those kept
+    /// only by sessions at rest.
+    OfferPrepared(Option<Offered>),
     /// The clean Sutra chose by itself, of `clicked` in the project at `project`.
     UnaskedPrepared {
         clicked: PathBuf,
@@ -108,14 +109,14 @@ mod tests {
         threads
             .run(
                 "sutra-test-panics",
-                || -> IdleCleans { panic!("the work broke") },
-                Report::IdlePrepared,
+                || -> Offered { panic!("the work broke") },
+                Report::OfferPrepared,
             )
             .unwrap();
         let reported = inbox.recv_timeout(Duration::from_secs(30));
         assert!(matches!(
             reported,
-            Ok(Event::Cleaning(Report::IdlePrepared(None)))
+            Ok(Event::Cleaning(Report::OfferPrepared(None)))
         ));
     }
 }

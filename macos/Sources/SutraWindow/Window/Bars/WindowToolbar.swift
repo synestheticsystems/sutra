@@ -32,10 +32,10 @@ struct WindowToolbar: ToolbarContent {
     }
 }
 
-/// The clean of every idle build folder. A click asks the core to clean them, while it offers
-/// anything to clean; the icon fades while it offers nothing, and takes the accent and pulses while
-/// the core works out what a click would clean. A right click sets how much space Sutra keeps free,
-/// offered or not.
+/// The clean of every idle build folder, and apart of those sessions at rest keep. A click asks the
+/// core to clean them, while it offers anything to clean; the icon fades while it offers nothing,
+/// and takes the accent and pulses while the core works out what a click would clean. A right click
+/// sets how much space Sutra keeps free, offered or not.
 private struct CleanButton: View {
     let dashboard: DashboardModel
 

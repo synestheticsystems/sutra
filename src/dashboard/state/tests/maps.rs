@@ -3,24 +3,37 @@
 
 use super::*;
 use crate::map::test_support::{agent_session, cargo_target, measured, snapshot_of};
-use crate::map::{AgentStatus, Source, SourceProblem};
+use crate::map::{AgentSession, AgentStatus, Source, SourceProblem};
 
 #[test]
 fn nothing_is_offered_for_cleaning_once_the_engine_has_stopped_or_a_source_goes_unread() {
-    let map = snapshot_of(vec![Project {
-        artifacts: vec![cargo_target("/code/app/target", measured(1 << 30))],
-        ..project_at("/code/app")
-    }]);
-    let (mut state, _inbox) = dashboard_at(Path::new("/Users/dev"), Path::new("/code"), None);
     let now = now();
+    let at_rest_for_two_days = AgentSession {
+        since: Some(now - Duration::from_secs(2 * 24 * 60 * 60)),
+        ..agent_session("s1", AgentStatus::Idle)
+    };
+    let map = snapshot_of(vec![
+        Project {
+            artifacts: vec![cargo_target("/code/app/target", measured(1 << 30))],
+            ..project_at("/code/app")
+        },
+        Project {
+            agents: vec![at_rest_for_two_days],
+            artifacts: vec![cargo_target("/code/resting/target", measured(1 << 30))],
+            ..project_at("/code/resting")
+        },
+    ]);
+    let (mut state, _inbox) = dashboard_at(Path::new("/Users/dev"), Path::new("/code"), None);
     assert!(!state.can_tell_what_is_idle(), "no map yet");
 
     state.snapshot = Some(Arc::new(map.clone()));
     assert!(state.idle_offer(now).is_some());
+    assert!(state.at_rest_offer(now).is_some());
     assert!(state.can_tell_what_is_idle());
 
     state.engine_stopped = true;
     assert!(state.idle_offer(now).is_none());
+    assert!(state.at_rest_offer(now).is_none());
     assert!(!state.can_tell_what_is_idle());
     assert!(state.live_map().is_none());
 
