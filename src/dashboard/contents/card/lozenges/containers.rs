@@ -101,7 +101,6 @@ fn image_name(container: &Container) -> &str {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::SystemTime;
 
     use super::*;
 
@@ -116,7 +115,7 @@ mod tests {
             compose_folder: None,
             bound: bound.iter().map(PathBuf::from).collect(),
             ports,
-            created: SystemTime::UNIX_EPOCH,
+            started: None,
         }
     }
 

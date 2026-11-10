@@ -1,7 +1,7 @@
 //! The orders the list can take, as the toolbar names them. Every sort lays the list out in groups
 //! (see `group`), and orders both the groups and the rows beside each other under each line: by
 //! their newest work, by name, or by the disk they take. Docker's group stands among the others
-//! by when the newest container on its card was made, by its name, and by the disk Docker takes.
+//! by when the latest container on its card started, by its name, and by the disk Docker takes.
 
 use std::cmp::Reverse;
 use std::path::Path;
@@ -113,11 +113,14 @@ fn activity_rank(group: &Group) -> (Reverse<Option<u64>>, String) {
     )
 }
 
-/// Where the Activity sort stands Docker's group: by the slice in which the newest container on
-/// its card was made, as a group by its newest work.
+/// Where the Activity sort stands Docker's group: by the slice in which the latest container on
+/// its card started, as a group by its newest work.
 fn docker_activity_rank(docker: &Docker) -> (Reverse<Option<u64>>, String) {
-    let made = docker.containers.iter().map(|container| container.created);
-    (Reverse(slice(made.max())), DOCKER.to_lowercase())
+    let started = docker
+        .containers
+        .iter()
+        .filter_map(|container| container.started);
+    (Reverse(slice(started.max())), DOCKER.to_lowercase())
 }
 
 /// Where the Name sort stands `group`: by its name, ignoring case, with Other last.

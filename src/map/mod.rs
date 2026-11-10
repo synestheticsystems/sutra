@@ -37,6 +37,7 @@ mod provenance;
 pub mod scan;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod utc;
 
 use std::collections::BTreeSet;
 use std::io;

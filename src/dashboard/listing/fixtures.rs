@@ -174,7 +174,7 @@ pub(in crate::dashboard) fn docker(containers: &[(&str, u64)], bytes: u64) -> Do
         compose_folder: None,
         bound: Vec::new(),
         ports: Vec::new(),
-        created: now() - Duration::from_secs(minutes_ago * 60),
+        started: Some(now() - Duration::from_secs(minutes_ago * 60)),
     };
     Docker {
         socket: PathBuf::from("/run/docker.sock"),

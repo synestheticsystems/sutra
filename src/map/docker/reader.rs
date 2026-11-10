@@ -204,7 +204,7 @@ impl<H: Host> Watch<H> {
         let listed = http::get(socket, "/containers/json")
             .and_then(|body| engine_api::containers(&body).map_err(|_| GetError::Malformed));
         let containers = match listed {
-            Ok(containers) => containers,
+            Ok(containers) => self.with_starts(socket, containers),
             Err(err) => return self.failed_to_list(socket, &err, now),
         };
         let ids = |containers: &[Container]| -> Vec<String> {
@@ -229,6 +229,29 @@ impl<H: Host> Watch<H> {
         if self.running && (changed || disk_due) {
             self.ask_for_disk(socket, now, at);
         }
+    }
+
+    /// `listed`, each with when it last started, which the list does not say: as the engine said
+    /// when last it listed the container, or else as it says when asked of the container alone,
+    /// once, the first time it lists it. What it would not say then it is not asked again, as it
+    /// would answer alike; and a container that restarts between two looks keeps the start it had.
+    fn with_starts(&self, socket: &Path, listed: Vec<Container>) -> Vec<Container> {
+        let before = self.listed.as_deref().unwrap_or_default();
+        let known = |id: &str| before.iter().find(|container| container.id == id);
+        let started = |id: &str| {
+            let body = http::get(socket, &format!("/containers/{id}/json")).ok()?;
+            engine_api::started(&body).ok().flatten()
+        };
+        listed
+            .into_iter()
+            .map(|container| Container {
+                started: match known(&container.id) {
+                    Some(known) => known.started,
+                    None => started(&container.id),
+                },
+                ..container
+            })
+            .collect()
     }
 
     fn ask_for_disk(&mut self, socket: &Path, now: Instant, at: SystemTime) {
@@ -317,6 +340,7 @@ mod tests {
     use super::*;
     use crate::map::docker::http::tests::{FakeEngine, answer};
     use crate::map::test_support::TempDir;
+    use crate::map::utc;
 
     /// A server whose ports a test sets, `None` once it has ended, connected to for real, as
     /// finding the server of a socket nothing serves fails as on this Mac.
@@ -350,17 +374,26 @@ mod tests {
         ports.iter().map(at).collect()
     }
 
-    /// An engine that lists what `listed` holds, `[]` to begin with, and whose disk use is two
-    /// gigabytes of images, and nothing else.
+    /// An engine that lists what `listed` holds, `[]` to begin with, says that `e99d` started at
+    /// `PG_STARTED`, and whose disk use is two gigabytes of images, and nothing else.
     fn engine(test: &str) -> (FakeEngine, Arc<Mutex<String>>) {
         let listed = Arc::new(Mutex::new("[]".to_string()));
         let shown = Arc::clone(&listed);
         let engine = FakeEngine::serving(test, move |path| match path {
             "/containers/json" => answer("200 OK", &shown.lock().unwrap()),
+            "/containers/e99d/json" => answer("200 OK", &inspected(PG_STARTED)),
             "/system/df" => answer("200 OK", DISK),
             _ => answer("404 Not Found", "{}"),
         });
         (engine, listed)
+    }
+
+    /// When `e99d` started, as the engine dates it.
+    const PG_STARTED: &str = "2026-11-09T22:48:31.95367792Z";
+
+    /// What the engine tells of a container started at `started_at`, asked of it alone.
+    fn inspected(started_at: &str) -> String {
+        format!(r#"{{"Id": "e99d", "State": {{"Running": true, "StartedAt": "{started_at}"}}}}"#)
     }
 
     const DISK: &str = r#"{
@@ -372,6 +405,11 @@ mod tests {
     }"#;
     const ONE_RUNNING: &str = r#"[{"Id": "e99d", "Names": ["/pg"], "Image": "postgres:17",
         "Ports": [{"IP": "127.0.0.1", "PrivatePort": 5432, "PublicPort": 36684, "Type": "tcp"}]}]"#;
+    const TWO_RUNNING: &str = r#"[
+        {"Id": "e99d", "Names": ["/pg"], "Image": "postgres:17",
+         "Ports": [{"IP": "127.0.0.1", "PrivatePort": 5432, "PublicPort": 36684, "Type": "tcp"}]},
+        {"Id": "c4c4", "Names": ["/cache"], "Image": "redis:7"}
+    ]"#;
 
     fn requests(engine: &FakeEngine) -> Vec<String> {
         engine.requests.lock().unwrap().clone()
@@ -385,6 +423,7 @@ mod tests {
     }
 
     const LIST: &str = "GET /containers/json HTTP/1.1";
+    const INSPECT_PG: &str = "GET /containers/e99d/json HTTP/1.1";
     const DISK_USE: &str = "GET /system/df HTTP/1.1";
 
     #[test]
@@ -406,17 +445,57 @@ mod tests {
         assert_eq!(disk.map(|disk| disk.bytes()), Some(2_000_000_000));
         assert_eq!(
             requests(&engine),
-            [LIST, DISK_USE],
+            [LIST, INSPECT_PG, DISK_USE],
             "nothing sent to find the server"
         );
         watch.look(start + LOOK_EVERY, SystemTime::now());
         assert_eq!(
             requests(&engine),
-            [LIST, DISK_USE, LIST],
-            "the disk use is not due again"
+            [LIST, INSPECT_PG, DISK_USE, LIST],
+            "the disk use is not due again, nor pg's start"
         );
         watch.look(start + DISK_EVERY, SystemTime::now());
-        assert_eq!(requests(&engine), [LIST, DISK_USE, LIST, LIST, DISK_USE]);
+        assert_eq!(
+            requests(&engine),
+            [LIST, INSPECT_PG, DISK_USE, LIST, LIST, DISK_USE]
+        );
+    }
+
+    #[test]
+    fn the_engine_is_asked_when_a_container_started_once_the_first_time_it_lists_it() {
+        let engine = FakeEngine::serving("docker-reader-started", |path| match path {
+            "/containers/json" => answer("200 OK", TWO_RUNNING),
+            "/containers/e99d/json" => answer("200 OK", &inspected(PG_STARTED)),
+            "/system/df" => answer("200 OK", DISK),
+            _ => answer("404 Not Found", r#"{"message": "No such container"}"#),
+        });
+        let mut watch = Watch::new(
+            vec![engine.socket.clone()],
+            FakeHost::listening_on(&[36684]),
+        );
+        let start = Instant::now();
+
+        watch.look(start, SystemTime::now());
+        let seen = watch.look(start + LOOK_EVERY, SystemTime::now());
+
+        let Reading::Said { containers, .. } = &seen.reading else {
+            panic!("Docker said nothing: {seen:?}");
+        };
+        let started: Vec<(&str, Option<SystemTime>)> = containers
+            .iter()
+            .map(|container| (container.name.as_str(), container.started))
+            .collect();
+        assert_eq!(
+            started,
+            [("cache", None), ("pg", utc::parse(PG_STARTED))],
+            "the engine would not say when cache started"
+        );
+        let inspect_cache = "GET /containers/c4c4/json HTTP/1.1";
+        assert_eq!(
+            requests(&engine),
+            [LIST, inspect_cache, INSPECT_PG, DISK_USE, LIST],
+            "neither asked again, as the engine would answer alike"
+        );
     }
 
     #[test]
@@ -442,7 +521,7 @@ mod tests {
         let seen = watch.look(start + LOOK_EVERY * 4, SystemTime::now());
 
         assert_eq!(containers_of(&seen), ["pg"], "a container published a port");
-        assert_eq!(requests(&engine), [LIST, LIST, DISK_USE]);
+        assert_eq!(requests(&engine), [LIST, LIST, INSPECT_PG, DISK_USE]);
     }
 
     #[test]

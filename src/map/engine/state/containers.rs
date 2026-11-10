@@ -93,7 +93,6 @@ fn projects_for<'a>(
 mod tests {
     use std::io;
     use std::path::Path;
-    use std::time::SystemTime;
 
     use super::*;
     use crate::map::ScanOptions;
@@ -128,7 +127,7 @@ mod tests {
             compose_folder: compose.map(PathBuf::from),
             bound: bound.iter().map(PathBuf::from).collect(),
             ports: Vec::new(),
-            created: SystemTime::UNIX_EPOCH,
+            started: None,
         }
     }
 

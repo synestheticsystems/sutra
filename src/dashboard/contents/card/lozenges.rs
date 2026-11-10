@@ -136,7 +136,6 @@ mod tests {
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::path::{Path, PathBuf};
-    use std::time::SystemTime;
 
     use super::*;
     use crate::dashboard::cleaning::tests::cleaning;
@@ -184,7 +183,7 @@ mod tests {
             compose_folder: Some(PathBuf::from("/code/app")),
             bound: Vec::new(),
             ports: vec![published(24678), published(55432)],
-            created: SystemTime::UNIX_EPOCH,
+            started: None,
         };
         let app = Project {
             environment: Some(Environment {

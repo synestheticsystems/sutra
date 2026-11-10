@@ -43,8 +43,9 @@ pub struct Container {
     pub bound: Vec<PathBuf>,
     /// The ports it publishes on this Mac, by port.
     pub ports: Vec<PublishedPort>,
-    /// When it was made.
-    pub created: SystemTime,
+    /// When it last started, as the engine said when first asked of it alone; `None` when it
+    /// would not say. One made weeks ago may have started again today.
+    pub started: Option<SystemTime>,
 }
 
 /// A port of this Mac that Docker forwards to a container's port.
@@ -203,7 +204,7 @@ mod tests {
                 PathBuf::from("/Users/dev/code/site/public"),
             ],
             ports: Vec::new(),
-            created: SystemTime::UNIX_EPOCH,
+            started: None,
         };
         assert_eq!(
             container.folder_in(Path::new("/Users/dev/code/app")),

@@ -30,7 +30,7 @@ pub struct DockerCard {
     pub name: String,
     /// What the card shows.
     pub name_tooltip: String,
-    /// How long ago the newest container on the card was made, as `8d` reads.
+    /// How long ago the latest container on the card started, as `8d` reads.
     pub age: Option<String>,
     /// The containers running for no project, a lozenge for each port one publishes, by name.
     pub lozenges: Vec<Lozenge>,
@@ -81,7 +81,7 @@ pub(super) fn card(docker: &Docker, ctx: &CardContext) -> DockerCard {
     let newest = docker
         .containers
         .iter()
-        .map(|container| container.created)
+        .filter_map(|container| container.started)
         .max();
     DockerCard {
         name: DOCKER.to_string(),
@@ -246,7 +246,7 @@ mod tests {
                 addresses: BTreeSet::from(["127.0.0.1".parse().unwrap()]),
                 udp: false,
             }],
-            created: now() - Duration::from_secs(9 * 24 * 60 * 60),
+            started: Some(now() - Duration::from_secs(9 * 24 * 60 * 60)),
         };
         let docker = Docker {
             socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),
@@ -285,7 +285,7 @@ mod tests {
             compose_folder: None,
             bound: Vec::new(),
             ports: Vec::new(),
-            created: now(),
+            started: Some(now()),
         };
         let docker = Docker {
             socket: PathBuf::from("/Users/dev/.docker/run/docker.sock"),

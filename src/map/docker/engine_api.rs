@@ -1,5 +1,6 @@
 //! What the engine's API answers, as the map keeps it: the containers `/containers/json` lists,
-//! and the disk use `/system/df` gives. Only the fields read are named; the engine sends many more.
+//! when one of them started, as `/containers/{id}/json` tells of it alone, and the disk use
+//! `/system/df` gives. Only the fields read are named; the engine sends many more.
 //!
 //! The engine has answered `/system/df` in two shapes. Since API 1.52 (Docker 29) it sums up each
 //! kind of store itself (`ImageUsage` and the rest), as `docker system df` shows them, and from
@@ -10,11 +11,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
 use super::{Container, DockerDisk, PublishedPort, Store};
+use crate::map::utc;
 
 /// The label compose gives each container it makes, naming the folder `docker compose` ran in.
 const COMPOSE_WORKING_DIR: &str = "com.docker.compose.project.working_dir";
@@ -39,8 +41,6 @@ struct ListedContainer {
     names: Vec<String>,
     #[serde(default)]
     image: String,
-    #[serde(default)]
-    created: u64,
     /// `null` for a container that publishes none, as for one that exposes none.
     #[serde(default)]
     ports: Option<Vec<ListedPort>>,
@@ -96,9 +96,30 @@ impl From<ListedContainer> for Container {
             compose_folder,
             bound: bound.into_iter().collect(),
             ports: published(listed.ports.unwrap_or_default()),
-            created: UNIX_EPOCH + Duration::from_secs(listed.created),
+            // The list says when a container was made, not when it last started.
+            started: None,
         }
     }
+}
+
+/// When the container `body` tells of, an answer to `/containers/{id}/json`, last started; `None`
+/// when the engine names no moment of its own form, as for one that never started.
+pub(super) fn started(body: &[u8]) -> serde_json::Result<Option<SystemTime>> {
+    let inspected: InspectedContainer = serde_json::from_slice(body)?;
+    Ok(utc::parse(&inspected.state.started_at))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct InspectedContainer {
+    state: InspectedState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct InspectedState {
+    /// As Go writes a moment in UTC: `2026-10-29T23:34:41.97809393Z`.
+    started_at: String,
 }
 
 /// The folder of this Mac a bind mount's `source` names.
@@ -346,6 +367,7 @@ fn bytes(size: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::UNIX_EPOCH;
 
     use super::*;
 
@@ -427,9 +449,29 @@ mod tests {
         assert!(web.ports.is_empty());
         assert_eq!(database.image, "gcr.io/retailops-1/testdb:standard-local");
         assert_eq!(
-            database.created,
-            UNIX_EPOCH + Duration::from_secs(1_791_843_273)
+            database.started, None,
+            "the list says when it was made alone"
         );
+    }
+
+    #[test]
+    fn a_container_inspected_alone_says_when_it_last_started_and_one_that_never_did_says_nothing() {
+        let inspected = |started_at: &str| {
+            let body = format!(
+                r#"{{"Id": "db01", "Created": "2026-10-12T22:14:33.597837507Z",
+                    "State": {{"Status": "running", "Running": true,
+                               "StartedAt": "{started_at}",
+                               "FinishedAt": "0001-01-01T00:00:00Z"}}}}"#
+            );
+            started(body.as_bytes()).unwrap()
+        };
+        assert_eq!(
+            inspected("2026-11-09T22:53:36.426100545Z"),
+            utc::parse("2026-11-09T22:53:36.426100545Z"),
+            "made a month before, started again today"
+        );
+        assert_eq!(inspected("0001-01-01T00:00:00Z"), None);
+        assert!(started(br#"{"message": "No such container: db01"}"#).is_err());
     }
 
     #[test]

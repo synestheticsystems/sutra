@@ -15,11 +15,14 @@ mod acted_in;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+#[cfg(test)]
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde::Deserialize;
 
 use self::acted_in::{ActedIn, ToolInput};
+use crate::map::utc;
 
 /// How much of a transcript's end is read. The newest entry that tells of a subagent's turn began
 /// within the last 80 KB of each of 2,200 transcripts, and the newest reply of 305 of 313 session
@@ -231,7 +234,7 @@ fn turn_entry(line: &[u8]) -> Option<Tail> {
     let (model, acted_in) = (entry.model(), entry.acted_in());
     Some(Tail {
         mid_turn: entry.mid_turn()?,
-        written: entry.timestamp.as_deref().and_then(parse_timestamp),
+        written: entry.timestamp.as_deref().and_then(utc::parse),
         cwd: entry.cwd,
         model,
         acted_in,
@@ -366,66 +369,12 @@ impl Block {
     }
 }
 
-/// The moment `text` names in the form JavaScript's `toISOString` writes, which is how Claude Code
-/// dates each entry: `2026-11-05T19:00:15.325Z`, in UTC. `None` for any other form.
-fn parse_timestamp(text: &str) -> Option<SystemTime> {
-    let bytes = text.as_bytes();
-    let separators = [
-        (4, b'-'),
-        (7, b'-'),
-        (10, b'T'),
-        (13, b':'),
-        (16, b':'),
-        (19, b'.'),
-        (23, b'Z'),
-    ];
-    if bytes.len() != 24 || separators.iter().any(|&(at, byte)| bytes[at] != byte) {
-        return None;
-    }
-    let number = |from: usize, to: usize| {
-        let digits = &bytes[from..to];
-        digits.iter().all(u8::is_ascii_digit).then(|| {
-            digits
-                .iter()
-                .fold(0, |number, digit| number * 10 + u64::from(digit - b'0'))
-        })
-    };
-    let (year, month, day) = (number(0, 4)?, number(5, 7)?, number(8, 10)?);
-    let (hour, minute, second) = (number(11, 13)?, number(14, 16)?, number(17, 19)?);
-    let valid = (1..=12).contains(&month)
-        && (1..=31).contains(&day)
-        && hour < 24
-        && minute < 60
-        && second < 60;
-    if !valid {
-        return None;
-    }
-    let days = days_since_epoch(year, month, day)?;
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    UNIX_EPOCH.checked_add(Duration::from_secs(seconds) + Duration::from_millis(number(20, 23)?))
-}
-
-/// The days from 1970-01-01 to a date of the Gregorian calendar, or `None` for a date before it.
-/// This is Howard Hinnant's `days_from_civil`, which counts each year from March so that a leap
-/// day ends it.
-fn days_since_epoch(year: u64, month: u64, day: u64) -> Option<u64> {
-    let year = if month <= 2 {
-        year.checked_sub(1)?
-    } else {
-        year
-    };
-    let (era, year_of_era) = (year / 400, year % 400);
-    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    (era * 146_097 + day_of_era).checked_sub(719_468)
-}
-
 /// `at` as Claude Code dates an entry.
 #[cfg(test)]
 pub(super) fn timestamp(at: SystemTime) -> String {
     let ms = at.duration_since(UNIX_EPOCH).unwrap().as_millis();
     let (days, ms_of_day) = (ms / 86_400_000, ms % 86_400_000);
-    // Howard Hinnant's `civil_from_days`, the inverse of `days_since_epoch`.
+    // Howard Hinnant's `civil_from_days`, the inverse of the `days_from_civil` `utc` counts by.
     let shifted = days + 719_468;
     let (era, day_of_era) = (shifted / 146_097, shifted % 146_097);
     let year_of_era =
@@ -1009,26 +958,5 @@ mod tests {
         let written = UNIX_EPOCH + Duration::from_millis(1_793_905_215_325);
         assert_eq!(timestamp(written), "2026-11-05T19:00:15.325Z");
         assert_eq!(tail(&[request(written)]).written, Some(written));
-    }
-
-    #[test]
-    fn timestamps_in_the_form_javascript_writes_parse_to_their_moment() {
-        let ms = |ms: u64| Some(UNIX_EPOCH + Duration::from_millis(ms));
-        let cases = [
-            ("2026-11-05T19:00:15.325Z", ms(1_793_905_215_325)),
-            ("2024-02-29T23:59:59.999Z", ms(1_709_251_199_999)),
-            ("2000-03-01T00:00:00.000Z", ms(951_868_800_000)),
-            ("1970-01-01T00:00:00.000Z", ms(0)),
-            ("2026-11-05T19:00:15Z", None),
-            ("2026-11-05T19:00:15.325+01:00", None),
-            ("2026-13-05T19:00:15.325Z", None),
-            ("2026-11-05T24:00:15.325Z", None),
-            ("2026-11-05T19:00:+5.325Z", None),
-            ("1969-12-31T23:59:59.999Z", None),
-            ("yesterday", None),
-        ];
-        for (text, moment) in cases {
-            assert_eq!(parse_timestamp(text), moment, "{text}");
-        }
     }
 }

@@ -375,7 +375,7 @@ pub(crate) fn container_for(folder: impl Into<PathBuf>, name: &str) -> Container
         compose_folder: None,
         bound: vec![folder.into()],
         ports: Vec::new(),
-        created: UNIX_EPOCH,
+        started: None,
     }
 }
 
