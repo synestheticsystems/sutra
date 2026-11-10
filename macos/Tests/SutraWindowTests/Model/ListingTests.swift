@@ -67,12 +67,12 @@ struct ListingTests {
 
     private let group = Line(
         key: .group(kind: .upstream(remote: "github.com/me/app")), name: "app", tooltip: "",
-        total: nil, cleansWhenIdle: nil, menu: [], fold: .open
+        total: nil, whenIdleMark: nil, menu: [], fold: .open
     )
 
     private let checkout = Line(
         key: .checkout(folder: "/code/app"), name: "app", tooltip: "", total: nil,
-        cleansWhenIdle: nil, menu: [], fold: .open
+        whenIdleMark: nil, menu: [], fold: .open
     )
 
     private func card(_ path: String) -> Card {

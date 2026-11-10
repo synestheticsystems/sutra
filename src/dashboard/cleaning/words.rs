@@ -11,7 +11,9 @@ mod when_idle;
 pub(super) use idle::{IDLE_SEARCH_STOPPED, idle_question, nothing_to_ask};
 pub(super) use keep_free::{keep_free_choice, keep_free_question, made_room};
 pub(super) use outcome::{all_stopped, stopped};
-pub(super) use when_idle::{cleaned_when_idle, look_stopped, when_idle_choice, when_idle_mark};
+pub(super) use when_idle::{
+    as_in_settings, cleaned_when_idle, cleans_after, look_stopped, never_cleans, when_idle_choice,
+};
 
 use std::ffi::OsStr;
 use std::io;

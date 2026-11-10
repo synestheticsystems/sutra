@@ -1,9 +1,9 @@
-//! Cleaning a group's build folders by itself once they have sat idle as long as the user chose
-//! from the group's line (see `chosen`). Every so often, as the shortest time chosen deserves, and
-//! soon after a choice, the build folders of each idle project in such a group are cleaned with no
-//! question asked, as the user's choice is
-//! their say so: idle as the toolbar's offer tells it (see `clean::prepare_idle`), only for the
-//! group's own time, and never where the clean would take the builds of a project not idle by its
+//! Cleaning a group's build folders by itself once they have sat idle as long as the user chose,
+//! for every group in Settings or for the group from its line (see `chosen`). Every so often, as
+//! the shortest time chosen deserves, and soon after a choice, the build folders of each idle
+//! project in such a group are cleaned with no question asked, as the user's choice is their say
+//! so: idle as the toolbar's offer tells it (see `clean::prepare_idle`), only for the group's own
+//! time, and never where the clean would take the builds of a project not idle by its
 //! own group's time, so that a group left at Never keeps every folder it shares with another.
 //! A group may hold busy and idle checkouts at once, and only the idle ones' folders go. Each
 //! group's cleans end in one banner saying what went. Keeping free space (see `auto`) stays the
@@ -13,10 +13,10 @@ mod chosen;
 #[cfg(test)]
 mod tests;
 
-pub use chosen::IdleTime;
 pub(in crate::dashboard) use chosen::{
-    CleanWhenIdle, IdleTimes, when_idle_choices, when_idle_mark,
+    CleanWhenIdle, IdleTimes, as_in_settings, when_idle_choices,
 };
+pub use chosen::{IdleTime, WhenIdle};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ const PASS_OVER_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What cleaning the groups' idle build folders needs to remember between looks.
 #[derive(Debug, Default)]
-pub(super) struct WhenIdle {
+pub(super) struct IdleLooks {
     /// When to look next; `None` to look at the next tick.
     next_check: Option<Instant>,
     /// The cleans a look found are being worked out.
@@ -69,11 +69,11 @@ struct Round {
 }
 
 impl Cleaning {
-    /// The clock ticked: if it is time to look, nothing is being cleaned and the user chose a time
-    /// for any group on `map`, work out on a thread of its own the clean of each build folder of
-    /// those groups idle that long, as `map` shows them, every project sharing it idle by its own
-    /// group's time, but for those a clean or a question already has, and those passed over. The
-    /// next look comes a quarter of the shortest time chosen later, and an hour at most.
+    /// The clock ticked: if it is time to look, nothing is being cleaned and a time applies to any
+    /// group on `map`, work out on a thread of its own the clean of each build folder of those
+    /// groups idle that long, as `map` shows them, every project sharing it idle by its own group's
+    /// time, but for those a clean or a question already has, and those passed over. The next look
+    /// comes a quarter of the shortest time chosen later, and an hour at most.
     pub(in crate::dashboard) fn clean_when_idle(
         &mut self,
         map: &Arc<Snapshot>,
@@ -181,10 +181,10 @@ impl Cleaning {
         self.start_next(Some(map), now, home);
     }
 
-    /// The user chose another time for a group, or none: the cleans still waiting were worked out
-    /// with the old times, by which a project sharing a folder of another group may be idle, so
-    /// they all go back, while those deleting finish, and what a look is working out is dropped
-    /// when it comes back. The groups are looked at again at the next tick.
+    /// The user chose another time for a group or for every group, or none: the cleans still
+    /// waiting were worked out with the old times, by which a project sharing a folder of another
+    /// group may be idle, so they all go back, while those deleting finish, and what a look is
+    /// working out is dropped when it comes back. The groups are looked at again at the next tick.
     pub(in crate::dashboard) fn when_idle_changed(&mut self) {
         let when_idle = |waiting: &Waiting| matches!(waiting.by, By::WhenIdle { .. });
         let (dropped, waiting): (VecDeque<Waiting>, VecDeque<Waiting>) =
@@ -252,7 +252,7 @@ impl Cleaning {
     }
 }
 
-impl WhenIdle {
+impl IdleLooks {
     fn pass_over(&mut self, folder: PathBuf, now: SystemTime) {
         self.passed_over.insert(folder, now + PASS_OVER_FOR);
     }

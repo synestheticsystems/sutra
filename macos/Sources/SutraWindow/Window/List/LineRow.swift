@@ -66,14 +66,15 @@ struct LineRow: View {
                         if let total = line.total {
                             Text(total).fixedSize()
                         }
-                        if let cleansWhenIdle = line.cleansWhenIdle {
-                            // A mark rather than words, quieter than the total beside it: its tip
-                            // says how long the folders may sit idle.
-                            Image(systemName: "clock.arrow.circlepath")
+                        if let mark = line.whenIdleMark {
+                            // A mark rather than words, quieter than the total beside it, on a
+                            // line whose group chose otherwise than every group: its tip says
+                            // what applies.
+                            Image(systemName: mark.symbol)
                                 .imageScale(.small)
                                 .foregroundStyle(.tertiary)
-                                .hoverTip(cleansWhenIdle)
-                                .accessibilityLabel(cleansWhenIdle)
+                                .hoverTip(mark.tip)
+                                .accessibilityLabel(mark.tip)
                         }
                     }
                 }
@@ -115,5 +116,21 @@ struct LineRow: View {
 
     private func toggle() {
         dashboard.perform(.toggleFold(line: line.key))
+    }
+}
+
+private extension WhenIdleMark {
+    /// A clock going round for a time of the group's own, and the clock crossed out for never.
+    var symbol: String {
+        switch self {
+        case .ownTime: "clock.arrow.circlepath"
+        case .never: "clock.badge.xmark"
+        }
+    }
+
+    var tip: String {
+        switch self {
+        case let .ownTime(tip), let .never(tip): tip
+        }
     }
 }

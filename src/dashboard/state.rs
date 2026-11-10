@@ -21,7 +21,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
-use super::cleaning::{self, Cleaning, IdleOffer, IdleTime, Report, Threads};
+use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads, WhenIdle};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
 use super::disk_space::{Volume, VolumeUnread};
 use super::listing::{self, Arrangement, Listing};
@@ -134,7 +134,8 @@ impl State {
             Action::CleanBuildFolders { line } => self.clean_line(&line, now),
             Action::CleanIdle => self.clean_idle(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
-            Action::CleanWhenIdle { group, idle } => self.clean_when_idle(group, idle),
+            Action::CleanEveryGroupWhenIdle { choice } => self.clean_every_group_when_idle(choice),
+            Action::CleanWhenIdle { group, own } => self.clean_when_idle(group, own),
             Action::SetSort { order } => {
                 if let Some(map) = &self.snapshot {
                     self.arrangement.set_sort(order, map, &self.cleaning, now);
@@ -300,6 +301,8 @@ impl State {
             settings: Settings {
                 keep_free: self.cleaning.keep_free_floor(),
                 keep_free_choices: cleaning::keep_free_choices(),
+                clean_when_idle: self.settings.clean_when_idle.for_every_group(),
+                clean_when_idle_choices: cleaning::when_idle_choices(),
                 private_folders: PrivateFolder::ALL
                     .into_iter()
                     .map(|folder| PrivateFolderSwitch {
@@ -432,10 +435,21 @@ impl State {
         self.save_settings();
     }
 
-    /// The user chose from the line of `group` to clean its build folders once they have sat idle
-    /// for `idle`, or with `None`, not to: keep that for the next run, and clean as it says from
-    /// now on. A group the map no longer holds, as the line was a while old, changes nothing.
-    fn clean_when_idle(&mut self, group: GroupKind, idle: Option<IdleTime>) {
+    /// The user chose in Settings what Sutra does with the build folders of every group that made
+    /// no choice of its own once they sit idle: keep that for the next run, and clean as it says
+    /// from now on.
+    fn clean_every_group_when_idle(&mut self, choice: WhenIdle) {
+        if self.settings.clean_when_idle.choose_for_every_group(choice) {
+            self.save_settings();
+            self.cleaning.when_idle_changed();
+        }
+    }
+
+    /// The user chose from the line of `group` what Sutra does with its build folders once they sit
+    /// idle, `own`, or with `None`, to follow the choice for every group: keep that for the next
+    /// run, and clean as it says from now on. A group the map no longer holds, as the line was a
+    /// while old, changes nothing.
+    fn clean_when_idle(&mut self, group: GroupKind, own: Option<WhenIdle>) {
         let Some(map) = self.snapshot.clone() else {
             return;
         };
@@ -443,7 +457,7 @@ impl State {
         let Some(group) = listing::groups(&map).find(|key| LineKey::group(key) == line) else {
             return;
         };
-        if self.settings.clean_when_idle.choose(group, idle, &map) {
+        if self.settings.clean_when_idle.choose_own(group, own, &map) {
             self.save_settings();
             self.cleaning.when_idle_changed();
         }

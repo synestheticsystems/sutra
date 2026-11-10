@@ -2,7 +2,7 @@
 //! action of a line of one of its menus (`MenuAction::Dashboard`), or what one of the window's own
 //! controls asks for.
 
-use crate::dashboard::cleaning::IdleTime;
+use crate::dashboard::cleaning::WhenIdle;
 use crate::dashboard::{GroupKind, LineKey, SortOrder};
 
 /// What the user asks the dashboard to do (`Dashboard::perform`).
@@ -24,12 +24,18 @@ pub enum Action {
     KeepFree {
         bytes: Option<u64>,
     },
-    /// Clean the build folders of `group` by itself from now on, each once it has sat idle for
-    /// `idle`; `None` leaves them to the user, and to keeping free space. The choice is the
+    /// Clean the build folders of every group that made no choice of its own by itself from now
+    /// on as `choice` says, each once it has sat idle that long, or never. The choice is the
     /// user's say so, so no question follows, and it is kept for the next run.
+    CleanEveryGroupWhenIdle {
+        choice: WhenIdle,
+    },
+    /// Clean the build folders of `group` by itself from now on as `own` says, its own choice, or
+    /// with `None`, as the choice for every group says. No question follows, and it is kept for
+    /// the next run.
     CleanWhenIdle {
         group: GroupKind,
-        idle: Option<IdleTime>,
+        own: Option<WhenIdle>,
     },
     SetSort {
         order: SortOrder,

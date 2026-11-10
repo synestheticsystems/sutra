@@ -52,10 +52,15 @@ fn checkout(fixture: &TempDir, name: &str, group: GroupKey, days: u64) -> Projec
     in_group(group, project)
 }
 
-/// The choice of cleaning `group`'s build folders once idle for `idle`, on `map`.
+/// Cleaning build folders once idle for `idle`.
+fn after(idle: IdleTime) -> WhenIdle {
+    WhenIdle::CleanAfter { idle }
+}
+
+/// The choice of cleaning `group`'s build folders once idle for `idle`, its own, on `map`.
 fn chosen(group: &GroupKey, idle: IdleTime, map: &Snapshot) -> CleanWhenIdle {
     let mut chosen = CleanWhenIdle::default();
-    assert!(chosen.choose(group, Some(idle), map));
+    assert!(chosen.choose_own(group, Some(after(idle)), map));
     chosen
 }
 
@@ -205,7 +210,7 @@ fn the_cleans_waiting_go_back_when_the_user_changes_any_groups_time_and_the_user
         in_group(upstream("site"), project_at(fixture.path("site"))),
     ]);
     let mut chosen = chosen(&upstream("app"), IdleTime::ThreeDays, &map);
-    chosen.choose(&upstream("site"), Some(IdleTime::OneWeek), &map);
+    chosen.choose_own(&upstream("site"), Some(after(IdleTime::OneWeek)), &map);
     let times = Arc::new(chosen.times_on(&map));
     let mut cleaning = cleaning();
     let by_app = when_idle(&fixture.path("app"), upstream("app"), &times);
@@ -238,8 +243,8 @@ fn a_clean_goes_at_its_turn_only_while_its_project_and_every_sharer_are_idle_by_
         ..in_group(group, project_at(path))
     };
     // `app`, quiet for `days`, goes after 3 days; `lib`, quiet 9 days, builds in its folder too,
-    // and goes after `lib_idle`, or never.
-    let started = |days: u64, lib_idle: Option<IdleTime>| {
+    // and goes as `lib_own` says, or with none, as `every_group` says.
+    let started = |days: u64, every_group: WhenIdle, lib_own: Option<WhenIdle>| {
         let map = snapshot_of(vec![
             Project {
                 artifacts: vec![cargo_target(target.clone(), measured(LARGE))],
@@ -248,7 +253,8 @@ fn a_clean_goes_at_its_turn_only_while_its_project_and_every_sharer_are_idle_by_
             quiet(&sharer, upstream("lib"), 9),
         ]);
         let mut chosen = chosen(&upstream("app"), IdleTime::ThreeDays, &map);
-        chosen.choose(&upstream("lib"), lib_idle, &map);
+        chosen.choose_for_every_group(every_group);
+        chosen.choose_own(&upstream("lib"), lib_own, &map);
         let times = Arc::new(chosen.times_on(&map));
         let mut shared = prepared_at(&target);
         shared.sharing.project_folders = vec![sharer.clone()];
@@ -259,21 +265,32 @@ fn a_clean_goes_at_its_turn_only_while_its_project_and_every_sharer_are_idle_by_
         !cleaning.running.is_empty()
     };
 
+    let (week, two_weeks) = (after(IdleTime::OneWeek), after(IdleTime::TwoWeeks));
+    let never = WhenIdle::Never;
+    assert!(!started(1, never, Some(week)), "active since the look");
     assert!(
-        !started(1, Some(IdleTime::OneWeek)),
-        "active since the look"
-    );
-    assert!(
-        started(9, Some(IdleTime::OneWeek)),
+        started(9, never, Some(week)),
         "lib quiet longer than its own week"
     );
     assert!(
-        !started(9, Some(IdleTime::TwoWeeks)),
+        !started(9, never, Some(two_weeks)),
         "lib not quiet its own two weeks"
     );
     assert!(
-        !started(9, None),
-        "lib's group is never cleaned for being idle"
+        started(9, week, None),
+        "lib quiet longer than every group's week"
+    );
+    assert!(
+        !started(9, two_weeks, None),
+        "lib not quiet every group's two weeks"
+    );
+    assert!(
+        !started(9, week, Some(never)),
+        "lib's group is never cleaned for being idle, whatever every group's time"
+    );
+    assert!(
+        !started(9, never, None),
+        "nor is any group, as every group's choice is never"
     );
 }
 

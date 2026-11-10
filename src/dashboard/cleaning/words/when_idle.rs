@@ -1,5 +1,6 @@
 //! What Sutra says about cleaning a group's build folders by itself once they sit idle: each choice
-//! on a group's line and the mark of the choice made, and the banners after a look at the groups.
+//! in Settings and on a group's line, the mark of a line's own choice, and the banners after a look
+//! at the groups.
 
 use std::io;
 use std::time::Duration;
@@ -27,8 +28,8 @@ fn idle_time(idle: Duration) -> String {
     format!("{count} {unit}")
 }
 
-/// The choice on a group's line of cleaning its build folders once idle for `idle`, as a menu's
-/// title case writes it, or with `None`, of not cleaning them.
+/// The choice of cleaning build folders once idle for `idle`, as a menu's title case writes it,
+/// or with `None`, of not cleaning them.
 pub(in crate::dashboard::cleaning) fn when_idle_choice(idle: Option<Duration>) -> String {
     let Some(idle) = idle else {
         return "Never".to_string();
@@ -44,12 +45,25 @@ pub(in crate::dashboard::cleaning) fn when_idle_choice(idle: Option<Duration>) -
     format!("For {count} {unit}")
 }
 
-/// What the mark on the line of a group whose build folders are cleaned once idle for `idle` says.
-pub(in crate::dashboard::cleaning) fn when_idle_mark(idle: Duration) -> String {
+/// The first choice on a group's line, of following the choice for every group, which Settings
+/// words as `choice`.
+pub(in crate::dashboard::cleaning) fn as_in_settings(choice: &str) -> String {
+    format!("As in Settings ({choice})")
+}
+
+/// What the mark on the line of a group whose build folders are cleaned once idle for `idle`, a
+/// time of its own, says.
+pub(in crate::dashboard::cleaning) fn cleans_after(idle: Duration) -> String {
     format!(
         "Cleans its build folders once they've sat idle for {}",
         idle_time(idle)
     )
+}
+
+/// What the mark on the line of a group whose build folders are never cleaned for sitting idle,
+/// where every other group's are, says.
+pub(in crate::dashboard::cleaning) fn never_cleans() -> &'static str {
+    "Never cleans its build folders for sitting idle"
 }
 
 /// The banner once Sutra has cleaned `folders` of `group`'s build folders by itself, which gave
@@ -107,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lines_choices_read_in_title_case_after_never_and_its_mark_in_a_sentence() {
+    fn the_choices_read_in_title_case_after_never_and_a_lines_mark_in_a_sentence() {
         let choices: Vec<String> = [None, Some(HOUR), Some(HOUR * 4), Some(DAY), Some(DAY * 7)]
             .into_iter()
             .map(when_idle_choice)
@@ -122,8 +136,9 @@ mod tests {
                 "For a Week"
             ]
         );
+        assert_eq!(as_in_settings("For a Day"), "As in Settings (For a Day)");
         assert_eq!(
-            when_idle_mark(HOUR * 2),
+            cleans_after(HOUR * 2),
             "Cleans its build folders once they've sat idle for 2 hours"
         );
     }

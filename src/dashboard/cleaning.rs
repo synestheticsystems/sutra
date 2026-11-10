@@ -13,8 +13,8 @@ mod words;
 
 pub(super) use auto::{free_bytes, keep_free_choices};
 pub(super) use threads::{CleanOutcome, Report, Threads};
-pub use when_idle::IdleTime;
-pub(super) use when_idle::{CleanWhenIdle, when_idle_choices, when_idle_mark};
+pub(super) use when_idle::{CleanWhenIdle, as_in_settings, when_idle_choices};
+pub use when_idle::{IdleTime, WhenIdle};
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use crate::map::{ArtifactDir, Project, Snapshot};
 use asking::{Clicked, OpenQuestions};
 use auto::KeepingFree;
 use queue::{By, Running, Waiting};
-use when_idle::WhenIdle;
+use when_idle::IdleLooks;
 
 /// How long a project must have been quiet for the toolbar to offer its build folders. A folder is
 /// rebuilt when its project is next used, and on Daniel's Mac (2026-11-04) three days separates what
@@ -61,7 +61,7 @@ pub(super) struct Cleaning {
     /// Folders a clean just deleted from, for the engine to measure again.
     measure_again: Vec<PathBuf>,
     keeping_free: KeepingFree,
-    when_idle: WhenIdle,
+    when_idle: IdleLooks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,7 +121,7 @@ impl Cleaning {
             banners: Vec::new(),
             measure_again: Vec::new(),
             keeping_free: KeepingFree::with_floor(keep_free),
-            when_idle: WhenIdle::default(),
+            when_idle: IdleLooks::default(),
         }
     }
 

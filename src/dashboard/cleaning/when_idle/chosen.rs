@@ -1,14 +1,15 @@
-//! What the user chose from each group's line: how long its build folders may sit idle before
-//! Sutra cleans them, kept by the line, and the choices and the mark the line shows.
+//! What the user chose of how long build folders may sit idle before Sutra cleans them: one choice
+//! for every group, made in Settings, and the choice of its own a group may make from its line,
+//! kept by the line; with the choices offered, and the mark on a line whose own choice differs.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dashboard::LineKey;
 use crate::dashboard::cleaning::words;
 use crate::dashboard::listing::{self, ByLine};
+use crate::dashboard::{LineKey, WhenIdleChoice, WhenIdleMark};
 use crate::map::{GroupKey, Project, Snapshot};
 
 /// How long the user can let a group's build folders sit idle before Sutra cleans them: from an
@@ -40,7 +41,7 @@ impl IdleTime {
     ];
 
     /// How long that is.
-    pub(in crate::dashboard) fn duration(self) -> Duration {
+    fn duration(self) -> Duration {
         let hours = match self {
             IdleTime::OneHour => 1,
             IdleTime::TwoHours => 2,
@@ -55,52 +56,124 @@ impl IdleTime {
     }
 }
 
-/// How long each group's build folders may sit idle before Sutra cleans them, as the user chose
-/// from the group's line, kept by the line (see `ByLine`). A group not here is cleaned only when
-/// the user asks, or to keep free space.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(in crate::dashboard) struct CleanWhenIdle(ByLine<IdleTime>);
+/// What Sutra does with build folders once they sit idle.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WhenIdle {
+    /// Leaves them to the user, and to keeping free space.
+    #[default]
+    Never,
+    /// Cleans them once they have sat idle for `idle`.
+    CleanAfter { idle: IdleTime },
+}
 
-impl CleanWhenIdle {
-    /// How long `group`'s build folders may sit idle, if the user chose.
-    pub(in crate::dashboard) fn idle_time_of(&self, group: &GroupKey) -> Option<IdleTime> {
-        self.0.get(&LineKey::group(group)).copied()
+impl WhenIdle {
+    /// How long build folders may sit idle; `None` for never.
+    fn duration(self) -> Option<Duration> {
+        match self {
+            WhenIdle::Never => None,
+            WhenIdle::CleanAfter { idle } => Some(idle.duration()),
+        }
     }
 
-    /// The user chose to clean `group`'s build folders once idle for `idle`, or with `None`, not
-    /// to. A group `map` no longer knows changes nothing. Returns whether the choice changed.
-    pub(in crate::dashboard) fn choose(
+    /// Never, then each time offered, shortest first.
+    fn offered() -> impl Iterator<Item = WhenIdle> {
+        let times = IdleTime::OFFERED.map(|idle| WhenIdle::CleanAfter { idle });
+        std::iter::once(WhenIdle::Never).chain(times)
+    }
+}
+
+/// How long build folders may sit idle before Sutra cleans them, as the user chose: once for every
+/// group, and for any group from its line, which the line keeps (see `ByLine`). A group's own
+/// choice, a time or never, applies to it; and to every other group, the choice for every group.
+/// Docker's group has no build folders, and no choice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(in crate::dashboard) struct CleanWhenIdle {
+    /// What applies to each group that made no choice of its own: never, at first.
+    every_group: WhenIdle,
+    /// The choice of its own each group made from its line.
+    own: ByLine<WhenIdle>,
+}
+
+impl CleanWhenIdle {
+    /// What applies to each group that made no choice of its own.
+    pub(in crate::dashboard) fn for_every_group(&self) -> WhenIdle {
+        self.every_group
+    }
+
+    /// The choice of its own `group` made from its line, if it made one.
+    pub(in crate::dashboard) fn own_choice_of(&self, group: &GroupKey) -> Option<WhenIdle> {
+        self.own.get(&LineKey::group(group)).copied()
+    }
+
+    /// What applies to `group`: its own choice, else the one for every group.
+    fn applying_to(&self, group: &GroupKey) -> WhenIdle {
+        self.own_choice_of(group).unwrap_or(self.every_group)
+    }
+
+    /// The user chose `choice` for every group that has none of its own. Returns whether that
+    /// changed.
+    pub(in crate::dashboard) fn choose_for_every_group(&mut self, choice: WhenIdle) -> bool {
+        let changed = self.every_group != choice;
+        self.every_group = choice;
+        changed
+    }
+
+    /// The user chose `own` from the line of `group` as its own, or with `None`, to follow the
+    /// choice for every group again. A group `map` no longer knows changes nothing. Returns
+    /// whether the choice changed.
+    pub(in crate::dashboard) fn choose_own(
         &mut self,
         group: &GroupKey,
-        idle: Option<IdleTime>,
+        own: Option<WhenIdle>,
         map: &Snapshot,
     ) -> bool {
-        self.0.set(&LineKey::group(group), idle, map)
+        self.own.set(&LineKey::group(group), own, map)
     }
 
     /// A live map arrived: carry the choice of each group that `moves` says moved to its new key,
-    /// and forget the choice for every group `map` no longer knows (see `ByLine::keep_up_with`).
+    /// and forget the choice of every group `map` no longer knows (see `ByLine::keep_up_with`).
     /// Returns whether the choices changed.
     pub(in crate::dashboard) fn keep_up_with(
         &mut self,
         map: &Snapshot,
         moves: &BTreeMap<GroupKey, GroupKey>,
     ) -> bool {
-        self.0.keep_up_with(map, moves)
+        self.own.keep_up_with(map, moves)
     }
 
-    /// How long the build folders of each group on `map` the user chose a time for may sit idle.
+    /// How long the build folders of each group on `map` may sit idle, of those a time applies to.
     pub(super) fn times_on(&self, map: &Snapshot) -> IdleTimes {
-        let chosen = listing::groups(map)
-            .filter_map(|group| Some((group.clone(), self.idle_time_of(group)?.duration())));
-        IdleTimes(chosen.collect())
+        let timed = listing::groups(map)
+            .filter_map(|group| Some((group.clone(), self.applying_to(group).duration()?)));
+        IdleTimes(timed.collect())
+    }
+
+    /// The mark on the line of `group` while its own choice differs from the one for every group,
+    /// its tip saying what applies to it; `None` while it follows that one, or chose the same.
+    /// Once every group cleans itself, a mark on every line would say nothing.
+    pub(in crate::dashboard) fn mark_of(&self, group: &GroupKey) -> Option<WhenIdleMark> {
+        let own = self
+            .own_choice_of(group)
+            .filter(|own| *own != self.every_group)?;
+        Some(match own.duration() {
+            Some(idle) => WhenIdleMark::OwnTime {
+                tip: words::cleans_after(idle),
+            },
+            None => WhenIdleMark::Never {
+                tip: words::never_cleans().to_string(),
+            },
+        })
     }
 }
 
 /// How long the build folders of each group on a map may sit idle before Sutra cleans them, for
-/// the groups the user chose a time for, as they stood when Sutra looked. A project in any other
-/// group never goes for being idle, nor does a folder it shares: "Never" on a group's line is a
-/// promise that no other group's time breaks.
+/// the groups a time applies to, as they stood when Sutra looked. A project in any other group
+/// never goes for being idle, nor does a folder it shares: "Never" for a group is a promise that
+/// no other group's time breaks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::dashboard) struct IdleTimes(HashMap<GroupKey, Duration>);
 
@@ -118,27 +191,20 @@ impl IdleTimes {
     }
 }
 
-/// A time a group's line offers, with the words its menu shows.
-pub(in crate::dashboard) struct WhenIdleChoice {
-    /// How long the group's build folders may sit idle; `None` for never.
-    pub(in crate::dashboard) idle: Option<IdleTime>,
-    pub(in crate::dashboard) label: String,
-}
-
-/// What a group's line offers: never to clean its build folders by itself, then each time.
+/// What Settings and a group's line offer: never to clean build folders by themselves, then each
+/// time, in the words both show.
 pub(in crate::dashboard) fn when_idle_choices() -> Vec<WhenIdleChoice> {
-    std::iter::once(None)
-        .chain(IdleTime::OFFERED.map(Some))
-        .map(|idle| WhenIdleChoice {
-            idle,
-            label: words::when_idle_choice(idle.map(IdleTime::duration)),
-        })
-        .collect()
+    let choice = |choice: WhenIdle| WhenIdleChoice {
+        choice,
+        label: words::when_idle_choice(choice.duration()),
+    };
+    WhenIdle::offered().map(choice).collect()
 }
 
-/// What the mark on the line of a group says, whose build folders are cleaned once idle for `idle`.
-pub(in crate::dashboard) fn when_idle_mark(idle: IdleTime) -> String {
-    words::when_idle_mark(idle.duration())
+/// The first choice on a group's line, of following `every_group`, the choice for every group,
+/// which it names as Settings words it.
+pub(in crate::dashboard) fn as_in_settings(every_group: WhenIdle) -> String {
+    words::as_in_settings(&words::when_idle_choice(every_group.duration()))
 }
 
 #[cfg(test)]
@@ -146,6 +212,8 @@ mod tests {
     use super::*;
     use crate::map::Provenance;
     use crate::map::test_support::{project_at, snapshot_of};
+
+    const HOUR: Duration = Duration::from_secs(60 * 60);
 
     fn upstream(name: &str) -> GroupKey {
         GroupKey::Upstream(format!("github.com/me/{name}"))
@@ -162,41 +230,121 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_group_with_a_time_has_it_on_the_map_the_shortest_says_how_often_to_look() {
-        let map = snapshot_of(vec![
+    fn after(idle: IdleTime) -> WhenIdle {
+        WhenIdle::CleanAfter { idle }
+    }
+
+    fn app_site_and_loose() -> Snapshot {
+        snapshot_of(vec![
             in_group(upstream("app"), "app"),
             in_group(upstream("site"), "site"),
             project_at("/code/loose"),
-        ]);
+        ])
+    }
+
+    #[test]
+    fn a_groups_own_choice_applies_to_it_and_the_one_for_every_group_to_the_rest() {
+        let map = app_site_and_loose();
         let mut chosen = CleanWhenIdle::default();
-        assert!(chosen.choose(&upstream("app"), Some(IdleTime::OneWeek), &map));
-        assert!(chosen.choose(&GroupKey::Other, Some(IdleTime::TwoHours), &map));
+        assert!(
+            chosen.times_on(&map).shortest().is_none(),
+            "never, at first"
+        );
+        assert!(chosen.choose_for_every_group(after(IdleTime::OneDay)));
+        assert!(chosen.choose_own(&upstream("app"), Some(after(IdleTime::TwoHours)), &map));
+        assert!(chosen.choose_own(&upstream("site"), Some(WhenIdle::Never), &map));
+
         let times = chosen.times_on(&map);
         assert_eq!(
             times,
             IdleTimes(HashMap::from([
-                (upstream("app"), Duration::from_secs(7 * 24 * 60 * 60)),
-                (GroupKey::Other, Duration::from_secs(2 * 60 * 60))
-            ]))
+                (upstream("app"), HOUR * 2),
+                (GroupKey::Other, HOUR * 24)
+            ])),
+            "site never, and Other as every group"
         );
-        assert_eq!(times.shortest(), Some(Duration::from_secs(2 * 60 * 60)));
+        assert_eq!(times.shortest(), Some(HOUR * 2));
 
-        assert!(chosen.choose(&upstream("app"), None, &map));
-        assert!(chosen.choose(&GroupKey::Other, None, &map));
-        assert_eq!(chosen.idle_time_of(&upstream("app")), None);
+        assert!(chosen.choose_own(&upstream("app"), None, &map));
+        assert_eq!(chosen.own_choice_of(&upstream("app")), None);
         assert_eq!(
-            chosen.times_on(&map).shortest(),
-            None,
-            "no group has a time"
+            chosen.times_on(&map).of(&map.projects[0]),
+            Some(HOUR * 24),
+            "app follows every group again"
         );
     }
 
     #[test]
-    fn the_times_offered_run_from_an_hour_to_two_weeks_each_longer_than_the_last() {
-        let hours: Vec<u64> = (IdleTime::OFFERED.iter())
-            .map(|idle| idle.duration().as_secs() / (60 * 60))
+    fn only_a_line_whose_own_choice_differs_from_every_groups_is_marked_and_says_what_applies() {
+        let map = app_site_and_loose();
+        let mut chosen = CleanWhenIdle::default();
+        chosen.choose_own(&upstream("app"), Some(after(IdleTime::FourHours)), &map);
+        chosen.choose_own(&upstream("site"), Some(WhenIdle::Never), &map);
+        let marks = |chosen: &CleanWhenIdle| {
+            [upstream("app"), upstream("site"), GroupKey::Other].map(|group| chosen.mark_of(&group))
+        };
+        let four_hours = WhenIdleMark::OwnTime {
+            tip: "Cleans its build folders once they've sat idle for 4 hours".to_string(),
+        };
+        assert_eq!(
+            marks(&chosen),
+            [Some(four_hours.clone()), None, None],
+            "site chose never, as every group is"
+        );
+
+        chosen.choose_for_every_group(after(IdleTime::FourHours));
+        let never = WhenIdleMark::Never {
+            tip: "Never cleans its build folders for sitting idle".to_string(),
+        };
+        assert_eq!(
+            marks(&chosen),
+            [None, Some(never), None],
+            "app chose what every group has"
+        );
+    }
+
+    #[test]
+    fn never_then_each_time_is_offered_and_the_times_run_from_an_hour_to_two_weeks() {
+        let offered: Vec<Option<u64>> = WhenIdle::offered()
+            .map(|choice| choice.duration().map(|idle| idle.as_secs() / 3600))
             .collect();
-        assert_eq!(hours, [1, 2, 4, 8, 24, 72, 168, 336]);
+        assert_eq!(
+            offered,
+            [
+                None,
+                Some(1),
+                Some(2),
+                Some(4),
+                Some(8),
+                Some(24),
+                Some(72),
+                Some(168),
+                Some(336)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_choices_are_saved_by_name_and_a_file_with_none_reads_as_never_for_every_group() {
+        let map = app_site_and_loose();
+        let mut chosen = CleanWhenIdle::default();
+        chosen.choose_for_every_group(after(IdleTime::EightHours));
+        chosen.choose_own(&upstream("site"), Some(WhenIdle::Never), &map);
+        let saved = serde_json::to_value(&chosen).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "every_group": {"clean_after": {"idle": "eight_hours"}},
+                "own": {"upstream github.com/me/site": "never"},
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<CleanWhenIdle>(saved).unwrap(),
+            chosen
+        );
+        assert_eq!(
+            serde_json::from_value::<CleanWhenIdle>(serde_json::json!({})).unwrap(),
+            CleanWhenIdle::default()
+        );
     }
 }

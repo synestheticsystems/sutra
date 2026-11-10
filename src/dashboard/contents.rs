@@ -29,10 +29,10 @@ pub use dialog::Dialog;
 pub use footer::Footer;
 pub use list::{
     AccountedFor, ContainerCard, ElsewhereLine, GroupKind, Line, LineFold, LineKey, List, ListRow,
-    MoreLozenges, Place,
+    MoreLozenges, Place, WhenIdleMark,
 };
 pub use menu::{MenuAction, MenuEntry};
-pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings};
+pub use settings::{KeepFreeChoice, PrivateFolderSwitch, Settings, WhenIdleChoice};
 pub use toolbar::{CleanControl, DiskGauge, GaugeLook, SortChoice, SortControl, Toolbar};
 
 pub(super) use card::CardContext;

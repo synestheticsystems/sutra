@@ -12,7 +12,7 @@ mod rows;
 
 pub use docker::{AccountedFor, ContainerCard};
 pub use elsewhere::ElsewhereLine;
-pub use line::{GroupKind, Line, LineFold, LineKey, MoreLozenges};
+pub use line::{GroupKind, Line, LineFold, LineKey, MoreLozenges, WhenIdleMark};
 pub use rows::{ListRow, Place};
 
 pub(in crate::dashboard) use line::offered_cleans;

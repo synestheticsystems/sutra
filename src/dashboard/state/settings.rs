@@ -28,8 +28,8 @@ pub(super) struct SavedSettings {
     pub(super) watched_private_folders: BTreeSet<PrivateFolder>,
     /// The lines the user opened or folded shut again, none at first.
     pub(super) folds: Folds,
-    /// The groups whose build folders Sutra cleans once idle, and how long each may sit first;
-    /// none at first.
+    /// How long build folders may sit idle before Sutra cleans them, for every group and for each
+    /// group that chose otherwise; never, at first.
     pub(super) clean_when_idle: CleanWhenIdle,
 }
 
@@ -107,7 +107,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::dashboard::cleaning::IdleTime;
+    use crate::dashboard::cleaning::{IdleTime, WhenIdle};
     use crate::dashboard::listing::fixtures::snapshot;
     use crate::dashboard::{GroupKind, LineKey};
     use crate::map::test_support::TempDir;
@@ -151,17 +151,20 @@ mod tests {
         };
         settings.folds.toggle(&app(), &map());
         let app_group = GroupKey::Upstream("github.com/me/app".to_string());
-        settings
-            .clean_when_idle
-            .choose(&app_group, Some(IdleTime::FourHours), &map());
+        let four_hours = WhenIdle::CleanAfter {
+            idle: IdleTime::FourHours,
+        };
+        settings.clean_when_idle.choose_for_every_group(four_hours);
+        (settings.clean_when_idle).choose_own(&app_group, Some(WhenIdle::Never), &map());
 
         settings.save(Some(&path)).unwrap();
 
         let read_back = SavedSettings::load(Some(&path)).unwrap();
         assert_eq!(read_back, settings);
+        assert_eq!(read_back.clean_when_idle.for_every_group(), four_hours);
         assert_eq!(
-            read_back.clean_when_idle.idle_time_of(&app_group),
-            Some(IdleTime::FourHours)
+            read_back.clean_when_idle.own_choice_of(&app_group),
+            Some(WhenIdle::Never)
         );
         assert!(!read_back.folds.is_folded(&app()), "opened");
     }

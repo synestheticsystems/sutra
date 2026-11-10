@@ -45,8 +45,8 @@ extension Arrangement {
         SortChoice(order: .disk, label: "Disk", tooltip: "Largest folders first"),
     ]
 
-    /// Never cleaning by itself, and watching Documents of the folders macOS guards, as the app
-    /// starts out.
+    /// Never cleaning by itself, whether to keep free space or once build folders sit idle, and
+    /// watching Documents of the folders macOS guards, as the app starts out.
     private static let settings = SutraCore.Settings(
         keepFree: nil,
         keepFreeChoices: [nil, 25_000_000_000, 50_000_000_000, 100_000_000_000, 200_000_000_000]
@@ -56,6 +56,8 @@ extension Arrangement {
                     label: bytes.map { "Keep \(Words.size($0)) Free" } ?? "Never Clean by Itself"
                 )
             },
+        cleanWhenIdle: .never,
+        cleanWhenIdleChoices: [WhenIdleChoice(choice: .never, label: "Never")],
         privateFolders: [
             PrivateFolderSwitch(folder: "Desktop", watched: false),
             PrivateFolderSwitch(folder: "Documents", watched: true),

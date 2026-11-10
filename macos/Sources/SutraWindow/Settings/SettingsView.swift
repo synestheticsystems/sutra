@@ -3,10 +3,11 @@ import SwiftUI
 
 /// The Settings window. The window keeps three settings itself: whether Sutra opens at login, which
 /// macOS keeps for it, and the editor and the terminal a card's folder opens in. The core keeps the
-/// rest: how much free space Sutra keeps by cleaning by itself, and which of the folders macOS
-/// guards it watches. Each of the core's controls sends the user's choice to the core and shows
-/// what the core holds, so a choice the core asks about first shows only once the user agrees; the
-/// question shows here, over this window.
+/// rest: how much free space Sutra keeps by cleaning by itself, how long every group's build
+/// folders may sit idle before it cleans them, and which of the folders macOS guards it watches.
+/// Each of the core's controls sends the user's choice to the core and shows what the core holds,
+/// so a choice the core asks about first shows only once the user agrees; the question shows here,
+/// over this window.
 public struct SettingsView: View {
     private let dashboard: DashboardModel
 
@@ -57,6 +58,14 @@ public struct SettingsView: View {
             )) {
                 ForEach(settings.keepFreeChoices, id: \.bytes) { choice in
                     Text(choice.label).tag(choice.bytes)
+                }
+            }
+            Picker("Clean when idle", selection: Binding(
+                get: { settings.cleanWhenIdle },
+                set: { send(.cleanEveryGroupWhenIdle(choice: $0)) }
+            )) {
+                ForEach(settings.cleanWhenIdleChoices, id: \.choice) { choice in
+                    Text(choice.label).tag(choice.choice)
                 }
             }
             Section("Also watch") {

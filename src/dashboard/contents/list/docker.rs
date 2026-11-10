@@ -112,7 +112,7 @@ fn line(shown: &DockerGroup, folded: bool, ctx: &CardContext) -> Line {
         name: DOCKER.to_string(),
         tooltip: format!("{SHOWN}\n{}", format::tilde(&docker.socket, ctx.home)),
         total: docker.disk.map(|disk| format::size(disk.bytes(), false)),
-        cleans_when_idle: None,
+        when_idle_mark: None,
         menu: Vec::new(),
         fold,
     }

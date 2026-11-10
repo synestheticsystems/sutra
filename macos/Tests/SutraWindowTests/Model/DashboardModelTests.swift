@@ -20,7 +20,10 @@ struct DashboardModelTests {
                     notificationsTooltip: "", folder: nil, disk: nil
                 ),
                 banner: nil, stopped: nil, list: .scanning, footer: nil, dialog: nil,
-                settings: SutraCore.Settings(keepFree: nil, keepFreeChoices: [], privateFolders: [])
+                settings: SutraCore.Settings(
+                    keepFree: nil, keepFreeChoices: [], cleanWhenIdle: .never,
+                    cleanWhenIdleChoices: [], privateFolders: []
+                )
             )
         }
 

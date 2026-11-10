@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
+pub use cleaning::{IdleTime, WhenIdle};
 pub use contents::*;
 use live::Event;
 use state::State;

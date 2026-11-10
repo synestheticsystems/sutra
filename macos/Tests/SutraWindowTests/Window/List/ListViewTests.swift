@@ -106,7 +106,10 @@ struct ListViewTests {
         ]),
         footer: nil,
         dialog: nil,
-        settings: SutraCore.Settings(keepFree: nil, keepFreeChoices: [], privateFolders: [])
+        settings: SutraCore.Settings(
+                    keepFree: nil, keepFreeChoices: [], cleanWhenIdle: .never,
+                    cleanWhenIdleChoices: [], privateFolders: []
+                )
     )
 
     /// The place of a group's line, atop the tree.
@@ -120,7 +123,7 @@ struct ListViewTests {
     /// The open line of `key`, going by `name`.
     private static func open(_ key: LineKey, _ name: String) -> Line {
         Line(
-            key: key, name: name, tooltip: "", total: "212 GB", cleansWhenIdle: nil, menu: [],
+            key: key, name: name, tooltip: "", total: "212 GB", whenIdleMark: nil, menu: [],
             fold: .open
         )
     }
@@ -131,7 +134,7 @@ struct ListViewTests {
             sessions: [robot], subagents: [], waiting: false, lozenges: [], moreLozenges: nil
         )
         return Line(
-            key: key, name: name, tooltip: "", total: "212 GB", cleansWhenIdle: nil, menu: [],
+            key: key, name: name, tooltip: "", total: "212 GB", whenIdleMark: nil, menu: [],
             fold: fold
         )
     }

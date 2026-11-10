@@ -49,7 +49,7 @@ struct Arrangement: Equatable {
             name: group.name,
             tooltip: group.remote ?? "What no upstream groups",
             total: Words.size(group.projects.reduce(0) { $0 + $1.bytes }),
-            cleansWhenIdle: nil,
+            whenIdleMark: nil,
             menu: [],
             fold: open ? .open : folded(cards, at: moment)
         )

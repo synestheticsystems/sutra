@@ -6,7 +6,7 @@ use std::path::Path;
 
 use super::*;
 use crate::dashboard::cleaning::tests::{cleaning, deleted};
-use crate::dashboard::cleaning::{CleanWhenIdle, IdleTime};
+use crate::dashboard::cleaning::{CleanWhenIdle, IdleTime, WhenIdle};
 use crate::dashboard::contents::list;
 use crate::dashboard::listing::fixtures::{
     agent, came_from, linked_worktree, main_worktree, now, project, quiet, running_as,
@@ -491,83 +491,105 @@ fn app_with_a_copy() -> Snapshot {
     )
 }
 
-/// The titles of a submenu's entries, each checked or not.
+/// The titles of a submenu's entries, each checked or not, and `-` for a separator.
 fn choices(entries: &[MenuEntry]) -> Vec<(&str, bool)> {
     let each = entries.iter().map(|entry| match entry {
         MenuEntry::Item { title, checked, .. } => (title.as_str(), *checked),
+        MenuEntry::Separator => ("-", false),
         entry => panic!("only choices: {entry:?}"),
     });
     each.collect()
 }
 
+fn after(idle: IdleTime) -> WhenIdle {
+    WhenIdle::CleanAfter { idle }
+}
+
 #[test]
-fn a_groups_line_offers_how_long_its_build_folders_may_sit_idle_with_the_choice_made_checked() {
+fn a_groups_line_offers_to_follow_every_groups_choice_or_its_own_with_the_one_that_applies_checked()
+{
     let map = app_with_a_copy();
     let app_group = crate::map::GroupKey::Upstream("github.com/me/app".to_string());
+    let menu_of_app = |chosen: &CleanWhenIdle| {
+        let rows = rows_cleaning_when_idle(&map, &[app_line()], chosen);
+        let [(group, _), (checkout, _)] = &lines(rows)[..] else {
+            panic!("the group's line and its checkout's");
+        };
+        assert!(
+            checkout.menu.is_empty(),
+            "a group's choice, not a checkout's"
+        );
+        let [MenuEntry::Submenu { title, entries }] = &group.menu[..] else {
+            panic!("only the choice, with nothing to clean: {:?}", group.menu);
+        };
+        assert_eq!(title, "Clean When Idle");
+        entries.clone()
+    };
     let mut chosen = CleanWhenIdle::default();
-    assert!(chosen.choose(&app_group, Some(IdleTime::ThreeDays), &map));
-    let rows = rows_cleaning_when_idle(&map, &[app_line()], &chosen);
-    let [(group, _), (checkout, _)] = &lines(rows)[..] else {
-        panic!("the group's line and its checkout's");
-    };
+    chosen.choose_for_every_group(after(IdleTime::OneDay));
 
-    let [MenuEntry::Submenu { title, entries }] = &group.menu[..] else {
-        panic!("only the choice, with nothing to clean: {:?}", group.menu);
-    };
-    assert_eq!(title, "Clean When Idle");
+    let following = menu_of_app(&chosen);
     assert_eq!(
-        choices(entries),
+        choices(&following),
         [
+            ("As in Settings (For a Day)", true),
+            ("-", false),
             ("Never", false),
             ("For an Hour", false),
             ("For 2 Hours", false),
             ("For 4 Hours", false),
             ("For 8 Hours", false),
             ("For a Day", false),
-            ("For 3 Days", true),
+            ("For 3 Days", false),
             ("For a Week", false),
             ("For 2 Weeks", false),
         ]
     );
-    let MenuEntry::Item { action, .. } = &entries[0] else {
-        panic!("a choice");
+    let choose = |own| MenuAction::Dashboard {
+        action: Action::CleanWhenIdle {
+            group: GroupKind::Upstream {
+                remote: "github.com/me/app".to_string(),
+            },
+            own,
+        },
     };
-    assert_eq!(
-        *action,
-        MenuAction::Dashboard {
-            action: Action::CleanWhenIdle {
-                group: GroupKind::Upstream {
-                    remote: "github.com/me/app".to_string()
-                },
-                idle: None,
-            }
-        }
-    );
-    assert!(
-        checkout.menu.is_empty(),
-        "a group's choice, not a checkout's"
-    );
+    let action = |entry: &MenuEntry| match entry {
+        MenuEntry::Item { action, .. } => action.clone(),
+        entry => panic!("a choice: {entry:?}"),
+    };
+    assert_eq!(action(&following[0]), choose(None));
+    assert_eq!(action(&following[2]), choose(Some(WhenIdle::Never)));
+
+    assert!(chosen.choose_own(&app_group, Some(after(IdleTime::OneDay)), &map));
+    let own_day = menu_of_app(&chosen);
+    let checked: Vec<&str> = (choices(&own_day).into_iter())
+        .filter_map(|(title, checked)| checked.then_some(title))
+        .collect();
+    assert_eq!(checked, ["For a Day"], "its own, though every group's too");
 }
 
 #[test]
-fn a_line_whose_group_cleans_itself_once_idle_says_so_and_another_says_nothing() {
+fn a_group_line_is_marked_while_its_own_choice_differs_from_every_groups_and_no_other_line_is() {
     let map = app_with_a_copy();
     let app_group = crate::map::GroupKey::Upstream("github.com/me/app".to_string());
-    let marks = |chosen: &CleanWhenIdle| -> Vec<Option<String>> {
+    let marks = |chosen: &CleanWhenIdle| -> Vec<Option<WhenIdleMark>> {
         let rows = rows_cleaning_when_idle(&map, &[app_line()], chosen);
         let lines = lines(rows).into_iter();
-        lines.map(|(line, _)| line.cleans_when_idle).collect()
+        lines.map(|(line, _)| line.when_idle_mark).collect()
     };
 
-    assert_eq!(marks(&CleanWhenIdle::default()), [None, None]);
     let mut chosen = CleanWhenIdle::default();
-    assert!(chosen.choose(&app_group, Some(IdleTime::OneWeek), &map));
+    assert_eq!(marks(&chosen), [None, None]);
+    chosen.choose_own(&app_group, Some(after(IdleTime::OneWeek)), &map);
     assert_eq!(
         marks(&chosen),
-        [
-            Some("Cleans its build folders once they've sat idle for a week".to_string()),
-            None
-        ],
+        [chosen.mark_of(&app_group), None],
         "the group's line alone"
     );
+    assert!(matches!(
+        marks(&chosen)[0],
+        Some(WhenIdleMark::OwnTime { .. })
+    ));
+    chosen.choose_for_every_group(after(IdleTime::OneWeek));
+    assert_eq!(marks(&chosen), [None, None], "as every group");
 }
