@@ -130,8 +130,8 @@ impl Flattening<'_> {
             });
             line::folded(&group.cards(), elsewhere, self.cards)
         };
-        let idle_days = self.chosen.clean_when_idle.days_for(group.key);
-        let line = line::group_line(group, fold, idle_days, self.cards);
+        let idle = self.chosen.clean_when_idle.idle_time_of(group.key);
+        let line = line::group_line(group, fold, idle, self.cards);
         let place = Place {
             depth: 0,
             first: false,

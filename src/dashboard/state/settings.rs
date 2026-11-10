@@ -107,6 +107,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::dashboard::cleaning::IdleTime;
     use crate::dashboard::listing::fixtures::snapshot;
     use crate::dashboard::{GroupKind, LineKey};
     use crate::map::test_support::TempDir;
@@ -150,13 +151,18 @@ mod tests {
         };
         settings.folds.toggle(&app(), &map());
         let app_group = GroupKey::Upstream("github.com/me/app".to_string());
-        settings.clean_when_idle.choose(&app_group, Some(3), &map());
+        settings
+            .clean_when_idle
+            .choose(&app_group, Some(IdleTime::FourHours), &map());
 
         settings.save(Some(&path)).unwrap();
 
         let read_back = SavedSettings::load(Some(&path)).unwrap();
         assert_eq!(read_back, settings);
-        assert_eq!(read_back.clean_when_idle.days_for(&app_group), Some(3));
+        assert_eq!(
+            read_back.clean_when_idle.idle_time_of(&app_group),
+            Some(IdleTime::FourHours)
+        );
         assert!(!read_back.folds.is_folded(&app()), "opened");
     }
 

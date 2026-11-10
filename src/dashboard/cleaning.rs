@@ -13,6 +13,7 @@ mod words;
 
 pub(super) use auto::{free_bytes, keep_free_choices};
 pub(super) use threads::{CleanOutcome, Report, Threads};
+pub use when_idle::IdleTime;
 pub(super) use when_idle::{CleanWhenIdle, when_idle_choices, when_idle_mark};
 
 use std::collections::{HashMap, VecDeque};

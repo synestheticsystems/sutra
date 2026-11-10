@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use super::*;
-use crate::dashboard::cleaning::CleanWhenIdle;
 use crate::dashboard::cleaning::tests::{cleaning, deleted};
+use crate::dashboard::cleaning::{CleanWhenIdle, IdleTime};
 use crate::dashboard::contents::list;
 use crate::dashboard::listing::fixtures::{
     agent, came_from, linked_worktree, main_worktree, now, project, quiet, running_as,
@@ -505,7 +505,7 @@ fn a_groups_line_offers_how_long_its_build_folders_may_sit_idle_with_the_choice_
     let map = app_with_a_copy();
     let app_group = crate::map::GroupKey::Upstream("github.com/me/app".to_string());
     let mut chosen = CleanWhenIdle::default();
-    assert!(chosen.choose(&app_group, Some(3), &map));
+    assert!(chosen.choose(&app_group, Some(IdleTime::ThreeDays), &map));
     let rows = rows_cleaning_when_idle(&map, &[app_line()], &chosen);
     let [(group, _), (checkout, _)] = &lines(rows)[..] else {
         panic!("the group's line and its checkout's");
@@ -519,6 +519,10 @@ fn a_groups_line_offers_how_long_its_build_folders_may_sit_idle_with_the_choice_
         choices(entries),
         [
             ("Never", false),
+            ("For an Hour", false),
+            ("For 2 Hours", false),
+            ("For 4 Hours", false),
+            ("For 8 Hours", false),
             ("For a Day", false),
             ("For 3 Days", true),
             ("For a Week", false),
@@ -535,7 +539,7 @@ fn a_groups_line_offers_how_long_its_build_folders_may_sit_idle_with_the_choice_
                 group: GroupKind::Upstream {
                     remote: "github.com/me/app".to_string()
                 },
-                days: None,
+                idle: None,
             }
         }
     );
@@ -557,7 +561,7 @@ fn a_line_whose_group_cleans_itself_once_idle_says_so_and_another_says_nothing()
 
     assert_eq!(marks(&CleanWhenIdle::default()), [None, None]);
     let mut chosen = CleanWhenIdle::default();
-    assert!(chosen.choose(&app_group, Some(7), &map));
+    assert!(chosen.choose(&app_group, Some(IdleTime::OneWeek), &map));
     assert_eq!(
         marks(&chosen),
         [

@@ -6,17 +6,22 @@ use std::time::Duration;
 
 use crate::dashboard::format;
 
-/// `idle` in whole days, as its count and its unit: `a day`, `3 days`, `a week`, `2 weeks`.
+/// `idle` in whole hours, as its count and its unit, in the largest unit it fills whole: `an
+/// hour`, `8 hours`, `a day`, `3 days`, `a week`, `2 weeks`.
 fn count_and_unit(idle: Duration) -> (String, &'static str) {
-    match idle.as_secs() / (24 * 60 * 60) {
-        1 => ("a".to_string(), "day"),
-        7 => ("a".to_string(), "week"),
-        days if days > 7 && days % 7 == 0 => ((days / 7).to_string(), "weeks"),
-        days => (days.to_string(), "days"),
+    const DAY: u64 = 24;
+    const WEEK: u64 = 7 * DAY;
+    match idle.as_secs() / (60 * 60) {
+        1 => ("an".to_string(), "hour"),
+        hours if hours % DAY != 0 => (hours.to_string(), "hours"),
+        DAY => ("a".to_string(), "day"),
+        WEEK => ("a".to_string(), "week"),
+        hours if hours % WEEK == 0 => ((hours / WEEK).to_string(), "weeks"),
+        hours => ((hours / DAY).to_string(), "days"),
     }
 }
 
-/// `idle` as a sentence says it: `a day`, `3 days`, `a week`, `2 weeks`.
+/// `idle` as a sentence says it: `an hour`, `8 hours`, `a day`, `3 days`, `a week`, `2 weeks`.
 fn idle_time(idle: Duration) -> String {
     let (count, unit) = count_and_unit(idle);
     format!("{count} {unit}")
@@ -75,7 +80,7 @@ pub(in crate::dashboard::cleaning) fn look_stopped(why: Option<&io::Error>) -> (
     };
     (
         "Couldn't look for idle build folders".to_string(),
-        format!("{what} Nothing was deleted, and Sutra looks again in an hour."),
+        format!("{what} Nothing was deleted, and Sutra will look again."),
     )
 }
 
@@ -83,36 +88,43 @@ pub(in crate::dashboard::cleaning) fn look_stopped(why: Option<&io::Error>) -> (
 mod tests {
     use super::*;
 
+    const HOUR: Duration = Duration::from_secs(60 * 60);
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
     #[test]
-    fn idle_times_read_in_days_and_whole_weeks() {
-        let said: Vec<String> = [1, 3, 7, 14, 10]
+    fn idle_times_read_in_the_largest_unit_they_fill_whole() {
+        let said: Vec<String> = [1, 2, 8, 24, 36, 72, 168, 240, 336]
             .into_iter()
-            .map(|days| idle_time(DAY * days))
+            .map(|hours| idle_time(HOUR * hours))
             .collect();
-        assert_eq!(said, ["a day", "3 days", "a week", "2 weeks", "10 days"]);
+        assert_eq!(
+            said,
+            [
+                "an hour", "2 hours", "8 hours", "a day", "36 hours", "3 days", "a week",
+                "10 days", "2 weeks"
+            ]
+        );
     }
 
     #[test]
     fn a_lines_choices_read_in_title_case_after_never_and_its_mark_in_a_sentence() {
-        let choices: Vec<String> = [None, Some(1), Some(3), Some(7), Some(14)]
+        let choices: Vec<String> = [None, Some(HOUR), Some(HOUR * 4), Some(DAY), Some(DAY * 7)]
             .into_iter()
-            .map(|days| when_idle_choice(days.map(|days| DAY * days)))
+            .map(when_idle_choice)
             .collect();
         assert_eq!(
             choices,
             [
                 "Never",
+                "For an Hour",
+                "For 4 Hours",
                 "For a Day",
-                "For 3 Days",
-                "For a Week",
-                "For 2 Weeks"
+                "For a Week"
             ]
         );
         assert_eq!(
-            when_idle_mark(DAY * 3),
-            "Cleans its build folders once they've sat idle for 3 days"
+            when_idle_mark(HOUR * 2),
+            "Cleans its build folders once they've sat idle for 2 hours"
         );
     }
 
@@ -126,8 +138,8 @@ mod tests {
             )
         );
         assert_eq!(
-            cleaned_when_idle("ankurah", 1, 2_100_000_000, DAY * 7).1,
-            "1 folder idle for a week or more: 2.1 GB back."
+            cleaned_when_idle("ankurah", 1, 2_100_000_000, HOUR).1,
+            "1 folder idle for an hour or more: 2.1 GB back."
         );
     }
 }

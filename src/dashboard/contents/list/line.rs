@@ -12,7 +12,7 @@ pub use fold::{LineFold, MoreLozenges};
 
 use std::path::Path;
 
-use crate::dashboard::cleaning::{self, Cleaning};
+use crate::dashboard::cleaning::{self, Cleaning, IdleTime};
 use crate::dashboard::contents::card::{self, CardContext};
 use crate::dashboard::listing::{Checkout, Group};
 use crate::dashboard::{Action, MenuAction, MenuEntry, format};
@@ -100,11 +100,11 @@ impl LineKey {
 }
 
 /// The line of `group`, folded shut or not as `fold` says, whose build folders Sutra cleans once
-/// they have sat idle for `idle_days`, if the user chose that.
+/// they have sat idle for `idle`, if the user chose that.
 pub(super) fn group_line(
     group: &Group,
     fold: LineFold,
-    idle_days: Option<u32>,
+    idle: Option<IdleTime>,
     cards: &CardContext,
 ) -> Line {
     let key = LineKey::group(group.key);
@@ -134,14 +134,14 @@ pub(super) fn group_line(
     if !menu.is_empty() {
         menu.push(MenuEntry::Separator);
     }
-    menu.push(clean_when_idle(group.key, idle_days));
+    menu.push(clean_when_idle(group.key, idle));
     Line {
         menu,
         key,
         name: group.name.clone(),
         tooltip,
         total: total_of(&group.members, cards),
-        cleans_when_idle: idle_days.map(cleaning::when_idle_mark),
+        cleans_when_idle: idle.map(cleaning::when_idle_mark),
         fold,
     }
 }
@@ -161,19 +161,19 @@ pub(super) fn checkout_line(checkout: &Checkout, fold: LineFold, cards: &CardCon
 }
 
 /// What the line of the group `group` offers for cleaning its build folders by itself: how long
-/// they may sit idle first, or never, with the choice made, `idle_days`, checked.
-fn clean_when_idle(group: &GroupKey, idle_days: Option<u32>) -> MenuEntry {
-    let choose = |days| Action::CleanWhenIdle {
+/// they may sit idle first, or never, with the choice made, `idle`, checked.
+fn clean_when_idle(group: &GroupKey, idle: Option<IdleTime>) -> MenuEntry {
+    let choose = |idle| Action::CleanWhenIdle {
         group: GroupKind::of(group),
-        days,
+        idle,
     };
     let entries = cleaning::when_idle_choices()
         .into_iter()
         .map(|choice| MenuEntry::Item {
             title: choice.label,
-            checked: choice.days == idle_days,
+            checked: choice.idle == idle,
             action: MenuAction::Dashboard {
-                action: choose(choice.days),
+                action: choose(choice.idle),
             },
         });
     MenuEntry::Submenu {

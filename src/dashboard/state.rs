@@ -21,7 +21,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
-use super::cleaning::{self, Cleaning, IdleOffer, Report, Threads};
+use super::cleaning::{self, Cleaning, IdleOffer, IdleTime, Report, Threads};
 use super::contents::{CardContext, banner, card, footer, heading, list, toolbar};
 use super::disk_space::{Volume, VolumeUnread};
 use super::listing::{self, Arrangement, Listing};
@@ -134,7 +134,7 @@ impl State {
             Action::CleanBuildFolders { line } => self.clean_line(&line, now),
             Action::CleanIdle => self.clean_idle(now),
             Action::KeepFree { bytes } => self.keep_free(bytes),
-            Action::CleanWhenIdle { group, days } => self.clean_when_idle(group, days),
+            Action::CleanWhenIdle { group, idle } => self.clean_when_idle(group, idle),
             Action::SetSort { order } => {
                 if let Some(map) = &self.snapshot {
                     self.arrangement.set_sort(order, map, &self.cleaning, now);
@@ -433,9 +433,9 @@ impl State {
     }
 
     /// The user chose from the line of `group` to clean its build folders once they have sat idle
-    /// for `days`, or with `None`, not to: keep that for the next run, and clean as it says from
+    /// for `idle`, or with `None`, not to: keep that for the next run, and clean as it says from
     /// now on. A group the map no longer holds, as the line was a while old, changes nothing.
-    fn clean_when_idle(&mut self, group: GroupKind, days: Option<u32>) {
+    fn clean_when_idle(&mut self, group: GroupKind, idle: Option<IdleTime>) {
         let Some(map) = self.snapshot.clone() else {
             return;
         };
@@ -443,7 +443,7 @@ impl State {
         let Some(group) = listing::groups(&map).find(|key| LineKey::group(key) == line) else {
             return;
         };
-        if self.settings.clean_when_idle.choose(group, days, &map) {
+        if self.settings.clean_when_idle.choose(group, idle, &map) {
             self.save_settings();
             self.cleaning.when_idle_changed();
         }
