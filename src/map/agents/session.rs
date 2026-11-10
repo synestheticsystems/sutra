@@ -190,6 +190,18 @@ impl AgentSession {
             && self.kind.as_deref() == Some("exec")
             && self.status == AgentStatus::Idle
     }
+
+    /// How long the session has been at rest as of `now`, its turn ended and waiting for its next
+    /// prompt, by the newest time it recorded; `None` while it is not at rest, or when it recorded
+    /// no time. One waiting on a prompt is mid-turn, and builds the moment it is answered.
+    pub fn at_rest_for(&self, now: SystemTime) -> Option<Duration> {
+        if self.status != AgentStatus::Idle {
+            return None;
+        }
+        let newest = self.since.max(self.last_activity)?;
+        // A time dated after `now` is as fresh as times come.
+        Some(now.duration_since(newest).unwrap_or(Duration::ZERO))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -331,6 +343,41 @@ mod tests {
 
         let older = session.with_subagent_work(one(false, Some(at(40_000)), now));
         assert_eq!(older.last_activity, Some(at(50_000)), "an older write");
+    }
+
+    #[test]
+    fn a_session_is_at_rest_only_once_its_turn_ended_and_since_the_newest_time_it_recorded() {
+        let now = at(100_000);
+        let session = |status, since, last_activity| AgentSession {
+            since,
+            last_activity,
+            ..agent_session("s", status)
+        };
+        let rest =
+            |status, since, last_activity| session(status, since, last_activity).at_rest_for(now);
+
+        let thousand = Some(Duration::from_secs(1_000));
+        assert_eq!(rest(AgentStatus::Idle, Some(at(99_000)), None), thousand);
+        assert_eq!(rest(AgentStatus::Idle, None, Some(at(99_000))), thousand);
+        assert_eq!(
+            rest(AgentStatus::Idle, Some(at(50_000)), Some(at(99_000))),
+            thousand,
+            "a subagent wrote since its turn ended"
+        );
+        assert_eq!(
+            rest(AgentStatus::Idle, Some(at(200_000)), None),
+            Some(Duration::ZERO),
+            "dated after now"
+        );
+        assert_eq!(rest(AgentStatus::Idle, None, None), None, "undated");
+        for status in [
+            AgentStatus::Busy,
+            AgentStatus::Waiting,
+            AgentStatus::Quiet,
+            AgentStatus::Unknown,
+        ] {
+            assert_eq!(rest(status, Some(at(5)), Some(at(5))), None, "{status:?}");
+        }
     }
 
     #[test]
