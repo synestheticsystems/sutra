@@ -26,10 +26,12 @@ pub struct IdleFolder<'a> {
 /// Whether something is at work in `project` now: an agent, other than a job that has finished, a
 /// subagent at work there, as in a worktree of its own, an environment whose process lives, a
 /// process listening for connections there, as a server run from its build folder does, a Docker
-/// container running for it, which may run what was built there, or the session whose scratch
-/// folder it is, while the session runs. Such a session builds into its
-/// scratch whenever it likes, and a build's writes date no folder, so its scratch can look quiet
-/// between two of its builds.
+/// container compose made there or that mounts a folder of it, either of which may run what was
+/// built there, or the session whose scratch folder it is, while the session runs. Such a session
+/// builds into its scratch whenever it likes, and a build's writes date no folder, so its scratch
+/// can look quiet between two of its builds. A container the project holds only as its environment
+/// names a port it publishes, such as a database left running once the environment stopped, runs
+/// nothing built there, and keeps nothing.
 fn in_use(project: &Project) -> bool {
     let session_runs = project
         .scratch
@@ -39,7 +41,7 @@ fn in_use(project: &Project) -> bool {
         || !project.subagents.is_empty()
         || project.environment.as_ref().is_some_and(|env| env.alive)
         || !project.listening.is_empty()
-        || !project.containers.is_empty()
+        || (project.containers.iter()).any(|container| container.folder_in(&project.path).is_some())
         || session_runs
 }
 
@@ -256,6 +258,7 @@ mod tests {
     use super::*;
     use crate::map::clean::locks::tests::hold_like_cargo;
     use crate::map::clean::{CleanError, Plan, Sharing};
+    use crate::map::docker::{Container, PublishedPort};
     use crate::map::test_support::{
         CACHEDIR_TAG, TempDir, agent_session, at, cargo_target, container_for, environment_at,
         listening_in, measured, node_modules, project_at, snapshot_of, subagent_at_work,
@@ -265,6 +268,7 @@ mod tests {
         Source, SourceProblem, SubagentWithParent,
     };
     use std::io;
+    use std::net::Ipv4Addr;
 
     const DAY: u64 = 86_400;
     const THREE_DAYS: Duration = Duration::from_secs(3 * DAY);
@@ -362,17 +366,49 @@ mod tests {
 
     #[test]
     fn a_server_or_a_container_at_work_for_a_project_keeps_it_out_as_it_may_run_what_was_built() {
+        let made_by_compose = Container {
+            compose_folder: Some("/code/web".into()),
+            bound: Vec::new(),
+            ..container_for("/elsewhere", "web")
+        };
         let map = snapshot_of(vec![
             Project {
                 listening: vec![listening_in("/code/server", "server", &[8080])],
                 ..quiet_project("server", 9, LARGE)
             },
             Project {
-                containers: vec![container_for("/code/api", "api")],
+                containers: vec![container_for("/code/api/data", "api")],
                 ..quiet_project("api", 9, LARGE)
+            },
+            Project {
+                containers: vec![made_by_compose],
+                ..quiet_project("web", 9, LARGE)
             },
         ]);
         assert_eq!(names(&map), [""; 0]);
+    }
+
+    #[test]
+    fn a_database_on_a_port_its_environment_names_runs_nothing_built_there_and_keeps_nothing() {
+        let database = Container {
+            bound: Vec::new(),
+            ports: vec![PublishedPort {
+                port: 5432,
+                to: 5432,
+                addresses: [Ipv4Addr::LOCALHOST.into()].into(),
+                udp: false,
+            }],
+            ..container_for("/elsewhere", "pg596")
+        };
+        let map = snapshot_of(vec![Project {
+            environment: Some(crate::model::Environment {
+                alive: false,
+                ..environment_at("/code/app")
+            }),
+            containers: vec![database],
+            ..quiet_project("app", 9, LARGE)
+        }]);
+        assert_eq!(names(&map), ["app"]);
     }
 
     #[test]
